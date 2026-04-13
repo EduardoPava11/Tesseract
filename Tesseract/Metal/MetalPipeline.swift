@@ -254,22 +254,8 @@ final class MetalPipeline {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             // Downsample RGB
-            let srcW = rgbTexture.width   // e.g. 1920
-            let srcH = rgbTexture.height  // e.g. 1080
-
-            // After 90° CCW rotation: rotatedW=srcH, rotatedH=srcW
-            let rotatedW = srcH  // 1080
-            let rotatedH = srcW  // 1920
-            let cropSize = min(rotatedW, rotatedH)  // 1080
-            let rotCropX = (rotatedW - cropSize) / 2  // 0
-            let rotCropY = (rotatedH - cropSize) / 2  // 420
-
-            var dsParams = DownsampleParamsSwift(
-                srcWidth: UInt32(srcW), srcHeight: UInt32(srcH),
-                dstWidth: 64, dstHeight: 64,
-                rotCropX: UInt32(rotCropX), rotCropY: UInt32(rotCropY),
-                cropSize: UInt32(cropSize)
-            )
+            // RGB: hardcoded constants from FrameGeometry.hs
+            var dsParams = FrameGeometry.rgbParams
             downsampleParamsBuffer?.contents().copyMemory(
                 from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
             )
@@ -289,17 +275,8 @@ final class MetalPipeline {
                 let depthH = depthTex.height
                 let dCropSize = min(depthW, depthH)
 
-                // Depth: same rotation logic
-                let dRotW = depthH
-                let dRotH = depthW
-                let dCropSz = min(dRotW, dRotH)
-                var ddsParams = DownsampleParamsSwift(
-                    srcWidth: UInt32(depthW), srcHeight: UInt32(depthH),
-                    dstWidth: 64, dstHeight: 64,
-                    rotCropX: UInt32((dRotW - dCropSz) / 2),
-                    rotCropY: UInt32((dRotH - dCropSz) / 2),
-                    cropSize: UInt32(dCropSz)
-                )
+                // Depth: hardcoded constants from FrameGeometry.hs
+                var ddsParams = FrameGeometry.depthParams
                 downsampleParamsBuffer?.contents().copyMemory(
                     from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
                 )
@@ -438,12 +415,18 @@ struct QuantizeParamsSwift {
     var _pad: UInt32 = 0            // offset 40 (pad to 48)
 }
 
+// Must match Metal DownsampleParams (16 bytes)
 struct DownsampleParamsSwift {
-    var srcWidth: UInt32
-    var srcHeight: UInt32
-    var dstWidth: UInt32
-    var dstHeight: UInt32
-    var rotCropX: UInt32   // crop offset in rotated space
-    var rotCropY: UInt32
-    var cropSize: UInt32
+    var cropX: UInt32
+    var cropY: UInt32
+    var step: UInt32
+    var halfStep: UInt32
+}
+
+// Constants from FrameGeometry.hs (verified by axioms G1-G10)
+enum FrameGeometry {
+    // RGB: 1920×1080 → crop 960×960 → 64×64
+    static let rgbParams = DownsampleParamsSwift(cropX: 480, cropY: 60, step: 15, halfStep: 7)
+    // Depth: 640×360 → crop 320×320 → 64×64
+    static let depthParams = DownsampleParamsSwift(cropX: 160, cropY: 20, step: 5, halfStep: 2)
 }

@@ -139,21 +139,19 @@ kernel void quantizeWithDepth(
 // § 5. DOWNSAMPLE KERNEL: camera resolution → 64×64
 // ════════════════════════════════════════════════════════════════
 
+// Downsample params: crop + rotation constants from FrameGeometry.hs
 struct DownsampleParams {
-    uint srcWidth;      // e.g. 1920
-    uint srcHeight;     // e.g. 1080
-    uint dstWidth;      // 64
-    uint dstHeight;     // 64
-    uint rotCropX;      // crop offset in ROTATED space (after 90° CCW)
-    uint rotCropY;      // crop offset in ROTATED space
-    uint cropSize;      // square crop size = min(srcHeight, srcWidth)
+    uint cropX;         // RGB: 480, Depth: 160
+    uint cropY;         // RGB: 60,  Depth: 20
+    uint step;          // RGB: 15,  Depth: 5
+    uint halfStep;      // RGB: 7,   Depth: 2
 };
 
-// 90° CCW rotation + square crop:
-//   Rotated image: width=srcHeight, height=srcWidth
-//   Square crop from rotated image, centered.
-//   rotX = rotCropX + gid.x * step → maps to srcY via (srcHeight-1-rotX)
-//   rotY = rotCropY + gid.y * step → maps to srcX directly
+// Port of FrameGeometry.hs rgbSource/depthSource:
+//   srcX = cropX + gid.y * step + halfStep     (90° CCW: output Y → source X)
+//   srcY = cropY + (63 - gid.x) * step + halfStep  (90° CCW: inverted output X → source Y)
+//
+// Verified by Haskell axioms G5-G10 for all 4096 output pixels.
 
 kernel void downsampleRGB(
     texture2d<float, access::read> srcTexture   [[texture(0)]],
@@ -161,15 +159,10 @@ kernel void downsampleRGB(
     constant DownsampleParams& params           [[buffer(0)]],
     uint2 gid                                   [[thread_position_in_grid]]
 ) {
-    if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
+    if (gid.x >= 64 || gid.y >= 64) return;
 
-    uint step = params.cropSize / params.dstWidth;
-    uint rotX = params.rotCropX + gid.x * step + step / 2;
-    uint rotY = params.rotCropY + gid.y * step + step / 2;
-
-    // Map rotated coords → source coords (90° CCW)
-    uint srcX = rotY;
-    uint srcY = (params.srcHeight - 1) - rotX;
+    uint srcX = params.cropX + gid.y * params.step + params.halfStep;
+    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
 
     float4 color = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(color, gid);
@@ -181,14 +174,10 @@ kernel void downsampleDepth(
     constant DownsampleParams& params           [[buffer(0)]],
     uint2 gid                                   [[thread_position_in_grid]]
 ) {
-    if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
+    if (gid.x >= 64 || gid.y >= 64) return;
 
-    uint step = params.cropSize / params.dstWidth;
-    uint rotX = params.rotCropX + gid.x * step + step / 2;
-    uint rotY = params.rotCropY + gid.y * step + step / 2;
-
-    uint srcX = rotY;
-    uint srcY = (params.srcHeight - 1) - rotX;
+    uint srcX = params.cropX + gid.y * params.step + params.halfStep;
+    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
 
     float4 depth = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(depth, gid);
