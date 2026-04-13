@@ -150,9 +150,15 @@ final class CameraManager: NSObject, ObservableObject {
             depthOutput.isFilteringEnabled = true
             depthOutput.alwaysDiscardsLateDepthData = true
 
-            // Mirror for selfie view on front camera
+            // Let AVFoundation physically rotate the buffer to portrait (hardware accelerated).
+            // After this: RGB buffer = 1080×1920, Depth buffer = 360×640.
+            // No manual rotation needed in pixel read loops.
             if let connection = videoOutput.connection(with: .video) {
+                connection.videoRotationAngle = 90
                 connection.isVideoMirrored = true
+            }
+            if let depthConnection = depthOutput.connection(with: .depthData) {
+                depthConnection.videoRotationAngle = 90
             }
 
             session.commitConfiguration()
@@ -247,16 +253,16 @@ final class CameraManager: NSObject, ObservableObject {
         let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
         let outSize = CameraConfig.captureSize  // 64
 
-        // Constants from FrameGeometry.hs (verified by 10 axioms)
-        // RGB: 1920×1080 → crop 960×960 at (480,60) → 64×64, step=15
-        // 90° CCW: srcX = 480 + outY*15 + 7, srcY = 60 + (63-outX)*15 + 7
-        let cropX = 480
-        let cropY = 60
+        // Portrait buffer (videoRotationAngle=90, hardware rotated)
+        // RGB: 1080×1920 → crop 960×960 at (60,480) → 64×64, step=15
+        // Straight read — no manual rotation.
+        let cropX = 60
+        let cropY = 480
         let step = 15
         let half = 7
 
         if !Self._loggedBufferSize {
-            print("Tesseract: RGB \(width)×\(height), crop 960×960 at (\(cropX),\(cropY)), step=\(step), 90° CCW")
+            print("Tesseract: RGB \(width)×\(height) portrait, crop 960² at (\(cropX),\(cropY)), step=\(step)")
         }
 
         var pixels = [(Float, Float, Float)]()
@@ -264,9 +270,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // 90° CW: output(x,y) → source(cropX + (63-y)*step, cropY + x*step)
-                let srcX = cropX + (63 - y) * step + half
-                let srcY = cropY + x * step + half
+                // Straight read — buffer already portrait
+                let srcX = cropX + x * step + half
+                let srcY = cropY + y * step + half
 
                 guard srcX < width && srcY < height else {
                     pixels.append((0, 0, 0))
@@ -430,10 +436,10 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
 
         // Quantize depth into 4 zones
         let range = max(maxDepth - minDepth, 0.001)
-        // Constants from FrameGeometry.hs (axiom-verified)
-        // Depth: 640×360 → crop 320×320 at (160,20) → 64×64, step=5
-        // 90° CCW: srcX = 160 + y*5 + 2, srcY = 20 + (63-x)*5 + 2
-        let dCropX = 160; let dCropY = 20; let dStep = 5; let dHalf = 2
+        // Portrait buffer (videoRotationAngle=90)
+        // Depth: 360×640 → crop 320×320 at (20,160) → 64×64, step=5
+        // Straight read.
+        let dCropX = 20; let dCropY = 160; let dStep = 5; let dHalf = 2
 
         var depthValues = [Float]()
         depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
@@ -441,9 +447,8 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         let outSize = CameraConfig.captureSize
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // 90° CW (same as RGB)
-                let srcX = dCropX + (63 - y) * dStep + dHalf
-                let srcY = dCropY + x * dStep + dHalf
+                let srcX = dCropX + x * dStep + dHalf
+                let srcY = dCropY + y * dStep + dHalf
                 let idx = srcY * width + srcX
                 let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)

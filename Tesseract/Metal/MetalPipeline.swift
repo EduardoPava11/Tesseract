@@ -423,10 +423,12 @@ struct DownsampleParamsSwift {
     var halfStep: UInt32
 }
 
-// Constants from FrameGeometry.hs (verified by axioms G1-G10)
+// Constants from FrameGeometry.hs (all 10 axioms verified)
+// Portrait buffers (videoRotationAngle=90, hardware rotated)
+// Straight read — no manual rotation.
 enum FrameGeometry {
-    // RGB: 1920×1080 → crop 960×960 → 64×64
-    static let rgbParams = DownsampleParamsSwift(cropX: 480, cropY: 60, step: 15, halfStep: 7)
-    // Depth: 640×360 → crop 320×320 → 64×64
-    static let depthParams = DownsampleParamsSwift(cropX: 160, cropY: 20, step: 5, halfStep: 2)
+    // RGB: 1080×1920 → crop 960×960 at (60,480) → 64×64, step=15
+    static let rgbParams = DownsampleParamsSwift(cropX: 60, cropY: 480, step: 15, halfStep: 7)
+    // Depth: 360×640 → crop 320×320 at (20,160) → 64×64, step=5
+    static let depthParams = DownsampleParamsSwift(cropX: 20, cropY: 160, step: 5, halfStep: 2)
 }
