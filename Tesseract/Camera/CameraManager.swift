@@ -188,19 +188,35 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Frame Processing
 
+    nonisolated(unsafe) private static var _frameCounter: Int = 0
+    nonisolated(unsafe) private static var _depthFrames: Int = 0
+    nonisolated(unsafe) private static var _noDepthFrames: Int = 0
+
     nonisolated func processFrame(rgbBuffer: CVPixelBuffer, depthBuffer: CVPixelBuffer?) {
         let rgbW = CVPixelBufferGetWidth(rgbBuffer)
         let rgbH = CVPixelBufferGetHeight(rgbBuffer)
+        Self._frameCounter += 1
 
-        if !Self._loggedOnce {
-            Self._loggedOnce = true
-            logger.info("Camera: RGB buffer \(rgbW)×\(rgbH)")
+        // Track depth presence
+        if depthBuffer != nil {
+            Self._depthFrames += 1
+        } else {
+            Self._noDepthFrames += 1
+        }
+
+        // Log every 20 frames
+        if Self._frameCounter % 20 == 1 {
+            logger.info("Camera: frame \(Self._frameCounter) RGB=\(rgbW)×\(rgbH) depth=\(depthBuffer != nil ? "YES" : "NO") (total: \(Self._depthFrames) with depth, \(Self._noDepthFrames) without)")
+
             if let db = depthBuffer {
                 let dW = CVPixelBufferGetWidth(db)
                 let dH = CVPixelBufferGetHeight(db)
-                logger.info("Camera: depth buffer \(dW)×\(dH)")
+                let fmt = CVPixelBufferGetPixelFormatType(db)
+                logger.info("Camera: depth \(dW)×\(dH) format=\(fmt)")
             }
         }
+
+        let logThis = Self._frameCounter % 20 == 1
 
         // Dynamic crop: square from short side, centered
         let outSize = CameraConfig.captureSize
@@ -240,6 +256,19 @@ final class CameraManager: NSObject, ObservableObject {
         var depthValues: [Float]?
         if let db = depthBuffer {
             depthValues = readDepth(db, outSize: outSize)
+
+            // Log depth stats every 20 frames
+            if logThis, let dv = depthValues {
+                let valid = dv.filter { $0 > 0 && $0 < 1 }
+                if !valid.isEmpty {
+                    let minD = valid.min()!
+                    let maxD = valid.max()!
+                    let meanD = valid.reduce(0, +) / Float(valid.count)
+                    logger.info("Camera: depth values min=\(String(format: "%.3f", minD)) max=\(String(format: "%.3f", maxD)) mean=\(String(format: "%.3f", meanD)) valid=\(valid.count)/\(dv.count)")
+                } else {
+                    logger.warning("Camera: depth all zeros or invalid (\(dv.count) values)")
+                }
+            }
         }
 
         // Quantize
