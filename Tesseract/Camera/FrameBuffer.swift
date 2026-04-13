@@ -11,7 +11,7 @@ import simd
 struct QuantizedFrame {
     let index: Int                // 0..63
     let paletteIndices: [UInt8]   // 4096 entries (64×64)
-    let depthZones: [UInt8]       // 4096 depth zone assignments (0..3)
+    let depths: [Float]           // 4096 continuous depth values [0,1]
     let measure: BirkhoffMeasure
     let timestamp: TimeInterval
 
@@ -73,19 +73,13 @@ final class FrameBuffer: @unchecked Sendable {
 
         let frameIndex = frames.count
 
-        let depthZones: [UInt8]
-        if let depth = depth {
-            depthZones = quantizeDepth(depth)
-        } else {
-            depthZones = [UInt8](repeating: 0, count: QuantizedFrame.pixelCount)
-        }
-
+        let depthValues = depth ?? [Float](repeating: 0.5, count: QuantizedFrame.pixelCount)
         let measure = BirkhoffMeasure(paletteIndices: paletteIndices)
 
         let frame = QuantizedFrame(
             index: frameIndex,
             paletteIndices: paletteIndices,
-            depthZones: depthZones,
+            depths: depthValues,
             measure: measure,
             timestamp: timestamp
         )
@@ -117,21 +111,13 @@ final class FrameBuffer: @unchecked Sendable {
 
         let frameIndex = frames.count
 
-        // Quantize depth to 4 zones FIRST (needed for SNR cadence)
-        let depthZones: [UInt8]
-        if let depth = depth {
-            depthZones = quantizeDepth(depth)
-        } else {
-            depthZones = [UInt8](repeating: 0, count: QuantizedFrame.pixelCount)
-        }
+        // Continuous depth drives σ: σ = σ_base × (2 - depth). No zones.
+        let depthValues: [Float]? = depth
 
-        // Quantize with depth-driven SNR cadence:
-        // Near pixels (face/signal) → stable epoch assignment
-        // Far pixels (background/noise) → volatile epoch assignment
         let indices = TesseractPalette.quantizeFrame(
             frame: frameIndex,
             pixels: rgb,
-            depthZones: depthZones,  // depth drives the temporal cadence
+            depths: depthValues,
             seed: seed
         )
 
@@ -140,7 +126,7 @@ final class FrameBuffer: @unchecked Sendable {
         let frame = QuantizedFrame(
             index: frameIndex,
             paletteIndices: indices,
-            depthZones: depthZones,
+            depths: depthValues ?? [Float](repeating: 0.5, count: QuantizedFrame.pixelCount),
             measure: measure,
             timestamp: timestamp
         )
@@ -207,7 +193,9 @@ final class FrameBuffer: @unchecked Sendable {
         var zoneIndices: [[UInt8]] = [[], [], [], []]
 
         for i in 0..<QuantizedFrame.pixelCount {
-            let zone = Int(frame.depthZones[i])
+            // Bin continuous depth into 4 display zones for color pair analysis
+            let d = frame.depths[i]
+            let zone = min(3, max(0, Int((1.0 - d) * 4)))  // 1=near→zone0, 0=far→zone3
             zoneIndices[zone].append(frame.paletteIndices[i])
         }
 

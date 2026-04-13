@@ -271,19 +271,11 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // Quantize depth to zones: 0=near(stable), 3=far(volatile)
-        // Depth is normalized: 1=near, 0=far. Invert for zone mapping.
-        // zone 0 → snrFactor[0]=0.3 (tight σ, stable) = NEAR
-        // zone 3 → snrFactor[3]=5.0 (wide σ, volatile) = FAR
-        let depthZones: [UInt8]? = depthValues?.map { d in
-            let n = max(0, min(1, d))  // 1=near, 0=far
-            let inverted = 1.0 - n     // 0=near, 1=far
-            return UInt8(min(3, max(0, Int(inverted * 4))))
-        }
-
+        // Continuous depth → σ → epochs. No zones.
+        // σ(depth) = σ_base × (2 - depth). The 4⁴ emerges naturally.
         let frameIdx = frameBuffer.frameCount
         let indices = TesseractPalette.quantizeFrame(
-            frame: frameIdx, pixels: pixels, depthZones: depthZones
+            frame: frameIdx, pixels: pixels, depths: depthValues
         )
 
         // Preview
