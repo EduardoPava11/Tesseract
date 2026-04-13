@@ -4,11 +4,18 @@ options:
   deploymentTarget:
     iOS: "18.0"
   xcodeVersion: "16.3"
+  defaultConfig: Release
+
+configs:
+  Debug: debug
+  Release: release
 
 settings:
   base:
     SWIFT_VERSION: "6.0"
     DEVELOPMENT_TEAM: ""
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
 
 targets:
   Tesseract:
@@ -18,15 +25,23 @@ targets:
       - path: Tesseract
     settings:
       base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tesseract.app
         INFOPLIST_KEY_UILaunchScreen_Generation: true
-        INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract needs the front camera to capture 64×64 frames for GIF generation."
+        INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract captures your face through the front camera to create algebraically beautiful 64×64 GIFs using a 4⁴ color tesseract."
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_CFBundleDisplayName: "Tesseract"
         TARGETED_DEVICE_FAMILY: "1"
-    info:
-      path: Tesseract/Info.plist
-      properties:
-        NSCameraUsageDescription: "Tesseract needs the front camera to capture 64×64 frames for GIF generation."
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        SWIFT_STRICT_CONCURRENCY: complete
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: -Onone
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: -O
+          SWIFT_COMPILATION_MODE: wholemodule
 
   TesseractTests:
     type: bundle.unit-test
@@ -37,5 +52,21 @@ targets:
       - target: Tesseract
     settings:
       base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tesseract.app.tests
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tesseract.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tesseract"
         BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  Tesseract:
+    build:
+      targets:
+        Tesseract: all
+        TesseractTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TesseractTests
+    archive:
+      config: Release
