@@ -105,7 +105,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func configure() async {
         session.beginConfiguration()
-        session.sessionPreset = .high  // wider FOV than .photo (which crops tight)
+        session.sessionPreset = .photo
 
         // Front TrueDepth camera
         guard let device = AVCaptureDevice.default(
@@ -150,9 +150,7 @@ final class CameraManager: NSObject, ObservableObject {
             depthOutput.isFilteringEnabled = true
             depthOutput.alwaysDiscardsLateDepthData = true
 
-            // Keep buffer in sensor-native orientation (landscape).
-            // We handle rotation in the pixel read loop.
-            // Only mirror for selfie view.
+            // Mirror for selfie view on front camera
             if let connection = videoOutput.connection(with: .video) {
                 connection.isVideoMirrored = true
             }
@@ -182,15 +180,16 @@ final class CameraManager: NSObject, ObservableObject {
         let currentFrameCount = frameBuffer.frameCount
         let isRecording = currentFrameCount < CameraConfig.totalFrames && currentFrameCount > 0
 
-        // Try Metal path first
-        if let metal = _metalPipeline, metal.isReady,
-           let rgbTexture = makeTexture(from: pixelBuffer) {
-            processWithMetal(metal, rgbTexture: rgbTexture,
-                           frameIndex: isRecording ? currentFrameCount : 0)
-            return
-        }
+        // TODO: Metal path disabled until rotation is fixed in the kernel.
+        // CPU path handles orientation correctly.
+        // if let metal = _metalPipeline, metal.isReady,
+        //    let rgbTexture = makeTexture(from: pixelBuffer) {
+        //     processWithMetal(metal, rgbTexture: rgbTexture,
+        //                    frameIndex: isRecording ? currentFrameCount : 0)
+        //     return
+        // }
 
-        // CPU fallback
+        // CPU path — handles landscape→portrait rotation correctly
         processWithCPU(pixelBuffer, frameIndex: isRecording ? currentFrameCount : 0)
     }
 
@@ -248,11 +247,8 @@ final class CameraManager: NSObject, ObservableObject {
         let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
         let outSize = CameraConfig.captureSize  // 64
 
-        // Buffer is in sensor-native landscape orientation.
-        // Front camera: landscape-left (wider than tall).
-        // We need portrait output: rotate 90° + mirror for selfie.
-        //
-        // Square crop: use the SHORT side (height in landscape).
+        // Square center crop, then downsample to 64×64.
+        // .photo preset on TrueDepth front camera delivers in a usable orientation.
         let cropSize = min(width, height)
         let cropX = (width - cropSize) / 2
         let cropY = (height - cropSize) / 2
@@ -261,16 +257,11 @@ final class CameraManager: NSObject, ObservableObject {
         var pixels = [(Float, Float, Float)]()
         pixels.reserveCapacity(outSize * outSize)
 
-        for outY in 0..<outSize {
-            for outX in 0..<outSize {
-                // Rotate 90° CCW for portrait:
-                //   output (outX, outY) reads from source (srcX, srcY) where
-                //   srcX = crop region column mapped from outY
-                //   srcY = crop region row mapped from (63 - outX) to flip upright
-                let srcX = cropX + outY * step + step / 2
-                let srcY = cropY + (outSize - 1 - outX) * step + step / 2
+        for y in 0..<outSize {
+            for x in 0..<outSize {
+                let srcX = cropX + x * step + step / 2
+                let srcY = cropY + y * step + step / 2
 
-                // Bounds check
                 guard srcX < width && srcY < height else {
                     pixels.append((0, 0, 0))
                     continue
@@ -443,12 +434,10 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         var depthValues = [Float]()
         depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
 
-        let outSize = CameraConfig.captureSize
-        for outY in 0..<outSize {
-            for outX in 0..<outSize {
-                // Same 90° CCW rotation as RGB downsample — depth must align
-                let srcX = cropX + outY * step + step / 2
-                let srcY = cropY + (outSize - 1 - outX) * step + step / 2
+        for y in 0..<CameraConfig.captureSize {
+            for x in 0..<CameraConfig.captureSize {
+                let srcX = cropX + x * step + step / 2
+                let srcY = cropY + y * step + step / 2
                 let idx = srcY * width + srcX
                 let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)

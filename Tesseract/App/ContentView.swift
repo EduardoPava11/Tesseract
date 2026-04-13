@@ -313,18 +313,14 @@ struct ContentView: View {
     private func shareGIF(_ data: Data) {
         guard let url = GIFEncoder.saveToTempFile(data) else { return }
 
-        // Build metadata string for the share text
-        let stats: String
-        if let m = camera.gifMeasure {
-            stats = "Tesseract 4⁴ · M=\(String(format: "%.0f", m.beauty)) · dim=\(String(format: "%.1f", m.manifoldDim)) · \(m.colorsUsed)/256 colors · \(data.count / 1024)KB"
-        } else {
-            stats = "Tesseract 4⁴ · 64×64×64 · 20fps"
-        }
-
+        // Share just the GIF file — no text overlay
         let controller = UIActivityViewController(
-            activityItems: [url, stats],
+            activityItems: [url],
             applicationActivities: nil
         )
+        // iPad popover anchor
+        controller.popoverPresentationController?.sourceView = UIView()
+
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let root = scene.keyWindow?.rootViewController else { return }
         root.present(controller, animated: true)
