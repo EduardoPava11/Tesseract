@@ -1,0 +1,15 @@
+# Xcode
+.build/
+DerivedData/
+*.xcuserdata
+xcuserdata/
+*.xcworkspace
+!Tesseract.xcodeproj
+
+# macOS
+.DS_Store
+*.swp
+
+# Generated
+Tesseract.xcodeproj/
+Tesseract/Info.plist

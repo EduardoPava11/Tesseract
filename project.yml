@@ -1,0 +1,41 @@
+name: Tesseract
+options:
+  bundleIdPrefix: com.tesseract
+  deploymentTarget:
+    iOS: "18.0"
+  xcodeVersion: "16.3"
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    DEVELOPMENT_TEAM: ""
+
+targets:
+  Tesseract:
+    type: application
+    platform: iOS
+    sources:
+      - path: Tesseract
+    settings:
+      base:
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract needs the front camera to capture 64×64 frames for GIF generation."
+        INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: Tesseract/Info.plist
+      properties:
+        NSCameraUsageDescription: "Tesseract needs the front camera to capture 64×64 frames for GIF generation."
+
+  TesseractTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: TesseractTests
+    dependencies:
+      - target: Tesseract
+    settings:
+      base:
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Tesseract.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Tesseract"
+        BUNDLE_LOADER: "$(TEST_HOST)"
