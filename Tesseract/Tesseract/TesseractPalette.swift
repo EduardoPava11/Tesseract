@@ -4,6 +4,7 @@
 // The 4⁴ = 256 palette as a GIF color table.
 // Each entry maps to an sRGB color via TesseractCoord.sRGB.
 // 4 entries per display color (one per epoch).
+// Depth drives SNR: near pixels get stable epochs, far pixels shimmer.
 
 import Foundation
 
@@ -32,19 +33,47 @@ struct TesseractPalette {
         return data
     }()
 
-    /// Quantize a full frame: [sRGB pixels] → [palette indices]
-    /// using binomial cadence for epoch assignment.
+    /// Quantize a full frame with depth-driven SNR cadence.
+    ///
+    /// When `depthZones` is provided, near pixels (zone 0) get stable epoch
+    /// assignment and far pixels (zone 3) get volatile assignment.
+    /// This is signal-to-noise ratio applied to the temporal axis.
+    ///
+    /// - Parameters:
+    ///   - z: Frame index (0..63)
+    ///   - pixels: 4096 sRGB pixels in [0,1]
+    ///   - depthZones: Optional per-pixel depth zone (0=near/signal, 3=far/noise)
+    ///   - width: Frame width (64)
+    ///   - seed: PRNG seed
+    /// - Returns: 4096 palette indices
     static func quantizeFrame(
         frame z: Int,
-        pixels: [(Float, Float, Float)],  // sRGB in [0,1]
+        pixels: [(Float, Float, Float)],
+        depthZones: [UInt8]? = nil,
         width: Int = 64,
         seed: UInt32 = 42
     ) -> [UInt8] {
         pixels.enumerated().map { (i, pixel) in
             let x = i % width
             let y = i / width
-            let epoch = BinomialCadence.sampleEpoch(frame: z, x: x, y: y, seed: seed)
-            let tc = TesseractCoord.quantize(epoch: epoch, r: pixel.0, g: pixel.1, b: pixel.2)
+
+            let epoch: UInt8
+            if let zones = depthZones, i < zones.count {
+                // Depth-aware: near pixels → stable, far pixels → volatile
+                epoch = BinomialCadence.sampleEpoch(
+                    frame: z, x: x, y: y,
+                    depthZone: zones[i], seed: seed
+                )
+            } else {
+                // No depth: uniform cadence (preview mode)
+                epoch = BinomialCadence.sampleEpoch(
+                    frame: z, x: x, y: y, seed: seed
+                )
+            }
+
+            let tc = TesseractCoord.quantize(
+                epoch: epoch, r: pixel.0, g: pixel.1, b: pixel.2
+            )
             return tc.index
         }
     }

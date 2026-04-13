@@ -74,20 +74,23 @@ final class FrameBuffer: @unchecked Sendable {
 
         let frameIndex = frames.count
 
-        // Quantize with binomial cadence
-        let indices = TesseractPalette.quantizeFrame(
-            frame: frameIndex,
-            pixels: rgb,
-            seed: seed
-        )
-
-        // Quantize depth to 4 zones
+        // Quantize depth to 4 zones FIRST (needed for SNR cadence)
         let depthZones: [UInt8]
         if let depth = depth {
             depthZones = quantizeDepth(depth)
         } else {
             depthZones = [UInt8](repeating: 0, count: QuantizedFrame.pixelCount)
         }
+
+        // Quantize with depth-driven SNR cadence:
+        // Near pixels (face/signal) → stable epoch assignment
+        // Far pixels (background/noise) → volatile epoch assignment
+        let indices = TesseractPalette.quantizeFrame(
+            frame: frameIndex,
+            pixels: rgb,
+            depthZones: depthZones,  // depth drives the temporal cadence
+            seed: seed
+        )
 
         let measure = BirkhoffMeasure(paletteIndices: indices)
 

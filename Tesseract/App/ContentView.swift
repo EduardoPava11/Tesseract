@@ -356,16 +356,27 @@ struct GIFResultView: View {
     let onShare: () -> Void
 
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 16) {
             Spacer()
+
+            // Animated GIF playback at 256×256 (nearest-neighbor)
+            ZStack {
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(.ultraThinMaterial)
+                    .frame(width: 264, height: 264)
+
+                GIFPlayerView(data: gifData)
+                    .frame(width: 256, height: 256)
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
+            }
 
             VStack(spacing: 4) {
                 Text("64 × 64 × 64")
-                    .font(.system(.title2, design: .monospaced))
-                    .foregroundStyle(.white)
-                Text("\(gifData.count / 1024)KB · 20fps · 3.2s")
                     .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text("\(gifData.count / 1024)KB · 20fps · 3.2s")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
             }
 
             // Stats

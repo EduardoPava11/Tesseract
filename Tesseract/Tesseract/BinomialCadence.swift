@@ -2,31 +2,52 @@
 // Tesseract
 //
 // Port of TemporalBinomial.hs — The R1 axis as a binomial cadence.
-// P(epoch d | frame z) ∝ exp(-(z - μ_d)² / 2σ²)
-// One model governs epoch placement, counts, and transitions.
+// P(epoch d | frame z, depth k) ∝ exp(-(z - μ_d)² / 2σ_k²)
+//
+// Depth drives SNR: near pixels (face) are stable, far pixels (background) shimmer.
+// σ_k = σ_base × snrFactor(k)
+//   k=0 (near):  snrFactor=0.5  → sharp epoch peaks → temporally crisp
+//   k=3 (far):   snrFactor=2.0  → flat distribution → temporally volatile
 
 import Foundation
 import simd
 
-/// The binomial temporal cadence: soft epoch transitions via Gaussian mixing.
+/// The binomial temporal cadence with depth-driven signal-to-noise ratio.
 struct BinomialCadence {
 
     // MARK: - Constants
 
-    /// Gaussian width (same for all epochs)
+    /// Base Gaussian width
     static let sigma: Float = 63.0 / 8.0  // = 7.875
 
     /// Epoch centers: equispaced across [0, 63]
-    /// μ_d = (2d + 1) × 63 / 8
     static let centers: SIMD4<Float> = SIMD4(7.875, 23.625, 39.375, 55.125)
 
-    // MARK: - P(epoch | frame)
+    /// SNR factors per depth zone.
+    /// Near (signal) → narrow σ → stable. Far (noise) → wide σ → volatile.
+    static let snrFactors: [Float] = [0.5, 0.75, 1.25, 2.0]
 
-    /// Compute P(epoch d | frame z) for all 4 epochs.
-    /// Returns a normalized probability vector (sums to 1).
+    // MARK: - P(epoch | frame) — without depth (backward compatible)
+
+    /// Compute P(epoch d | frame z) for all 4 epochs (no depth).
     static func epochProbabilities(frame z: Int) -> SIMD4<Float> {
+        gaussianProbs(frame: z, sigma: sigma)
+    }
+
+    // MARK: - P(epoch | frame, depth) — depth-aware SNR
+
+    /// Compute P(epoch d | frame z, depth zone k).
+    /// Near pixels get narrow σ (stable), far pixels get wide σ (volatile).
+    static func epochProbabilities(frame z: Int, depthZone: UInt8) -> SIMD4<Float> {
+        let k = Int(min(3, depthZone))
+        let depthSigma = sigma * snrFactors[k]
+        return gaussianProbs(frame: z, sigma: depthSigma)
+    }
+
+    /// Core Gaussian computation with parameterized σ.
+    private static func gaussianProbs(frame z: Int, sigma s: Float) -> SIMD4<Float> {
         let zf = Float(z)
-        let s2 = 2.0 * sigma * sigma
+        let s2 = 2.0 * s * s
         let raw = SIMD4<Float>(
             exp(-(zf - centers[0]) * (zf - centers[0]) / s2),
             exp(-(zf - centers[1]) * (zf - centers[1]) / s2),
@@ -44,37 +65,42 @@ struct BinomialCadence {
 
     // MARK: - Epoch Sampling
 
-    /// Sample an epoch from P(d|z) using a deterministic hash.
-    /// Each pixel (x, y) in frame z gets its own hash → its own epoch.
+    /// Sample epoch WITHOUT depth (backward compatible for preview).
     static func sampleEpoch(frame z: Int, x: Int, y: Int, seed: UInt32 = 42) -> UInt8 {
         let probs = epochProbabilities(frame: z)
-        let u = Self.pixelHashFloat(x: x, y: y, seed: seed &+ UInt32(z) &* 997)
+        let u = pixelHashFloat(x: x, y: y, seed: seed &+ UInt32(z) &* 997)
+        return cdfSample(probs: probs, u: u)
+    }
+
+    /// Sample epoch WITH depth-driven SNR.
+    /// Near pixels (depthZone=0) stick to their epoch.
+    /// Far pixels (depthZone=3) randomly jump between epochs.
+    static func sampleEpoch(frame z: Int, x: Int, y: Int,
+                             depthZone: UInt8, seed: UInt32 = 42) -> UInt8 {
+        let probs = epochProbabilities(frame: z, depthZone: depthZone)
+        let u = pixelHashFloat(x: x, y: y, seed: seed &+ UInt32(z) &* 997)
         return cdfSample(probs: probs, u: u)
     }
 
     // MARK: - Crossover Frames
 
-    /// Frame where P(d) = P(d+1) (the soft boundary)
     static func crossoverFrame(epoch d: Int) -> Float {
         guard d < 3 else { return 63 }
         return (centers[d] + centers[d + 1]) / 2.0
     }
 
-    /// All 3 crossover frames
     static let crossovers: [Float] = [
         (centers[0] + centers[1]) / 2,
         (centers[1] + centers[2]) / 2,
         (centers[2] + centers[3]) / 2
     ]
 
-    // MARK: - Precomputed table (64 frames)
+    // MARK: - Precomputed table (no depth, for preview)
 
-    /// Precompute P(d|z) for all 64 frames → fast lookup
     static let table: [SIMD4<Float>] = (0..<64).map { epochProbabilities(frame: $0) }
 
     // MARK: - Hash PRNG
 
-    /// SplitMix-style hash: deterministic float in [0, 1) from (x, y, seed)
     static func pixelHashFloat(x: Int, y: Int, seed: UInt32) -> Float {
         let h0 = UInt32(bitPattern: Int32(truncatingIfNeeded: x &* 374761393 &+ y &* 668265263)) &+ seed
         let h1 = (h0 ^ (h0 >> 15)) &* 2246822519
