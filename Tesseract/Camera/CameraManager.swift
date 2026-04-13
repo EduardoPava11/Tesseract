@@ -105,7 +105,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func configure() async {
         session.beginConfiguration()
-        session.sessionPreset = .photo
+        session.sessionPreset = .high  // wider FOV than .photo (which crops tight)
 
         // Front TrueDepth camera
         guard let device = AVCaptureDevice.default(
@@ -150,10 +150,11 @@ final class CameraManager: NSObject, ObservableObject {
             depthOutput.isFilteringEnabled = true
             depthOutput.alwaysDiscardsLateDepthData = true
 
-            // Portrait orientation: rotate video to match screen
+            // Keep buffer in sensor-native orientation (landscape).
+            // We handle rotation in the pixel read loop.
+            // Only mirror for selfie view.
             if let connection = videoOutput.connection(with: .video) {
-                connection.videoRotationAngle = 90
-                connection.isVideoMirrored = true  // front camera mirror
+                connection.isVideoMirrored = true
             }
 
             session.commitConfiguration()
@@ -227,6 +228,8 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - CPU Fallback Path
 
+    nonisolated(unsafe) private static var _loggedBufferSize = false
+
     nonisolated private func processWithCPU(_ pixelBuffer: CVPixelBuffer, frameIndex: Int) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
@@ -236,22 +239,44 @@ final class CameraManager: NSObject, ObservableObject {
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
         guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
 
-        let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+        // Log buffer dimensions once
+        if !Self._loggedBufferSize {
+            Self._loggedBufferSize = true
+            print("Tesseract: buffer \(width)×\(height) bytesPerRow=\(bytesPerRow)")
+        }
 
+        let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
+        let outSize = CameraConfig.captureSize  // 64
+
+        // Buffer is in sensor-native landscape orientation.
+        // Front camera: landscape-left (wider than tall).
+        // We need portrait output: rotate 90° + mirror for selfie.
+        //
+        // Square crop: use the SHORT side (height in landscape).
         let cropSize = min(width, height)
         let cropX = (width - cropSize) / 2
         let cropY = (height - cropSize) / 2
-        let step = cropSize / CameraConfig.captureSize
+        let step = cropSize / outSize
 
         var pixels = [(Float, Float, Float)]()
-        pixels.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
+        pixels.reserveCapacity(outSize * outSize)
 
-        for y in 0..<CameraConfig.captureSize {
-            for x in 0..<CameraConfig.captureSize {
-                let srcX = cropX + x * step + step / 2
-                let srcY = cropY + y * step + step / 2
+        for outY in 0..<outSize {
+            for outX in 0..<outSize {
+                // Rotate 90° CCW for portrait:
+                //   output (outX, outY) reads from source (srcX, srcY) where
+                //   srcX = crop region column mapped from outY
+                //   srcY = crop region row mapped from (63 - outX) to flip upright
+                let srcX = cropX + outY * step + step / 2
+                let srcY = cropY + (outSize - 1 - outX) * step + step / 2
+
+                // Bounds check
+                guard srcX < width && srcY < height else {
+                    pixels.append((0, 0, 0))
+                    continue
+                }
+
                 let offset = srcY * bytesPerRow + srcX * 4  // BGRA
-
                 let b = Float(buffer[offset]) / 255.0
                 let g = Float(buffer[offset + 1]) / 255.0
                 let r = Float(buffer[offset + 2]) / 255.0
