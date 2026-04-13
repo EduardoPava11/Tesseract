@@ -264,9 +264,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // 90° CCW: output(x,y) → source(cropX + y*step, cropY + (63-x)*step)
-                let srcX = cropX + y * step + half
-                let srcY = cropY + (63 - x) * step + half
+                // 90° CW: output(x,y) → source(cropX + (63-y)*step, cropY + x*step)
+                let srcX = cropX + (63 - y) * step + half
+                let srcY = cropY + x * step + half
 
                 guard srcX < width && srcY < height else {
                     pixels.append((0, 0, 0))
@@ -441,8 +441,9 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         let outSize = CameraConfig.captureSize
         for y in 0..<outSize {
             for x in 0..<outSize {
-                let srcX = dCropX + y * dStep + dHalf
-                let srcY = dCropY + (63 - x) * dStep + dHalf
+                // 90° CW (same as RGB)
+                let srcX = dCropX + (63 - y) * dStep + dHalf
+                let srcY = dCropY + x * dStep + dHalf
                 let idx = srcY * width + srcX
                 let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)

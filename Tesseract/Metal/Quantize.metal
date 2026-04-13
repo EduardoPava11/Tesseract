@@ -161,8 +161,9 @@ kernel void downsampleRGB(
 ) {
     if (gid.x >= 64 || gid.y >= 64) return;
 
-    uint srcX = params.cropX + gid.y * params.step + params.halfStep;
-    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
+    // 90° CW rotation: output(x,y) → source((63-y)*step, x*step)
+    uint srcX = params.cropX + (63 - gid.y) * params.step + params.halfStep;
+    uint srcY = params.cropY + gid.x * params.step + params.halfStep;
 
     float4 color = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(color, gid);
@@ -176,8 +177,9 @@ kernel void downsampleDepth(
 ) {
     if (gid.x >= 64 || gid.y >= 64) return;
 
-    uint srcX = params.cropX + gid.y * params.step + params.halfStep;
-    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
+    // 90° CW rotation (same as RGB)
+    uint srcX = params.cropX + (63 - gid.y) * params.step + params.halfStep;
+    uint srcY = params.cropY + gid.x * params.step + params.halfStep;
 
     float4 depth = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(depth, gid);
