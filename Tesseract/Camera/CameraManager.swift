@@ -58,7 +58,8 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var previewImage: CGImage?       // live 64×64 quantized preview
     @Published var previewMeasure: BirkhoffMeasure?
     @Published var depthZones: [DepthZone] = []
-    @Published var recordedFrames: [CapturedFrame] = []
+    @Published var gifData: Data?               // encoded GIF after recording
+    @Published var gifMeasure: BirkhoffMeasure? // aggregate beauty of the GIF
 
     // MARK: - Capture Session
 
@@ -66,6 +67,12 @@ final class CameraManager: NSObject, ObservableObject {
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
     private let processingQueue = DispatchQueue(label: "com.tesseract.camera", qos: .userInteractive)
+
+    // MARK: - Frame Buffer
+
+    private let frameBuffer = FrameBuffer()
+    // Depth stored in a thread-safe way via the frame buffer's own lock
+    nonisolated(unsafe) private var _lastDepthValues: [Float]?
 
     // MARK: - Lifecycle
 
@@ -76,8 +83,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     func startRecording() {
         guard state == .previewing else { return }
-        recordedFrames.removeAll()
-        recordedFrames.reserveCapacity(CameraConfig.totalFrames)
+        gifData = nil
+        gifMeasure = nil
+        frameBuffer.startRecording()
         state = .recording(0)
     }
 
@@ -191,18 +199,56 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // Quantize to tesseract palette (use frame 0 for preview epoch)
-        let indices = TesseractPalette.quantizeFrame(
-            frame: 0, pixels: pixels.map { ($0.x, $0.y, $0.z) }
-        )
+        let rgbTuples = pixels.map { ($0.x, $0.y, $0.z) }
 
-        // Build preview CGImage
-        let previewImage = buildPreviewImage(indices: indices)
-        let measure = BirkhoffMeasure(paletteIndices: indices)
+        // Quantize for preview (use frame 0 epoch for live view)
+        let previewIndices = TesseractPalette.quantizeFrame(
+            frame: 0, pixels: rgbTuples
+        )
+        let previewImg = buildPreviewImage(indices: previewIndices)
+        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
         Task { @MainActor in
-            self.previewImage = previewImage
+            self.previewImage = previewImg
             self.previewMeasure = measure
+        }
+
+        // If recording, feed the frame buffer with proper epoch sampling
+        if frameBuffer.frameCount < CameraConfig.totalFrames {
+            let count = frameBuffer.addFrame(
+                rgb: rgbTuples,
+                depth: _lastDepthValues,
+                timestamp: CACurrentMediaTime()
+            )
+
+            if let count = count {
+                Task { @MainActor in
+                    self.state = .recording(count)
+
+                    // Recording complete?
+                    if count >= CameraConfig.totalFrames {
+                        self.state = .processing
+                        self.encodeGIF()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - GIF Encoding
+
+    private func encodeGIF() {
+        let frames = frameBuffer.exportFrames()
+        let measure = frameBuffer.aggregateMeasure()
+
+        Task.detached(priority: .userInitiated) {
+            let gifData = GIFEncoder.encode(frames: frames)
+
+            await MainActor.run {
+                self.gifData = gifData
+                self.gifMeasure = measure
+                self.state = .done
+            }
         }
     }
 
@@ -299,7 +345,10 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
             }
         }
 
-        // Quantize to 4 zones
+        // Store depth values for frame buffer pairing (nonisolated-safe)
+        self._lastDepthValues = depthValues
+
+        // Quantize to 4 zones for UI
         let zones = quantizeDepthToZones(depthValues, minDepth: minDepth, range: range)
 
         Task { @MainActor in

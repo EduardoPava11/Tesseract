@@ -28,8 +28,16 @@ struct ContentView: View {
                 processingView
 
             case .done:
-                // TODO: result view with GIF playback
-                resultPlaceholder
+                if let gifData = camera.gifData, let measure = camera.gifMeasure {
+                    GIFResultView(
+                        gifData: gifData,
+                        measure: measure,
+                        onAgain: { camera.state = .previewing },
+                        onShare: { shareGIF(gifData) }
+                    )
+                } else {
+                    resultPlaceholder
+                }
 
             case .error(let msg):
                 errorView(msg)
@@ -300,6 +308,16 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Share
+
+    private func shareGIF(_ data: Data) {
+        guard let url = GIFEncoder.saveToTempFile(data) else { return }
+        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let root = scene.keyWindow?.rootViewController else { return }
+        root.present(controller, animated: true)
+    }
+
     // MARK: - Result Placeholder
 
     private var resultPlaceholder: some View {
@@ -325,6 +343,69 @@ struct ContentView: View {
                 .padding(.horizontal, 32)
             Button("Retry") { camera.state = .idle; camera.start() }
                 .buttonStyle(.bordered)
+        }
+    }
+}
+
+// MARK: - GIF Result View
+
+struct GIFResultView: View {
+    let gifData: Data
+    let measure: BirkhoffMeasure
+    let onAgain: () -> Void
+    let onShare: () -> Void
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 4) {
+                Text("64 × 64 × 64")
+                    .font(.system(.title2, design: .monospaced))
+                    .foregroundStyle(.white)
+                Text("\(gifData.count / 1024)KB · 20fps · 3.2s")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+
+            // Stats
+            VStack(alignment: .leading, spacing: 10) {
+                statRow("Beauty  M = O/C", String(format: "%.1f", measure.beauty))
+                Divider().overlay(Color.white.opacity(0.1))
+                statRow("Order (O)", String(format: "%.0f", measure.order))
+                statRow("Complexity (C)", String(format: "%.3f", measure.complexity))
+                statRow("Manifold dim", String(format: "%.2f", measure.manifoldDim))
+                statRow("Colors used", "\(measure.colorsUsed) / 256")
+                statRow("Palette", "4⁴ tesseract")
+                statRow("Cadence", "binomial σ=7.875")
+            }
+            .padding()
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            .font(.system(.caption, design: .monospaced))
+            .padding(.horizontal, 32)
+
+            Spacer()
+
+            HStack(spacing: 24) {
+                Button(action: onShare) {
+                    Label("Share", systemImage: "square.and.arrow.up")
+                }
+                .buttonStyle(.bordered)
+                .tint(.white)
+
+                Button("Again", action: onAgain)
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+            }
+            .padding(.bottom, 48)
+        }
+    }
+
+    private func statRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label).foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
         }
     }
 }
