@@ -247,22 +247,34 @@ final class CameraManager: NSObject, ObservableObject {
         let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
         let outSize = CameraConfig.captureSize  // 64
 
-        // Square center crop, then downsample to 64×64.
-        // .photo on TrueDepth front camera: 1920×1080 landscape buffer.
-        // Image comes out rotated 90° CW → apply 90° CCW to correct.
-        let cropSize = min(width, height)
-        let cropX = (width - cropSize) / 2
-        let cropY = (height - cropSize) / 2
+        // Buffer is landscape (e.g. 1920×1080). After 90° CCW rotation:
+        //   rotated width  = source height (1080)
+        //   rotated height = source width  (1920)
+        // Square crop from the rotated image: use the SHORT side (1080).
+        // Crop excess from the TALL side (1920→1080), centered.
+        let rotatedW = height  // 1080
+        let rotatedH = width   // 1920
+        let cropSize = min(rotatedW, rotatedH)  // 1080
+        let rotCropX = (rotatedW - cropSize) / 2  // 0
+        let rotCropY = (rotatedH - cropSize) / 2  // (1920-1080)/2 = 420
         let step = cropSize / outSize
+
+        if !Self._loggedBufferSize {
+            print("Tesseract: rotated \(rotatedW)×\(rotatedH), crop=\(cropSize), rotCropX=\(rotCropX), rotCropY=\(rotCropY), step=\(step)")
+        }
 
         var pixels = [(Float, Float, Float)]()
         pixels.reserveCapacity(outSize * outSize)
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // 90° CCW rotation: output(x,y) reads from source(y, outSize-1-x)
-                let srcX = cropX + y * step + step / 2
-                let srcY = cropY + (outSize - 1 - x) * step + step / 2
+                // 90° CCW rotation with post-rotation crop:
+                // In rotated space: rotX = rotCropX + x*step, rotY = rotCropY + y*step
+                // Map rotated→source: srcX = rotY (source column), srcY = (rotatedW-1) - rotX (source row, flipped)
+                let rotX = rotCropX + x * step + step / 2
+                let rotY = rotCropY + y * step + step / 2
+                let srcX = rotY            // rotated row → source column
+                let srcY = (height - 1) - rotX  // rotated col (flipped) → source row
 
                 guard srcX < width && srcY < height else {
                     pixels.append((0, 0, 0))
@@ -426,12 +438,14 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
 
         // Quantize depth into 4 zones
         let range = max(maxDepth - minDepth, 0.001)
-        // Downsample depth to 64×64 and build zones
-        // (depth zones update published state for UI)
-        let cropSize = min(width, height)
-        let cropX = (width - cropSize) / 2
-        let cropY = (height - cropSize) / 2
-        let step = cropSize / CameraConfig.captureSize
+        // Downsample depth: same rotation as RGB
+        // Rotated: rotW=height, rotH=width. Crop square from rotated.
+        let rotW = height
+        let rotH = width
+        let dCropSize = min(rotW, rotH)
+        let dRotCropX = (rotW - dCropSize) / 2
+        let dRotCropY = (rotH - dCropSize) / 2
+        let step = dCropSize / CameraConfig.captureSize
 
         var depthValues = [Float]()
         depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
@@ -439,9 +453,10 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         let outSize = CameraConfig.captureSize
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // Same 90° CCW as RGB: output(x,y) → source(y, outSize-1-x)
-                let srcX = cropX + y * step + step / 2
-                let srcY = cropY + (outSize - 1 - x) * step + step / 2
+                let rotX = dRotCropX + x * step + step / 2
+                let rotY = dRotCropY + y * step + step / 2
+                let srcX = rotY
+                let srcY = (height - 1) - rotX
                 let idx = srcY * width + srcX
                 let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)

@@ -140,14 +140,20 @@ kernel void quantizeWithDepth(
 // ════════════════════════════════════════════════════════════════
 
 struct DownsampleParams {
-    uint srcWidth;
-    uint srcHeight;
-    uint dstWidth;     // 64
-    uint dstHeight;    // 64
-    uint cropX;        // center crop offset
-    uint cropY;
-    uint cropSize;     // min(srcWidth, srcHeight)
+    uint srcWidth;      // e.g. 1920
+    uint srcHeight;     // e.g. 1080
+    uint dstWidth;      // 64
+    uint dstHeight;     // 64
+    uint rotCropX;      // crop offset in ROTATED space (after 90° CCW)
+    uint rotCropY;      // crop offset in ROTATED space
+    uint cropSize;      // square crop size = min(srcHeight, srcWidth)
 };
+
+// 90° CCW rotation + square crop:
+//   Rotated image: width=srcHeight, height=srcWidth
+//   Square crop from rotated image, centered.
+//   rotX = rotCropX + gid.x * step → maps to srcY via (srcHeight-1-rotX)
+//   rotY = rotCropY + gid.y * step → maps to srcX directly
 
 kernel void downsampleRGB(
     texture2d<float, access::read> srcTexture   [[texture(0)]],
@@ -158,12 +164,12 @@ kernel void downsampleRGB(
     if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
 
     uint step = params.cropSize / params.dstWidth;
+    uint rotX = params.rotCropX + gid.x * step + step / 2;
+    uint rotY = params.rotCropY + gid.y * step + step / 2;
 
-    // Rotate 90° CCW for portrait: front camera buffer is landscape (1920×1080).
-    // Output gid.y → source X (columns become rows)
-    // Output (dstHeight-1-gid.x) → source Y (rows become inverted columns)
-    uint srcX = params.cropX + gid.y * step + step / 2;
-    uint srcY = params.cropY + (params.dstHeight - 1 - gid.x) * step + step / 2;
+    // Map rotated coords → source coords (90° CCW)
+    uint srcX = rotY;
+    uint srcY = (params.srcHeight - 1) - rotX;
 
     float4 color = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(color, gid);
@@ -178,10 +184,11 @@ kernel void downsampleDepth(
     if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
 
     uint step = params.cropSize / params.dstWidth;
+    uint rotX = params.rotCropX + gid.x * step + step / 2;
+    uint rotY = params.rotCropY + gid.y * step + step / 2;
 
-    // Same 90° CCW rotation as RGB — depth must align with color
-    uint srcX = params.cropX + gid.y * step + step / 2;
-    uint srcY = params.cropY + (params.dstHeight - 1 - gid.x) * step + step / 2;
+    uint srcX = rotY;
+    uint srcY = (params.srcHeight - 1) - rotX;
 
     float4 depth = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(depth, gid);

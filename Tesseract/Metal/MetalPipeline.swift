@@ -254,16 +254,20 @@ final class MetalPipeline {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             // Downsample RGB
-            let srcW = rgbTexture.width
-            let srcH = rgbTexture.height
-            let cropSize = min(srcW, srcH)
-            let cropX = (srcW - cropSize) / 2
-            let cropY = (srcH - cropSize) / 2
+            let srcW = rgbTexture.width   // e.g. 1920
+            let srcH = rgbTexture.height  // e.g. 1080
+
+            // After 90° CCW rotation: rotatedW=srcH, rotatedH=srcW
+            let rotatedW = srcH  // 1080
+            let rotatedH = srcW  // 1920
+            let cropSize = min(rotatedW, rotatedH)  // 1080
+            let rotCropX = (rotatedW - cropSize) / 2  // 0
+            let rotCropY = (rotatedH - cropSize) / 2  // 420
 
             var dsParams = DownsampleParamsSwift(
                 srcWidth: UInt32(srcW), srcHeight: UInt32(srcH),
                 dstWidth: 64, dstHeight: 64,
-                cropX: UInt32(cropX), cropY: UInt32(cropY),
+                rotCropX: UInt32(rotCropX), rotCropY: UInt32(rotCropY),
                 cropSize: UInt32(cropSize)
             )
             downsampleParamsBuffer?.contents().copyMemory(
@@ -285,12 +289,16 @@ final class MetalPipeline {
                 let depthH = depthTex.height
                 let dCropSize = min(depthW, depthH)
 
+                // Depth: same rotation logic
+                let dRotW = depthH
+                let dRotH = depthW
+                let dCropSz = min(dRotW, dRotH)
                 var ddsParams = DownsampleParamsSwift(
                     srcWidth: UInt32(depthW), srcHeight: UInt32(depthH),
                     dstWidth: 64, dstHeight: 64,
-                    cropX: UInt32((depthW - dCropSize) / 2),
-                    cropY: UInt32((depthH - dCropSize) / 2),
-                    cropSize: UInt32(dCropSize)
+                    rotCropX: UInt32((dRotW - dCropSz) / 2),
+                    rotCropY: UInt32((dRotH - dCropSz) / 2),
+                    cropSize: UInt32(dCropSz)
                 )
                 downsampleParamsBuffer?.contents().copyMemory(
                     from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
@@ -435,7 +443,7 @@ struct DownsampleParamsSwift {
     var srcHeight: UInt32
     var dstWidth: UInt32
     var dstHeight: UInt32
-    var cropX: UInt32
-    var cropY: UInt32
+    var rotCropX: UInt32   // crop offset in rotated space
+    var rotCropY: UInt32
     var cropSize: UInt32
 }
