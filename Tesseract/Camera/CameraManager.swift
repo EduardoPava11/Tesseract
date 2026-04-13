@@ -198,8 +198,8 @@ final class CameraManager: NSObject, ObservableObject {
         rgbTexture: MTLTexture,
         frameIndex: Int
     ) {
-        // Use depth texture if available (stored from depth delegate)
-        let depthTex = _lastDepthTexture
+        // Use depth texture if available (stored from depth delegate via CVMetalTextureCache)
+        let depthTex = _lastDepthTexture as? MTLTexture
 
         guard let indices = metal.processFrame(
             rgbTexture: rgbTexture,
@@ -313,10 +313,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     nonisolated private func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
         guard let metal = _metalPipeline else { return nil }
-        // For now, return nil to use CPU path.
-        // Full Metal texture creation requires CVMetalTextureCache
-        // which needs device reference — TODO: wire up in Phase 5.
-        return nil
+        return metal.makeTexture(from: pixelBuffer)
     }
 
     // MARK: - GIF Encoding
@@ -429,8 +426,13 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
             }
         }
 
-        // Store depth values for frame buffer pairing (nonisolated-safe)
+        // Store depth values for CPU fallback
         self._lastDepthValues = depthValues
+
+        // Store depth texture for Metal path
+        if let metal = _metalPipeline {
+            self._lastDepthTexture = metal.makeDepthTexture(from: depthMap)
+        }
 
         // Quantize to 4 zones for UI
         let zones = quantizeDepthToZones(depthValues, minDepth: minDepth, range: range)

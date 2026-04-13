@@ -6,6 +6,7 @@
 
 import Metal
 import MetalKit
+import CoreVideo
 import os.log
 
 /// Logger for the Metal pipeline
@@ -43,6 +44,10 @@ final class MetalPipeline {
 
     private var paramsBuffer: MTLBuffer?
     private var downsampleParamsBuffer: MTLBuffer?
+
+    // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
+
+    private var textureCache: CVMetalTextureCache?
 
     // MARK: - Status
 
@@ -151,8 +156,56 @@ final class MetalPipeline {
         paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.size, options: .storageModeShared)
         downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.size, options: .storageModeShared)
 
+        // Texture cache for CVPixelBuffer → MTLTexture conversion
+        var cache: CVMetalTextureCache?
+        let cacheStatus = CVMetalTextureCacheCreate(nil, nil, device, nil, &cache)
+        if cacheStatus == kCVReturnSuccess, let cache = cache {
+            self.textureCache = cache
+            logger.info("MetalPipeline: texture cache created")
+        } else {
+            logger.error("MetalPipeline: failed to create texture cache (status=\(cacheStatus))")
+            return false
+        }
+
         logger.info("MetalPipeline: all buffers allocated")
         return true
+    }
+
+    // MARK: - CVPixelBuffer → MTLTexture
+
+    /// Convert a CVPixelBuffer (from camera) to a Metal texture.
+    /// Returns nil with logged error on failure.
+    func makeTexture(from pixelBuffer: CVPixelBuffer, pixelFormat: MTLPixelFormat = .bgra8Unorm) -> MTLTexture? {
+        guard let cache = textureCache else {
+            logger.error("MetalPipeline: texture cache is nil")
+            return nil
+        }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        var cvTexture: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            nil, cache, pixelBuffer, nil,
+            pixelFormat, width, height, 0, &cvTexture
+        )
+
+        guard status == kCVReturnSuccess, let cvTex = cvTexture else {
+            logger.error("MetalPipeline: CVMetalTexture creation failed (status=\(status), \(width)×\(height), format=\(pixelFormat.rawValue))")
+            return nil
+        }
+
+        guard let texture = CVMetalTextureGetTexture(cvTex) else {
+            logger.error("MetalPipeline: CVMetalTextureGetTexture returned nil")
+            return nil
+        }
+
+        return texture
+    }
+
+    /// Convert a depth CVPixelBuffer (Float32) to a Metal texture.
+    func makeDepthTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        return makeTexture(from: pixelBuffer, pixelFormat: .r32Float)
     }
 
     // MARK: - Process One Frame
