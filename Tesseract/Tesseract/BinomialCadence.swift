@@ -24,8 +24,10 @@ struct BinomialCadence {
     static let centers: SIMD4<Float> = SIMD4(7.875, 23.625, 39.375, 55.125)
 
     /// SNR factors per depth zone.
-    /// Near (signal) → narrow σ → stable. Far (noise) → wide σ → volatile.
-    static let snrFactors: [Float] = [0.5, 0.75, 1.25, 2.0]
+    /// Near (signal) → very narrow σ → locked tight.
+    /// Far (noise) → very wide σ → nearly random epoch selection.
+    /// Wide range for VISIBLE depth-driven temporal effect.
+    static let snrFactors: [Float] = [0.3, 0.6, 2.0, 5.0]
 
     // MARK: - P(epoch | frame) — without depth (backward compatible)
 

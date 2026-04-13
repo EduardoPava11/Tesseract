@@ -86,9 +86,18 @@ struct ContentView: View {
 
             Spacer()
 
-            // Bottom: Record button
-            recordButton
-                .padding(.bottom, 48)
+            // Palette swatch (16×16 = 256 colors) + Record button
+            HStack(alignment: .center, spacing: 24) {
+                // 16×16 palette swatch on the left
+                PaletteSwatchView()
+
+                // Record button center
+                recordButton
+
+                // Balance spacing
+                Color.clear.frame(width: 64, height: 64)
+            }
+            .padding(.bottom, 48)
         }
     }
 
