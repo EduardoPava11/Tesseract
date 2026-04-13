@@ -180,16 +180,16 @@ final class CameraManager: NSObject, ObservableObject {
         let currentFrameCount = frameBuffer.frameCount
         let isRecording = currentFrameCount < CameraConfig.totalFrames && currentFrameCount > 0
 
-        // TODO: Metal path disabled until rotation is fixed in the kernel.
-        // CPU path handles orientation correctly.
-        // if let metal = _metalPipeline, metal.isReady,
-        //    let rgbTexture = makeTexture(from: pixelBuffer) {
-        //     processWithMetal(metal, rgbTexture: rgbTexture,
-        //                    frameIndex: isRecording ? currentFrameCount : 0)
-        //     return
-        // }
+        // Metal GPU path: downsample + depth SNR + quantize on GPU
+        // CPU path: fallback when Metal texture bridge fails
+        // Both apply the same 90° CCW rotation.
+        if let metal = _metalPipeline, metal.isReady,
+           let rgbTexture = makeTexture(from: pixelBuffer) {
+            processWithMetal(metal, rgbTexture: rgbTexture,
+                           frameIndex: isRecording ? currentFrameCount : 0)
+            return
+        }
 
-        // CPU path — handles landscape→portrait rotation correctly
         processWithCPU(pixelBuffer, frameIndex: isRecording ? currentFrameCount : 0)
     }
 
@@ -248,7 +248,8 @@ final class CameraManager: NSObject, ObservableObject {
         let outSize = CameraConfig.captureSize  // 64
 
         // Square center crop, then downsample to 64×64.
-        // .photo preset on TrueDepth front camera delivers in a usable orientation.
+        // .photo on TrueDepth front camera: 1920×1080 landscape buffer.
+        // Image comes out rotated 90° CW → apply 90° CCW to correct.
         let cropSize = min(width, height)
         let cropX = (width - cropSize) / 2
         let cropY = (height - cropSize) / 2
@@ -259,8 +260,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                let srcX = cropX + x * step + step / 2
-                let srcY = cropY + y * step + step / 2
+                // 90° CCW rotation: output(x,y) reads from source(y, outSize-1-x)
+                let srcX = cropX + y * step + step / 2
+                let srcY = cropY + (outSize - 1 - x) * step + step / 2
 
                 guard srcX < width && srcY < height else {
                     pixels.append((0, 0, 0))
@@ -434,10 +436,12 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         var depthValues = [Float]()
         depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
 
-        for y in 0..<CameraConfig.captureSize {
-            for x in 0..<CameraConfig.captureSize {
-                let srcX = cropX + x * step + step / 2
-                let srcY = cropY + y * step + step / 2
+        let outSize = CameraConfig.captureSize
+        for y in 0..<outSize {
+            for x in 0..<outSize {
+                // Same 90° CCW as RGB: output(x,y) → source(y, outSize-1-x)
+                let srcX = cropX + y * step + step / 2
+                let srcY = cropY + (outSize - 1 - x) * step + step / 2
                 let idx = srcY * width + srcX
                 let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)
