@@ -105,7 +105,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func configure() async {
         session.beginConfiguration()
-        session.sessionPreset = .photo
+        session.sessionPreset = .high
 
         // Front TrueDepth camera
         guard let device = AVCaptureDevice.default(
