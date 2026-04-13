@@ -56,9 +56,52 @@ final class FrameBuffer: @unchecked Sendable {
         frameCount >= capacity
     }
 
-    // MARK: - Add Frame
+    // MARK: - Add Pre-Quantized Frame (from Metal)
 
-    /// Add a quantized frame during recording.
+    /// Add a frame that was already quantized by the Metal pipeline.
+    /// Returns current frame count, or nil if not recording / full.
+    @discardableResult
+    func addQuantizedFrame(
+        paletteIndices: [UInt8],
+        depth: [Float]?,
+        timestamp: TimeInterval
+    ) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard isRecording, frames.count < capacity else { return nil }
+
+        let frameIndex = frames.count
+
+        let depthZones: [UInt8]
+        if let depth = depth {
+            depthZones = quantizeDepth(depth)
+        } else {
+            depthZones = [UInt8](repeating: 0, count: QuantizedFrame.pixelCount)
+        }
+
+        let measure = BirkhoffMeasure(paletteIndices: paletteIndices)
+
+        let frame = QuantizedFrame(
+            index: frameIndex,
+            paletteIndices: paletteIndices,
+            depthZones: depthZones,
+            measure: measure,
+            timestamp: timestamp
+        )
+
+        frames.append(frame)
+
+        if frames.count >= capacity {
+            isRecording = false
+        }
+
+        return frames.count
+    }
+
+    // MARK: - Add Frame (CPU path)
+
+    /// Add a frame with CPU-side quantization (fallback when Metal unavailable).
     /// Returns the current frame count, or nil if not recording / full.
     @discardableResult
     func addFrame(

@@ -68,11 +68,18 @@ final class CameraManager: NSObject, ObservableObject {
     private let depthOutput = AVCaptureDepthDataOutput()
     private let processingQueue = DispatchQueue(label: "com.tesseract.camera", qos: .userInteractive)
 
-    // MARK: - Frame Buffer
+    // MARK: - Frame Buffer + Metal
 
     private let frameBuffer = FrameBuffer()
-    // Depth stored in a thread-safe way via the frame buffer's own lock
+    nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
     nonisolated(unsafe) private var _lastDepthValues: [Float]?
+    nonisolated(unsafe) private var _lastDepthTexture: (any MTLTexture)?
+
+    override init() {
+        super.init()
+        // Try to init Metal — falls back to CPU if it fails
+        self._metalPipeline = MetalPipeline()
+    }
 
     // MARK: - Lifecycle
 
@@ -163,10 +170,62 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Frame Processing
 
-    /// Process a video frame: downsample to 64×64, quantize to tesseract
+    /// Process a video frame: downsample to 64×64, quantize to tesseract.
+    /// Uses Metal GPU pipeline if available, falls back to CPU.
     nonisolated func processVideoFrame(_ sampleBuffer: CMSampleBuffer) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
+        // Determine frame index for recording
+        let currentFrameCount = frameBuffer.frameCount
+        let isRecording = currentFrameCount < CameraConfig.totalFrames && currentFrameCount > 0
+
+        // Try Metal path first
+        if let metal = _metalPipeline, metal.isReady,
+           let rgbTexture = makeTexture(from: pixelBuffer) {
+            processWithMetal(metal, rgbTexture: rgbTexture,
+                           frameIndex: isRecording ? currentFrameCount : 0)
+            return
+        }
+
+        // CPU fallback
+        processWithCPU(pixelBuffer, frameIndex: isRecording ? currentFrameCount : 0)
+    }
+
+    // MARK: - Metal Path
+
+    nonisolated private func processWithMetal(
+        _ metal: MetalPipeline,
+        rgbTexture: MTLTexture,
+        frameIndex: Int
+    ) {
+        // Use depth texture if available (stored from depth delegate)
+        let depthTex = _lastDepthTexture
+
+        guard let indices = metal.processFrame(
+            rgbTexture: rgbTexture,
+            depthTexture: depthTex,
+            frameIndex: frameIndex
+        ) else {
+            // Metal failed — will log internally. Skip this frame.
+            return
+        }
+
+        // Build preview
+        let previewImg = buildPreviewImage(indices: indices)
+        let measure = BirkhoffMeasure(paletteIndices: indices)
+
+        Task { @MainActor in
+            self.previewImage = previewImg
+            self.previewMeasure = measure
+        }
+
+        // If recording, add to frame buffer directly (already quantized by Metal)
+        handleRecordingFrame(indices: indices)
+    }
+
+    // MARK: - CPU Fallback Path
+
+    nonisolated private func processWithCPU(_ pixelBuffer: CVPixelBuffer, frameIndex: Int) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
@@ -177,13 +236,12 @@ final class CameraManager: NSObject, ObservableObject {
 
         let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
 
-        // Square crop from center, then downsample to 64×64
         let cropSize = min(width, height)
         let cropX = (width - cropSize) / 2
         let cropY = (height - cropSize) / 2
         let step = cropSize / CameraConfig.captureSize
 
-        var pixels = [SIMD3<Float>]()
+        var pixels = [(Float, Float, Float)]()
         pixels.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
 
         for y in 0..<CameraConfig.captureSize {
@@ -195,44 +253,70 @@ final class CameraManager: NSObject, ObservableObject {
                 let b = Float(buffer[offset]) / 255.0
                 let g = Float(buffer[offset + 1]) / 255.0
                 let r = Float(buffer[offset + 2]) / 255.0
-                pixels.append(SIMD3(r, g, b))
+                pixels.append((r, g, b))
             }
         }
 
-        let rgbTuples = pixels.map { ($0.x, $0.y, $0.z) }
+        // Quantize depth zones from stored depth values
+        let depthZones: [UInt8]?
+        if let depths = _lastDepthValues {
+            depthZones = depths.map { d in
+                let normalized = max(0, min(1, d))
+                return UInt8(min(3, max(0, Int(normalized * 4))))
+            }
+        } else {
+            depthZones = nil
+        }
 
-        // Quantize for preview (use frame 0 epoch for live view)
-        let previewIndices = TesseractPalette.quantizeFrame(
-            frame: 0, pixels: rgbTuples
+        let indices = TesseractPalette.quantizeFrame(
+            frame: frameIndex, pixels: pixels, depthZones: depthZones
         )
-        let previewImg = buildPreviewImage(indices: previewIndices)
-        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
+
+        let previewImg = buildPreviewImage(indices: indices)
+        let measure = BirkhoffMeasure(paletteIndices: indices)
 
         Task { @MainActor in
             self.previewImage = previewImg
             self.previewMeasure = measure
         }
 
-        // If recording, feed the frame buffer with proper epoch sampling
-        if frameBuffer.frameCount < CameraConfig.totalFrames {
-            let count = frameBuffer.addFrame(
-                rgb: rgbTuples,
-                depth: _lastDepthValues,
-                timestamp: CACurrentMediaTime()
-            )
+        // If recording, add to frame buffer
+        handleRecordingFrame(indices: indices)
+    }
 
-            if let count = count {
-                Task { @MainActor in
-                    self.state = .recording(count)
+    // MARK: - Recording Frame Handler
 
-                    // Recording complete?
-                    if count >= CameraConfig.totalFrames {
-                        self.state = .processing
-                        self.encodeGIF()
-                    }
+    nonisolated private func handleRecordingFrame(indices: [UInt8]) {
+        // Build a QuantizedFrame directly from Metal/CPU output
+        let currentCount = frameBuffer.frameCount
+        guard currentCount < CameraConfig.totalFrames else { return }
+
+        // Use the direct-indices path in frame buffer
+        let count = frameBuffer.addQuantizedFrame(
+            paletteIndices: indices,
+            depth: _lastDepthValues,
+            timestamp: CACurrentMediaTime()
+        )
+
+        if let count = count {
+            Task { @MainActor in
+                self.state = .recording(count)
+                if count >= CameraConfig.totalFrames {
+                    self.state = .processing
+                    self.encodeGIF()
                 }
             }
         }
+    }
+
+    // MARK: - Texture Creation from CVPixelBuffer
+
+    nonisolated private func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        guard let metal = _metalPipeline else { return nil }
+        // For now, return nil to use CPU path.
+        // Full Metal texture creation requires CVMetalTextureCache
+        // which needs device reference — TODO: wire up in Phase 5.
+        return nil
     }
 
     // MARK: - GIF Encoding
