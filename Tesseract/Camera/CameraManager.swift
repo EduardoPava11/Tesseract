@@ -223,8 +223,10 @@ final class CameraManager: NSObject, ObservableObject {
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                let srcX = cropX + x * step + half
-                let srcY = cropY + y * step + half
+                // videoRotationAngle=90 reports portrait dims but pixels may still
+                // be in landscape memory layout. Apply 90° CCW to correct.
+                let srcX = cropX + y * step + half
+                let srcY = cropY + (outSize - 1 - x) * step + half
                 guard srcX < rgbW && srcY < rgbH else { pixels.append((0,0,0)); continue }
                 let off = srcY * bytesPerRow + srcX * 4
                 let b = Float(buffer[off]) / 255.0
@@ -308,8 +310,9 @@ final class CameraManager: NSObject, ObservableObject {
             let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 2
             for y in 0..<outSize {
                 for x in 0..<outSize {
-                    let srcX = dCropX + x * dStep + dHalf
-                    let srcY = dCropY + y * dStep + dHalf
+                    // 90° CCW to match RGB rotation
+                    let srcX = dCropX + y * dStep + dHalf
+                    let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
                     guard srcX < dW && srcY < dH else { values.append(0.5); continue }
                     let raw = ptr[srcY * stride + srcX]
                     let f = Float(Float16(bitPattern: raw))
@@ -322,8 +325,9 @@ final class CameraManager: NSObject, ObservableObject {
             let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 4
             for y in 0..<outSize {
                 for x in 0..<outSize {
-                    let srcX = dCropX + x * dStep + dHalf
-                    let srcY = dCropY + y * dStep + dHalf
+                    // 90° CCW
+                    let srcX = dCropX + y * dStep + dHalf
+                    let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
                     guard srcX < dW && srcY < dH else { values.append(0.5); continue }
                     let f = ptr[srcY * stride + srcX]
                     values.append(f.isFinite && f > 0 ? f : 0.5)
