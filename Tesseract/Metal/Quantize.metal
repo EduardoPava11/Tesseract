@@ -157,10 +157,13 @@ kernel void downsampleRGB(
 ) {
     if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
 
-    // Map destination pixel to source region (center of the cell)
     uint step = params.cropSize / params.dstWidth;
-    uint srcX = params.cropX + gid.x * step + step / 2;
-    uint srcY = params.cropY + gid.y * step + step / 2;
+
+    // Rotate 90° CCW for portrait: front camera buffer is landscape (1920×1080).
+    // Output gid.y → source X (columns become rows)
+    // Output (dstHeight-1-gid.x) → source Y (rows become inverted columns)
+    uint srcX = params.cropX + gid.y * step + step / 2;
+    uint srcY = params.cropY + (params.dstHeight - 1 - gid.x) * step + step / 2;
 
     float4 color = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(color, gid);
@@ -175,8 +178,10 @@ kernel void downsampleDepth(
     if (gid.x >= params.dstWidth || gid.y >= params.dstHeight) return;
 
     uint step = params.cropSize / params.dstWidth;
-    uint srcX = params.cropX + gid.x * step + step / 2;
-    uint srcY = params.cropY + gid.y * step + step / 2;
+
+    // Same 90° CCW rotation as RGB — depth must align with color
+    uint srcX = params.cropX + gid.y * step + step / 2;
+    uint srcY = params.cropY + (params.dstHeight - 1 - gid.x) * step + step / 2;
 
     float4 depth = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(depth, gid);

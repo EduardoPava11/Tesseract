@@ -443,12 +443,14 @@ extension CameraManager: AVCaptureDepthDataOutputDelegate {
         var depthValues = [Float]()
         depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
 
-        for y in 0..<CameraConfig.captureSize {
-            for x in 0..<CameraConfig.captureSize {
-                let srcX = cropX + x * step + step / 2
-                let srcY = cropY + y * step + step / 2
+        let outSize = CameraConfig.captureSize
+        for outY in 0..<outSize {
+            for outX in 0..<outSize {
+                // Same 90° CCW rotation as RGB downsample — depth must align
+                let srcX = cropX + outY * step + step / 2
+                let srcY = cropY + (outSize - 1 - outX) * step + step / 2
                 let idx = srcY * width + srcX
-                let d = (idx < width * height) ? floatBuffer[idx] : minDepth
+                let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
                 depthValues.append(d)
             }
         }
