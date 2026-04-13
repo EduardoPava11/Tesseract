@@ -150,9 +150,10 @@ final class CameraManager: NSObject, ObservableObject {
             depthOutput.isFilteringEnabled = true
             depthOutput.alwaysDiscardsLateDepthData = true
 
-            // Square crop: use the center 1:1 region
+            // Portrait orientation: rotate video to match screen
             if let connection = videoOutput.connection(with: .video) {
-                connection.videoRotationAngle = 0
+                connection.videoRotationAngle = 90
+                connection.isVideoMirrored = true  // front camera mirror
             }
 
             session.commitConfiguration()
@@ -324,7 +325,7 @@ final class CameraManager: NSObject, ObservableObject {
         let measure = frameBuffer.aggregateMeasure()
 
         Task.detached(priority: .userInitiated) {
-            let gifData = GIFEncoder.encode(frames: frames)
+            let gifData = GIFEncoder.encode(frames: frames, measure: measure)
 
             await MainActor.run {
                 self.gifData = gifData

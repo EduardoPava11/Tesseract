@@ -312,7 +312,19 @@ struct ContentView: View {
 
     private func shareGIF(_ data: Data) {
         guard let url = GIFEncoder.saveToTempFile(data) else { return }
-        let controller = UIActivityViewController(activityItems: [url], applicationActivities: nil)
+
+        // Build metadata string for the share text
+        let stats: String
+        if let m = camera.gifMeasure {
+            stats = "Tesseract 4⁴ · M=\(String(format: "%.0f", m.beauty)) · dim=\(String(format: "%.1f", m.manifoldDim)) · \(m.colorsUsed)/256 colors · \(data.count / 1024)KB"
+        } else {
+            stats = "Tesseract 4⁴ · 64×64×64 · 20fps"
+        }
+
+        let controller = UIActivityViewController(
+            activityItems: [url, stats],
+            applicationActivities: nil
+        )
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let root = scene.keyWindow?.rootViewController else { return }
         root.present(controller, animated: true)
@@ -356,67 +368,38 @@ struct GIFResultView: View {
     let onShare: () -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 0) {
             Spacer()
 
-            // Animated GIF playback at 256×256 (nearest-neighbor)
-            ZStack {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(.ultraThinMaterial)
-                    .frame(width: 264, height: 264)
-
-                GIFPlayerView(data: gifData)
-                    .frame(width: 256, height: 256)
-                    .clipShape(RoundedRectangle(cornerRadius: 2))
-            }
-
-            VStack(spacing: 4) {
-                Text("64 × 64 × 64")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
-                Text("\(gifData.count / 1024)KB · 20fps · 3.2s")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
-            }
-
-            // Stats
-            VStack(alignment: .leading, spacing: 10) {
-                statRow("Beauty  M = O/C", String(format: "%.1f", measure.beauty))
-                Divider().overlay(Color.white.opacity(0.1))
-                statRow("Order (O)", String(format: "%.0f", measure.order))
-                statRow("Complexity (C)", String(format: "%.3f", measure.complexity))
-                statRow("Manifold dim", String(format: "%.2f", measure.manifoldDim))
-                statRow("Colors used", "\(measure.colorsUsed) / 256")
-                statRow("Palette", "4⁴ tesseract")
-                statRow("Cadence", "binomial σ=7.875")
-            }
-            .padding()
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
-            .font(.system(.caption, design: .monospaced))
-            .padding(.horizontal, 32)
+            // The GIF — full focus, 256×256 nearest-neighbor
+            GIFPlayerView(data: gifData)
+                .frame(width: 256, height: 256)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .shadow(color: .white.opacity(0.05), radius: 20)
 
             Spacer()
 
-            HStack(spacing: 24) {
-                Button(action: onShare) {
-                    Label("Share", systemImage: "square.and.arrow.up")
+            // Share button — the only action that matters
+            Button(action: onShare) {
+                HStack(spacing: 8) {
+                    Image(systemName: "square.and.arrow.up")
+                    Text("Share")
                 }
-                .buttonStyle(.bordered)
-                .tint(.white)
+                .font(.system(.body, design: .monospaced))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 32)
+                .padding(.vertical, 14)
+                .background(.ultraThinMaterial, in: Capsule())
+            }
+            .padding(.bottom, 16)
 
-                Button("Again", action: onAgain)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.white)
+            // Retake — subtle
+            Button(action: onAgain) {
+                Text("Retake")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
             }
             .padding(.bottom, 48)
-        }
-    }
-
-    private func statRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label).foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
         }
     }
 }

@@ -17,7 +17,7 @@ struct GIFEncoder {
     static let frameDelay: Int = 5  // centiseconds
 
     /// Encode quantized frames → GIF Data
-    static func encode(frames: [QuantizedFrame]) -> Data? {
+    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil) -> Data? {
         guard !frames.isEmpty else { return nil }
 
         let size = QuantizedFrame.size  // 64
@@ -28,11 +28,18 @@ struct GIFEncoder {
             data, UTType.gif.identifier as CFString, frames.count, nil
         ) else { return nil }
 
-        // GIF-level properties: loop forever
+        // GIF-level properties: loop forever + metadata comment
+        var gifDict: [String: Any] = [
+            kCGImagePropertyGIFLoopCount as String: 0
+        ]
+        // Embed stats as GIF comment (travels with the file)
+        if let m = measure {
+            let comment = "Tesseract 4⁴ | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | R1⊕R3=R4 σ=7.875"
+            gifDict[kCGImagePropertyGIFUnclampedDelayTime as String] = comment
+        }
+
         let gifProperties: [String: Any] = [
-            kCGImagePropertyGIFDictionary as String: [
-                kCGImagePropertyGIFLoopCount as String: 0  // infinite loop
-            ]
+            kCGImagePropertyGIFDictionary as String: gifDict
         ]
         CGImageDestinationSetProperties(destination, gifProperties as CFDictionary)
 
