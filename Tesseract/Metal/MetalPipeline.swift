@@ -254,8 +254,10 @@ final class MetalPipeline {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             // Downsample RGB
-            // RGB: hardcoded constants from FrameGeometry.hs
-            var dsParams = FrameGeometry.rgbParams
+            // Dynamic crop from actual buffer dimensions
+            let srcW = rgbTexture.width
+            let srcH = rgbTexture.height
+            var dsParams = DownsampleParamsSwift.fromBuffer(width: srcW, height: srcH)
             downsampleParamsBuffer?.contents().copyMemory(
                 from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
             )
@@ -275,8 +277,8 @@ final class MetalPipeline {
                 let depthH = depthTex.height
                 let dCropSize = min(depthW, depthH)
 
-                // Depth: hardcoded constants from FrameGeometry.hs
-                var ddsParams = FrameGeometry.depthParams
+                // Dynamic crop for depth
+                var ddsParams = DownsampleParamsSwift.fromBuffer(width: depthW, height: depthH)
                 downsampleParamsBuffer?.contents().copyMemory(
                     from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
                 )
@@ -421,14 +423,17 @@ struct DownsampleParamsSwift {
     var cropY: UInt32
     var step: UInt32
     var halfStep: UInt32
-}
 
-// Constants from FrameGeometry.hs (all 10 axioms verified)
-// Portrait buffers (videoRotationAngle=90, hardware rotated)
-// Straight read — no manual rotation.
-enum FrameGeometry {
-    // RGB: 1080×1920 → crop 960×960 at (60,480) → 64×64, step=15
-    static let rgbParams = DownsampleParamsSwift(cropX: 60, cropY: 480, step: 15, halfStep: 7)
-    // Depth: 360×640 → crop 320×320 at (20,160) → 64×64, step=5
-    static let depthParams = DownsampleParamsSwift(cropX: 20, cropY: 160, step: 5, halfStep: 2)
+    /// Compute dynamic params from actual buffer dimensions.
+    /// Square crop from short side, centered, downsample to 64×64.
+    static func fromBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
+        let cropSize = min(width, height)
+        let cropX = (width - cropSize) / 2
+        let cropY = (height - cropSize) / 2
+        let step = cropSize / 64
+        return DownsampleParamsSwift(
+            cropX: UInt32(cropX), cropY: UInt32(cropY),
+            step: UInt32(step), halfStep: UInt32(step / 2)
+        )
+    }
 }

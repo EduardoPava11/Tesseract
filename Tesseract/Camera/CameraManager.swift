@@ -1,24 +1,24 @@
 // CameraManager.swift
 // Tesseract
 //
-// TrueDepth front camera: RGB + Depth at 20fps.
-// State machine: idle → previewing → recording → done.
-// Preview shows EXACTLY what the GIF will capture.
+// TrueDepth front camera: synchronized RGB + Depth.
+// Based on Apple's TrueDepthStreamer pattern.
+//
+// .photo preset: full 4:3 sensor FOV (not cropped 16:9).
+// AVCaptureDataOutputSynchronizer: paired RGB+depth delivery.
+// videoRotationAngle=90 on BOTH connections: portrait buffers.
+// Dynamic crop: reads dimensions from buffer, no hardcoded constants.
 
 import AVFoundation
 import CoreImage
-import Combine
-import simd
+import CoreMedia
+import os.log
+
+private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
 /// Camera state machine
 enum CameraState: Equatable {
-    case idle              // not started
-    case previewing        // live feed, quantized 64×64 shown
-    case recording(Int)    // capturing frame N of 64
-    case processing        // quantizing + encoding GIF
-    case done              // GIF ready
-    case error(String)
-
+    case idle, previewing, recording(Int), processing, done, error(String)
     static func == (lhs: CameraState, rhs: CameraState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle), (.previewing, .previewing),
@@ -30,54 +30,43 @@ enum CameraState: Equatable {
     }
 }
 
-/// A captured frame: RGB pixels + depth map, both at 64×64
-struct CapturedFrame {
-    let frameIndex: Int
-    let rgb: [SIMD3<Float>]      // 4096 pixels, sRGB [0,1]
-    let depth: [Float]            // 4096 depth values, meters
-    let timestamp: TimeInterval
-}
-
-/// Constants: accessible from any isolation domain
+/// Constants
 enum CameraConfig {
     static let captureSize = 64
     static let displayScale = 4
-    static let displaySize = captureSize * displayScale  // 256
+    static let displaySize = captureSize * displayScale
     static let targetFPS = 20
     static let totalFrames = 64
-    static let recordingDuration: TimeInterval = Double(totalFrames) / Double(targetFPS)
 }
 
-/// Manages TrueDepth camera capture pipeline
 @MainActor
 final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Published State
 
     @Published var state: CameraState = .idle
-    @Published var previewImage: CGImage?       // live 64×64 quantized preview
+    @Published var previewImage: CGImage?
     @Published var previewMeasure: BirkhoffMeasure?
     @Published var depthZones: [DepthZone] = []
-    @Published var gifData: Data?               // encoded GIF after recording
-    @Published var gifMeasure: BirkhoffMeasure? // aggregate beauty of the GIF
+    @Published var gifData: Data?
+    @Published var gifMeasure: BirkhoffMeasure?
 
-    // MARK: - Capture Session
+    // MARK: - Capture
 
     private let session = AVCaptureSession()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let depthOutput = AVCaptureDepthDataOutput()
+    nonisolated(unsafe) private let videoOutput = AVCaptureVideoDataOutput()
+    nonisolated(unsafe) private let depthOutput = AVCaptureDepthDataOutput()
+    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
     private let processingQueue = DispatchQueue(label: "com.tesseract.camera", qos: .userInteractive)
 
-    // MARK: - Frame Buffer + Metal
+    // MARK: - Processing
 
     private let frameBuffer = FrameBuffer()
     nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
-    nonisolated(unsafe) private var _lastDepthValues: [Float]?
-    nonisolated(unsafe) private var _lastDepthTexture: (any MTLTexture)?
+    nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
         super.init()
-        // Try to init Metal — falls back to CPU if it fails
         self._metalPipeline = MetalPipeline()
     }
 
@@ -101,13 +90,14 @@ final class CameraManager: NSObject, ObservableObject {
         state = .idle
     }
 
-    // MARK: - Session Configuration
+    // MARK: - Session Configuration (Apple TrueDepthStreamer pattern)
 
     private func configure() async {
         session.beginConfiguration()
-        session.sessionPreset = .high
 
-        // Front TrueDepth camera
+        // .photo preset: full 4:3 sensor FOV, supports depth output
+        session.sessionPreset = .photo
+
         guard let device = AVCaptureDevice.default(
             .builtInTrueDepthCamera, for: .video, position: .front
         ) else {
@@ -118,232 +108,234 @@ final class CameraManager: NSObject, ObservableObject {
         do {
             let input = try AVCaptureDeviceInput(device: device)
             guard session.canAddInput(input) else {
-                state = .error("Cannot add camera input")
-                return
+                state = .error("Cannot add camera input"); return
             }
             session.addInput(input)
 
-            // Configure frame rate
+            // Frame rate
             try device.lockForConfiguration()
             let targetDuration = CMTime(value: 1, timescale: CMTimeScale(CameraConfig.targetFPS))
             device.activeVideoMinFrameDuration = targetDuration
             device.activeVideoMaxFrameDuration = targetDuration
-            device.unlockForConfiguration()
 
-            // Video output (RGB)
+            // Video output
             videoOutput.videoSettings = [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
             ]
             videoOutput.alwaysDiscardsLateVideoFrames = true
             guard session.canAddOutput(videoOutput) else {
-                state = .error("Cannot add video output")
-                return
+                state = .error("Cannot add video output"); return
             }
             session.addOutput(videoOutput)
 
             // Depth output
             guard session.canAddOutput(depthOutput) else {
-                state = .error("Cannot add depth output")
-                return
+                state = .error("Cannot add depth output"); return
             }
             session.addOutput(depthOutput)
             depthOutput.isFilteringEnabled = true
             depthOutput.alwaysDiscardsLateDepthData = true
 
-            // Let AVFoundation physically rotate the buffer to portrait (hardware accelerated).
-            // After this: RGB buffer = 1080×1920, Depth buffer = 360×640.
-            // No manual rotation needed in pixel read loops.
-            if let connection = videoOutput.connection(with: .video) {
-                connection.videoRotationAngle = 90
-                connection.isVideoMirrored = true
+            // Select best depth format (Float16, highest resolution)
+            let depthFormats = device.activeFormat.supportedDepthDataFormats
+            let bestDepth = depthFormats
+                .filter { CMFormatDescriptionGetMediaSubType($0.formatDescription) == kCVPixelFormatType_DepthFloat16 }
+                .max(by: {
+                    CMVideoFormatDescriptionGetDimensions($0.formatDescription).width
+                    < CMVideoFormatDescriptionGetDimensions($1.formatDescription).width
+                })
+            if let bestDepth = bestDepth {
+                device.activeDepthDataFormat = bestDepth
+                let dims = CMVideoFormatDescriptionGetDimensions(bestDepth.formatDescription)
+                logger.info("Camera: depth format \(dims.width)×\(dims.height) Float16")
             }
-            if let depthConnection = depthOutput.connection(with: .depthData) {
-                depthConnection.videoRotationAngle = 90
+
+            device.unlockForConfiguration()
+
+            // Orientation: portrait on BOTH connections (hardware rotation)
+            if let vc = videoOutput.connection(with: .video) {
+                if vc.isVideoRotationAngleSupported(90) {
+                    vc.videoRotationAngle = 90
+                }
+                vc.isVideoMirrored = true
+                logger.info("Camera: video connection rotationAngle=\(vc.videoRotationAngle), mirrored=\(vc.isVideoMirrored)")
             }
+            if let dc = depthOutput.connection(with: .depthData) {
+                if dc.isVideoRotationAngleSupported(90) {
+                    dc.videoRotationAngle = 90
+                }
+                dc.isVideoMirrored = true
+                logger.info("Camera: depth connection rotationAngle=\(dc.videoRotationAngle), mirrored=\(dc.isVideoMirrored)")
+            }
+
+            // Synchronizer: paired RGB + depth delivery
+            outputSynchronizer = AVCaptureDataOutputSynchronizer(
+                dataOutputs: [videoOutput, depthOutput]
+            )
+            outputSynchronizer?.setDelegate(self, queue: processingQueue)
+            logger.info("Camera: synchronizer active")
 
             session.commitConfiguration()
-
-            // Set delegate on processing queue
-            videoOutput.setSampleBufferDelegate(self, queue: processingQueue)
-            depthOutput.setDelegate(self, callbackQueue: processingQueue)
-
             session.startRunning()
             state = .previewing
+            logger.info("Camera: session running")
 
         } catch {
             state = .error(error.localizedDescription)
+            logger.error("Camera: \(error.localizedDescription)")
         }
     }
 
     // MARK: - Frame Processing
 
-    /// Process a video frame: downsample to 64×64, quantize to tesseract.
-    /// Uses Metal GPU pipeline if available, falls back to CPU.
-    nonisolated func processVideoFrame(_ sampleBuffer: CMSampleBuffer) {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+    nonisolated func processFrame(rgbBuffer: CVPixelBuffer, depthBuffer: CVPixelBuffer?) {
+        let rgbW = CVPixelBufferGetWidth(rgbBuffer)
+        let rgbH = CVPixelBufferGetHeight(rgbBuffer)
 
-        // Determine frame index for recording
-        let currentFrameCount = frameBuffer.frameCount
-        let isRecording = currentFrameCount < CameraConfig.totalFrames && currentFrameCount > 0
-
-        // Metal GPU path: downsample + depth SNR + quantize on GPU
-        // CPU path: fallback when Metal texture bridge fails
-        // Both apply the same 90° CCW rotation.
-        if let metal = _metalPipeline, metal.isReady,
-           let rgbTexture = makeTexture(from: pixelBuffer) {
-            processWithMetal(metal, rgbTexture: rgbTexture,
-                           frameIndex: isRecording ? currentFrameCount : 0)
-            return
+        if !Self._loggedOnce {
+            Self._loggedOnce = true
+            logger.info("Camera: RGB buffer \(rgbW)×\(rgbH)")
+            if let db = depthBuffer {
+                let dW = CVPixelBufferGetWidth(db)
+                let dH = CVPixelBufferGetHeight(db)
+                logger.info("Camera: depth buffer \(dW)×\(dH)")
+            }
         }
 
-        processWithCPU(pixelBuffer, frameIndex: isRecording ? currentFrameCount : 0)
-    }
+        // Dynamic crop: square from short side, centered
+        let outSize = CameraConfig.captureSize
+        let cropSize = min(rgbW, rgbH)
+        let cropX = (rgbW - cropSize) / 2
+        let cropY = (rgbH - cropSize) / 2
+        let step = cropSize / outSize
+        let half = step / 2
 
-    // MARK: - Metal Path
+        // Read RGB pixels
+        CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(rgbBuffer, .readOnly) }
 
-    nonisolated private func processWithMetal(
-        _ metal: MetalPipeline,
-        rgbTexture: MTLTexture,
-        frameIndex: Int
-    ) {
-        // Use depth texture if available (stored from depth delegate via CVMetalTextureCache)
-        let depthTex = _lastDepthTexture as? MTLTexture
-
-        guard let indices = metal.processFrame(
-            rgbTexture: rgbTexture,
-            depthTexture: depthTex,
-            frameIndex: frameIndex
-        ) else {
-            // Metal failed — will log internally. Skip this frame.
-            return
-        }
-
-        // Build preview
-        let previewImg = buildPreviewImage(indices: indices)
-        let measure = BirkhoffMeasure(paletteIndices: indices)
-
-        Task { @MainActor in
-            self.previewImage = previewImg
-            self.previewMeasure = measure
-        }
-
-        // If recording, add to frame buffer directly (already quantized by Metal)
-        handleRecordingFrame(indices: indices)
-    }
-
-    // MARK: - CPU Fallback Path
-
-    nonisolated(unsafe) private static var _loggedBufferSize = false
-
-    nonisolated private func processWithCPU(_ pixelBuffer: CVPixelBuffer, frameIndex: Int) {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
-        guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }
-
-        // Log buffer dimensions once
-        if !Self._loggedBufferSize {
-            Self._loggedBufferSize = true
-            print("Tesseract: buffer \(width)×\(height) bytesPerRow=\(bytesPerRow)")
-        }
-
-        let buffer = baseAddress.assumingMemoryBound(to: UInt8.self)
-        let outSize = CameraConfig.captureSize  // 64
-
-        // Portrait buffer (videoRotationAngle=90, hardware rotated)
-        // RGB: 1080×1920 → crop 960×960 at (60,480) → 64×64, step=15
-        // Straight read — no manual rotation.
-        let cropX = 60
-        let cropY = 480
-        let step = 15
-        let half = 7
-
-        if !Self._loggedBufferSize {
-            print("Tesseract: RGB \(width)×\(height) portrait, crop 960² at (\(cropX),\(cropY)), step=\(step)")
-        }
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(rgbBuffer)
+        guard let baseAddr = CVPixelBufferGetBaseAddress(rgbBuffer) else { return }
+        let buffer = baseAddr.assumingMemoryBound(to: UInt8.self)
 
         var pixels = [(Float, Float, Float)]()
         pixels.reserveCapacity(outSize * outSize)
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // Straight read — buffer already portrait
                 let srcX = cropX + x * step + half
                 let srcY = cropY + y * step + half
-
-                guard srcX < width && srcY < height else {
-                    pixels.append((0, 0, 0))
-                    continue
-                }
-
-                let offset = srcY * bytesPerRow + srcX * 4  // BGRA
-                let b = Float(buffer[offset]) / 255.0
-                let g = Float(buffer[offset + 1]) / 255.0
-                let r = Float(buffer[offset + 2]) / 255.0
+                guard srcX < rgbW && srcY < rgbH else { pixels.append((0,0,0)); continue }
+                let off = srcY * bytesPerRow + srcX * 4
+                let b = Float(buffer[off]) / 255.0
+                let g = Float(buffer[off + 1]) / 255.0
+                let r = Float(buffer[off + 2]) / 255.0
                 pixels.append((r, g, b))
             }
         }
 
-        // Quantize depth zones from stored depth values
-        let depthZones: [UInt8]?
-        if let depths = _lastDepthValues {
-            depthZones = depths.map { d in
-                let normalized = max(0, min(1, d))
-                return UInt8(min(3, max(0, Int(normalized * 4))))
-            }
-        } else {
-            depthZones = nil
+        // Read depth (if available)
+        var depthValues: [Float]?
+        if let db = depthBuffer {
+            depthValues = readDepth(db, outSize: outSize)
         }
 
+        // Quantize
+        let depthZones: [UInt8]? = depthValues?.map { d in
+            let n = max(0, min(1, d))
+            return UInt8(min(3, max(0, Int(n * 4))))
+        }
+
+        let frameIdx = frameBuffer.frameCount
         let indices = TesseractPalette.quantizeFrame(
-            frame: frameIndex, pixels: pixels, depthZones: depthZones
+            frame: frameIdx, pixels: pixels, depthZones: depthZones
         )
 
-        let previewImg = buildPreviewImage(indices: indices)
+        // Preview
+        let img = buildPreviewImage(indices: indices)
         let measure = BirkhoffMeasure(paletteIndices: indices)
 
         Task { @MainActor in
-            self.previewImage = previewImg
+            self.previewImage = img
             self.previewMeasure = measure
         }
 
-        // If recording, add to frame buffer
-        handleRecordingFrame(indices: indices)
-    }
-
-    // MARK: - Recording Frame Handler
-
-    nonisolated private func handleRecordingFrame(indices: [UInt8]) {
-        // Build a QuantizedFrame directly from Metal/CPU output
-        let currentCount = frameBuffer.frameCount
-        guard currentCount < CameraConfig.totalFrames else { return }
-
-        // Use the direct-indices path in frame buffer
-        let count = frameBuffer.addQuantizedFrame(
-            paletteIndices: indices,
-            depth: _lastDepthValues,
-            timestamp: CACurrentMediaTime()
-        )
-
-        if let count = count {
-            Task { @MainActor in
-                self.state = .recording(count)
-                if count >= CameraConfig.totalFrames {
-                    self.state = .processing
-                    self.encodeGIF()
+        // Recording
+        if frameBuffer.frameCount < CameraConfig.totalFrames {
+            let count = frameBuffer.addQuantizedFrame(
+                paletteIndices: indices,
+                depth: depthValues,
+                timestamp: CACurrentMediaTime()
+            )
+            if let count = count {
+                Task { @MainActor in
+                    self.state = .recording(count)
+                    if count >= CameraConfig.totalFrames {
+                        self.state = .processing
+                        self.encodeGIF()
+                    }
                 }
             }
         }
     }
 
-    // MARK: - Texture Creation from CVPixelBuffer
+    // MARK: - Depth Reading
 
-    nonisolated private func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
-        guard let metal = _metalPipeline else { return nil }
-        return metal.makeTexture(from: pixelBuffer)
+    nonisolated private func readDepth(_ depthBuffer: CVPixelBuffer, outSize: Int) -> [Float] {
+        CVPixelBufferLockBaseAddress(depthBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthBuffer, .readOnly) }
+
+        let dW = CVPixelBufferGetWidth(depthBuffer)
+        let dH = CVPixelBufferGetHeight(depthBuffer)
+        guard let base = CVPixelBufferGetBaseAddress(depthBuffer) else {
+            return [Float](repeating: 0.5, count: outSize * outSize)
+        }
+
+        // Depth may be Float16 — convert via CVPixelBuffer format
+        let formatType = CVPixelBufferGetPixelFormatType(depthBuffer)
+
+        let dCropSize = min(dW, dH)
+        let dCropX = (dW - dCropSize) / 2
+        let dCropY = (dH - dCropSize) / 2
+        let dStep = dCropSize / outSize
+        let dHalf = dStep / 2
+
+        var values = [Float]()
+        values.reserveCapacity(outSize * outSize)
+
+        if formatType == kCVPixelFormatType_DepthFloat16 {
+            let ptr = base.assumingMemoryBound(to: UInt16.self)
+            let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 2
+            for y in 0..<outSize {
+                for x in 0..<outSize {
+                    let srcX = dCropX + x * dStep + dHalf
+                    let srcY = dCropY + y * dStep + dHalf
+                    guard srcX < dW && srcY < dH else { values.append(0.5); continue }
+                    let raw = ptr[srcY * stride + srcX]
+                    let f = Float(Float16(bitPattern: raw))
+                    values.append(f.isFinite && f > 0 ? f : 0.5)
+                }
+            }
+        } else {
+            // Float32 fallback
+            let ptr = base.assumingMemoryBound(to: Float.self)
+            let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 4
+            for y in 0..<outSize {
+                for x in 0..<outSize {
+                    let srcX = dCropX + x * dStep + dHalf
+                    let srcY = dCropY + y * dStep + dHalf
+                    guard srcX < dW && srcY < dH else { values.append(0.5); continue }
+                    let f = ptr[srcY * stride + srcX]
+                    values.append(f.isFinite && f > 0 ? f : 0.5)
+                }
+            }
+        }
+
+        // Normalize to [0, 1]: 1=near, 0=far
+        let valid = values.filter { $0 > 0 && $0 < 100 }
+        guard let minD = valid.min(), let maxD = valid.max(), maxD > minD else { return values }
+        let range = maxD - minD
+        return values.map { 1.0 - max(0, min(1, ($0 - minD) / range)) }
     }
 
     // MARK: - GIF Encoding
@@ -354,7 +346,6 @@ final class CameraManager: NSObject, ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             let gifData = GIFEncoder.encode(frames: frames, measure: measure)
-
             await MainActor.run {
                 self.gifData = gifData
                 self.gifMeasure = measure
@@ -363,136 +354,47 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Build a 64×64 CGImage from palette indices for preview
+    // MARK: - Preview Image
+
     nonisolated func buildPreviewImage(indices: [UInt8]) -> CGImage? {
         let size = CameraConfig.captureSize
-        var rgbaData = [UInt8](repeating: 255, count: size * size * 4)
-
+        var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<(size * size) {
             let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
-            rgbaData[i * 4] = r
-            rgbaData[i * 4 + 1] = g
-            rgbaData[i * 4 + 2] = b
-            // alpha already 255
+            rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b
         }
-
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let context = CGContext(
-            data: &rgbaData,
-            width: size, height: size,
-            bitsPerComponent: 8, bytesPerRow: size * 4,
-            space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        return context.makeImage()
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: &rgba, width: size, height: size,
+                                  bitsPerComponent: 8, bytesPerRow: size * 4,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        return ctx.makeImage()
     }
 }
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
+// MARK: - AVCaptureDataOutputSynchronizerDelegate
 
-extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
-    nonisolated func captureOutput(
-        _ output: AVCaptureOutput,
-        didOutput sampleBuffer: CMSampleBuffer,
-        from connection: AVCaptureConnection
+extension CameraManager: AVCaptureDataOutputSynchronizerDelegate {
+    nonisolated func dataOutputSynchronizer(
+        _ synchronizer: AVCaptureDataOutputSynchronizer,
+        didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection
     ) {
-        processVideoFrame(sampleBuffer)
-    }
-}
+        // Get paired video + depth
+        guard let syncedVideo = synchronizedDataCollection.synchronizedData(for: videoOutput)
+                as? AVCaptureSynchronizedSampleBufferData,
+              !syncedVideo.sampleBufferWasDropped,
+              let rgbBuffer = CMSampleBufferGetImageBuffer(syncedVideo.sampleBuffer)
+        else { return }
 
-// MARK: - AVCaptureDepthDataOutputDelegate
-
-extension CameraManager: AVCaptureDepthDataOutputDelegate {
-    nonisolated func depthDataOutput(
-        _ output: AVCaptureDepthDataOutput,
-        didOutput depthData: AVDepthData,
-        timestamp: CMTime,
-        connection: AVCaptureConnection
-    ) {
-        // Convert depth to float map
-        let converted = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
-        let depthMap = converted.depthDataMap
-
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-
-        let width = CVPixelBufferGetWidth(depthMap)
-        let height = CVPixelBufferGetHeight(depthMap)
-        guard let base = CVPixelBufferGetBaseAddress(depthMap) else { return }
-
-        let floatBuffer = base.assumingMemoryBound(to: Float.self)
-
-        // Find depth range for zone quantization
-        var minDepth: Float = .greatestFiniteMagnitude
-        var maxDepth: Float = 0
-        for i in 0..<(width * height) {
-            let d = floatBuffer[i]
-            if d.isFinite && d > 0 {
-                minDepth = min(minDepth, d)
-                maxDepth = max(maxDepth, d)
-            }
+        // Depth is optional (may be dropped)
+        var depthBuffer: CVPixelBuffer?
+        if let syncedDepth = synchronizedDataCollection.synchronizedData(for: depthOutput)
+            as? AVCaptureSynchronizedDepthData,
+           !syncedDepth.depthDataWasDropped {
+            let converted = syncedDepth.depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat16)
+            depthBuffer = converted.depthDataMap
         }
 
-        // Quantize depth into 4 zones
-        let range = max(maxDepth - minDepth, 0.001)
-        // Portrait buffer (videoRotationAngle=90)
-        // Depth: 360×640 → crop 320×320 at (20,160) → 64×64, step=5
-        // Straight read.
-        let dCropX = 20; let dCropY = 160; let dStep = 5; let dHalf = 2
-
-        var depthValues = [Float]()
-        depthValues.reserveCapacity(CameraConfig.captureSize * CameraConfig.captureSize)
-
-        let outSize = CameraConfig.captureSize
-        for y in 0..<outSize {
-            for x in 0..<outSize {
-                let srcX = dCropX + x * dStep + dHalf
-                let srcY = dCropY + y * dStep + dHalf
-                let idx = srcY * width + srcX
-                let d = (idx >= 0 && idx < width * height) ? floatBuffer[idx] : minDepth
-                depthValues.append(d)
-            }
-        }
-
-        // Store depth values for CPU fallback
-        self._lastDepthValues = depthValues
-
-        // Store depth texture for Metal path
-        if let metal = _metalPipeline {
-            self._lastDepthTexture = metal.makeDepthTexture(from: depthMap)
-        }
-
-        // Quantize to 4 zones for UI
-        let zones = quantizeDepthToZones(depthValues, minDepth: minDepth, range: range)
-
-        Task { @MainActor in
-            self.depthZones = zones
-        }
-    }
-
-    /// Partition 64×64 depth map into 4 zones
-    nonisolated private func quantizeDepthToZones(
-        _ depths: [Float], minDepth: Float, range: Float
-    ) -> [DepthZone] {
-        var zonePixels: [[UInt8]] = [[], [], [], []]  // placeholder indices per zone
-        var zoneCounts = [0, 0, 0, 0]
-
-        for (i, d) in depths.enumerated() {
-            let normalized = (d - minDepth) / range
-            let zone = min(3, max(0, Int(normalized * 4)))
-            zoneCounts[zone] += 1
-        }
-
-        return (0..<4).map { level in
-            DepthZone(
-                level: UInt8(level),
-                pixelCount: zoneCounts[level],
-                dominantPair: ColorPair(
-                    colorA: .black, colorB: .white,
-                    countA: 0, countB: 0
-                )
-            )
-        }
+        processFrame(rgbBuffer: rgbBuffer, depthBuffer: depthBuffer)
     }
 }

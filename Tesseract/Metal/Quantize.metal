@@ -139,12 +139,12 @@ kernel void quantizeWithDepth(
 // § 5. DOWNSAMPLE KERNEL: camera resolution → 64×64
 // ════════════════════════════════════════════════════════════════
 
-// Downsample params: crop + rotation constants from FrameGeometry.hs
+// Dynamic downsample params (computed from actual buffer dimensions)
 struct DownsampleParams {
-    uint cropX;         // RGB: 480, Depth: 160
-    uint cropY;         // RGB: 60,  Depth: 20
-    uint step;          // RGB: 15,  Depth: 5
-    uint halfStep;      // RGB: 7,   Depth: 2
+    uint cropX;         // (width - cropSize) / 2
+    uint cropY;         // (height - cropSize) / 2
+    uint step;          // cropSize / 64
+    uint halfStep;      // step / 2
 };
 
 // Port of FrameGeometry.hs rgbSource/depthSource:
