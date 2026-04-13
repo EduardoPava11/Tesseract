@@ -43,15 +43,18 @@ inline uint8_t cdfSample(float4 probs, float u) {
 // § 3. PARAMETERS
 // ════════════════════════════════════════════════════════════════
 
+// NOTE: float4 MUST come first to avoid 16-byte alignment padding.
+// Swift struct must match this layout exactly.
 struct QuantizeParams {
-    float sigmaBase;        // 7.875
-    float4 epochCenters;    // [7.875, 23.625, 39.375, 55.125]
-    uint frameIndex;        // 0..63
-    uint seed;              // hash seed
-    uint width;             // 64
-    uint height;            // 64
-    // Debug counters (atomic, written by shader)
-    uint debugFlags;        // bit 0: log epoch distribution
+    float4 epochCenters;    // offset 0  (16 bytes, 16-byte aligned)
+    float sigmaBase;        // offset 16 (4 bytes)
+    uint frameIndex;        // offset 20
+    uint seed;              // offset 24
+    uint width;             // offset 28
+    uint height;            // offset 32
+    uint debugFlags;        // offset 36
+    uint _pad;              // offset 40 (pad to 48 = 16-byte multiple)
+    // Total: 48 bytes
 };
 
 // ════════════════════════════════════════════════════════════════

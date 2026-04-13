@@ -148,6 +148,7 @@ final class CameraManager: NSObject, ObservableObject {
             }
             session.addOutput(depthOutput)
             depthOutput.isFilteringEnabled = true
+            depthOutput.alwaysDiscardsLateDepthData = true
 
             // Square crop: use the center 1:1 region
             if let connection = videoOutput.connection(with: .video) {

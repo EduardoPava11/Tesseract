@@ -113,6 +113,16 @@ final class MetalPipeline {
             return nil
         }
 
+        // Verify struct alignment matches Metal expectations
+        let qSize = MemoryLayout<QuantizeParamsSwift>.stride
+        let qStride = MemoryLayout<QuantizeParamsSwift>.stride
+        let dsSize = MemoryLayout<DownsampleParamsSwift>.stride
+        logger.info("MetalPipeline: QuantizeParams size=\(qSize) stride=\(qStride) (Metal expects 48)")
+        logger.info("MetalPipeline: DownsampleParams size=\(dsSize)")
+        if qStride < 48 {
+            logger.error("MetalPipeline: QuantizeParams stride \(qStride) < 48 — ALIGNMENT MISMATCH")
+        }
+
         isReady = true
         logger.info("MetalPipeline: ready ✓")
     }
@@ -152,9 +162,9 @@ final class MetalPipeline {
         // Debug: sigma histogram (32 × UInt32)
         sigmaHistBuffer = device.makeBuffer(length: 32 * MemoryLayout<UInt32>.size, options: .storageModeShared)
 
-        // Params buffers
-        paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.size, options: .storageModeShared)
-        downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.size, options: .storageModeShared)
+        // Params buffers — use STRIDE not size to match Metal alignment
+        paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.stride, options: .storageModeShared)
+        downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
 
         // Texture cache for CVPixelBuffer → MTLTexture conversion
         var cache: CVMetalTextureCache?
@@ -257,7 +267,7 @@ final class MetalPipeline {
                 cropSize: UInt32(cropSize)
             )
             downsampleParamsBuffer?.contents().copyMemory(
-                from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.size
+                from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
             )
 
             encoder.setComputePipelineState(downsampleRGBState)
@@ -283,7 +293,7 @@ final class MetalPipeline {
                     cropSize: UInt32(dCropSize)
                 )
                 downsampleParamsBuffer?.contents().copyMemory(
-                    from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.size
+                    from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
                 )
 
                 encoder.setComputePipelineState(downsampleDepthState)
@@ -320,9 +330,8 @@ final class MetalPipeline {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             var params = QuantizeParamsSwift(
-                sigmaBase: Float(CameraConfig.captureSize) * 63.0 / (8.0 * Float(CameraConfig.captureSize)),
-                // = 7.875 regardless of capture size
                 epochCenters: SIMD4<Float>(7.875, 23.625, 39.375, 55.125),
+                sigmaBase: 7.875,
                 frameIndex: UInt32(frameIndex),
                 seed: seed,
                 width: UInt32(CameraConfig.captureSize),
@@ -330,11 +339,8 @@ final class MetalPipeline {
                 debugFlags: logThisFrame ? 1 : 0
             )
 
-            // Actually sigmaBase should just be 7.875
-            params.sigmaBase = 7.875
-
             paramsBuffer?.contents().copyMemory(
-                from: &params, byteCount: MemoryLayout<QuantizeParamsSwift>.size
+                from: &params, byteCount: MemoryLayout<QuantizeParamsSwift>.stride
             )
 
             encoder.setComputePipelineState(quantizeState)
@@ -411,14 +417,17 @@ final class MetalPipeline {
 
 // MARK: - Param Structs (must match Metal struct layout)
 
+// Must match Metal struct QuantizeParams layout exactly (48 bytes).
+// float4 first to avoid 16-byte alignment padding.
 struct QuantizeParamsSwift {
-    var sigmaBase: Float
-    var epochCenters: SIMD4<Float>
-    var frameIndex: UInt32
-    var seed: UInt32
-    var width: UInt32
-    var height: UInt32
-    var debugFlags: UInt32
+    var epochCenters: SIMD4<Float>  // offset 0  (16 bytes)
+    var sigmaBase: Float            // offset 16 (4 bytes)
+    var frameIndex: UInt32          // offset 20
+    var seed: UInt32                // offset 24
+    var width: UInt32               // offset 28
+    var height: UInt32              // offset 32
+    var debugFlags: UInt32          // offset 36
+    var _pad: UInt32 = 0            // offset 40 (pad to 48)
 }
 
 struct DownsampleParamsSwift {
