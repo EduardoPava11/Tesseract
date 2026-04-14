@@ -17,7 +17,8 @@ import os.log
 private let logger = Logger(subsystem: "com.tesseract.app", category: "GoEvaluator")
 
 /// Real KataGo evaluation via CoreML on the Neural Engine.
-final class GoEvaluator {
+/// Thread-safe: MLModel.prediction is safe to call from any thread.
+final class GoEvaluator: @unchecked Sendable {
 
     private var model: MLModel?
     private(set) var isReady = false

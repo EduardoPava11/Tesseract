@@ -71,6 +71,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let frameBuffer = FrameBuffer()
     nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
+    private let goEvaluator = GoEvaluator()
     nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
@@ -461,21 +462,37 @@ final class CameraManager: NSObject, ObservableObject {
                 self.processPhase = "Analyzing Go boards..."
             }
 
+            var kataGoEvalCount = 0
+            var kataGoTotalContested = 0
+
             for (i, frame) in capturedFrames.enumerated() {
-                // Use the pre-computed block evaluations from full camera resolution
                 let blockEvals = frame.blockEvals ?? []
                 let complexBlocks = blockEvals.filter { needsNNEval($0) }.count
                 let totalLibs = blockEvals.reduce(0) { $0 + $1.ditherBudget }
-                let avgComplexity = blockEvals.isEmpty ? 0.0 :
+                let _ = blockEvals.isEmpty ? Float(0) :
                     blockEvals.reduce(Float(0)) { $0 + $1.complexity } / Float(blockEvals.count)
 
-                // Build a display board from the 64×64 RGB for the UI
+                // Run KataGo CoreML on complex blocks
+                if self.goEvaluator.isReady && complexBlocks > 0 {
+                    let displayBoards = blockToGoBoards(pixels: frame.rgb)
+                    if let ownership = self.goEvaluator.evaluate(displayBoards) {
+                        kataGoEvalCount += 1
+                        kataGoTotalContested += ownership.contestedCount
+                    }
+                }
+
                 let displayBoards = blockToGoBoards(pixels: frame.rgb)
 
                 await MainActor.run {
                     self.processProgress = Float(i + 1) / Float(totalFrames) * 0.4
-                    self.processPhase = "Frame \(i + 1)/\(totalFrames) — \(blockEvals.count) blocks, \(complexBlocks) complex, \(totalLibs) liberties, avg complexity \(String(format: "%.2f", avgComplexity))"
+                    self.processPhase = "Frame \(i + 1)/\(totalFrames) — \(blockEvals.count) blocks, \(complexBlocks) complex, \(totalLibs) liberties"
                     self.processBoards = displayBoards
+                }
+            }
+
+            if kataGoEvalCount > 0 {
+                await MainActor.run {
+                    self.processPhase = "KataGo: \(kataGoEvalCount) frames evaluated, \(kataGoTotalContested) contested positions"
                 }
             }
 
