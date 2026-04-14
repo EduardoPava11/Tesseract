@@ -1,24 +1,22 @@
 // GoEvaluator.swift
 // Tesseract
 //
-// CoreML-based Go territory evaluation.
-// Loads GoEval.mlpackage and evaluates 19×19 color-comparison boards.
+// Real KataGo on iPhone via CoreML.
+// Model: KataGoModel19x19fp16m1w8LiCh (b18c384nbt, 22.5 MB)
+// Pre-converted by ChinChangYang from PyTorch to CoreML.
 //
-// Input:  GoBoards (3 × 19×19 boards: R/G, G/B, B/R)
-// Output: 19×19 ownership map [-1, 1] per board
+// Input:  22 spatial channels × 19×19 (board state + features)
+// Output: 19×19 ownership map [-1,1] (territory estimation)
 //
-// Pre-filtered: only blocks with complexity > 0.2 get NN evaluation.
+// Pre-filtered: only blocks with Go complexity > 0.2 get NN eval.
 // Others use simple territory counting from GoBoard.swift.
-//
-// Memory per evaluation: 3 × 361 × 4 bytes input + 361 × 4 bytes output = ~5.8 KB
 
 import CoreML
 import os.log
 
 private let logger = Logger(subsystem: "com.tesseract.app", category: "GoEvaluator")
 
-/// CoreML-based Go territory evaluator.
-/// Wraps the GoEval.mlpackage model for 19×19 board evaluation.
+/// Real KataGo evaluation via CoreML on the Neural Engine.
 final class GoEvaluator {
 
     private var model: MLModel?
@@ -31,46 +29,49 @@ final class GoEvaluator {
     // MARK: - Model Loading
 
     private func loadModel() {
-        do {
-            let config = MLModelConfiguration()
-            config.computeUnits = .all  // CPU + GPU + Neural Engine
+        let config = MLModelConfiguration()
+        config.computeUnits = .all  // CPU + GPU + Neural Engine
 
-            // Xcode auto-generates the GoEval class from GoEval.mlpackage
-            if let modelURL = Bundle.main.url(forResource: "GoEval", withExtension: "mlmodelc") {
-                model = try MLModel(contentsOf: modelURL, configuration: config)
+        // Try compiled model first (faster), then mlpackage
+        if let url = Bundle.main.url(forResource: "KataGoModel19x19fp16m1w8LiCh",
+                                      withExtension: "mlmodelc") {
+            do {
+                model = try MLModel(contentsOf: url, configuration: config)
                 isReady = true
-                logger.info("GoEvaluator: model loaded from mlmodelc")
-            } else {
-                // Try loading from mlpackage directly
-                let config2 = MLModelConfiguration()
-                config2.computeUnits = .all
-                // Model might be compiled at build time
-                logger.warning("GoEvaluator: mlmodelc not found, model may not be added to project")
+                logger.info("GoEvaluator: loaded compiled model (mlmodelc)")
+            } catch {
+                logger.error("GoEvaluator: failed to load mlmodelc: \(error.localizedDescription)")
             }
-        } catch {
-            logger.error("GoEvaluator: failed to load model: \(error.localizedDescription)")
+        } else {
+            logger.warning("GoEvaluator: no compiled model found. Add KataGoModel19x19fp16m1w8LiCh.mlpackage to the Xcode project.")
         }
     }
 
     // MARK: - Evaluate
 
-    /// Evaluate a GoBoards (3 channel-pair boards) using the CoreML model.
-    /// Returns 19×19 ownership map [-1, 1] for each board.
-    /// Returns nil if model not loaded or evaluation fails.
+    /// Evaluate a GoBoards position using the real KataGo CoreML model.
+    /// Returns 19×19 ownership map [-1, 1].
     func evaluate(_ boards: GoBoards) -> GoOwnership? {
         guard let model = model else { return nil }
 
-        // Encode 3 boards into a (1, 3, 19, 19) MLMultiArray
-        guard let input = encodeBoards(boards) else { return nil }
+        // Encode the 3 Go boards into KataGo's 22-channel input format
+        guard let spatialInput = encodeSpatialInput(boards),
+              let globalInput = encodeGlobalInput(),
+              let metaInput = encodeMetaInput() else {
+            return nil
+        }
 
         do {
-            let provider = try MLDictionaryFeatureProvider(
-                dictionary: ["board": MLFeatureValue(multiArray: input)]
-            )
+            let provider = try MLDictionaryFeatureProvider(dictionary: [
+                "input_spatial": MLFeatureValue(multiArray: spatialInput),
+                "input_global": MLFeatureValue(multiArray: globalInput),
+                "input_meta": MLFeatureValue(multiArray: metaInput)
+            ])
+
             let result = try model.prediction(from: provider)
 
-            // Decode ownership output
-            guard let ownership = result.featureValue(for: "ownership")?.multiArrayValue else {
+            guard let ownership = result.featureValue(for: "out_ownership")?.multiArrayValue else {
+                logger.error("GoEvaluator: no ownership output")
                 return nil
             }
 
@@ -81,26 +82,46 @@ final class GoEvaluator {
         }
     }
 
-    // MARK: - Encode/Decode
+    // MARK: - Input Encoding
 
-    /// Encode GoBoards → MLMultiArray (1, 3, 19, 19)
-    /// Black = 1.0, White = -1.0, Empty = 0.0
-    private func encodeBoards(_ boards: GoBoards) -> MLMultiArray? {
-        guard let array = try? MLMultiArray(shape: [1, 3, 19, 19], dataType: .float32) else {
+    /// Encode GoBoards into KataGo's 22-channel spatial input.
+    /// We use channels 0-2 for our color-comparison boards:
+    ///   Channel 0: board validity (all 1.0)
+    ///   Channel 1: Black stones (channel A > B) — "own stones"
+    ///   Channel 2: White stones (channel B > A) — "opponent stones"
+    ///   Channels 3-21: zeroed (no move history, ko, ladders, etc.)
+    ///
+    /// We evaluate the R/G board as the primary position.
+    /// For the full evaluation, call 3 times (R/G, G/B, B/R).
+    private func encodeSpatialInput(_ boards: GoBoards) -> MLMultiArray? {
+        guard let array = try? MLMultiArray(shape: [1, 22, 19, 19], dataType: .float32) else {
             return nil
         }
 
-        let allBoards = [boards.rg, boards.gb, boards.br]
-        for (c, board) in allBoards.enumerated() {
-            for y in 0..<GoBoard.size {
-                for x in 0..<GoBoard.size {
-                    let idx = [0, c, y, x] as [NSNumber]
-                    let value: Float = switch board[x, y] {
-                    case .black: 1.0
-                    case .white: -1.0
-                    case .empty: 0.0
-                    }
-                    array[idx] = NSNumber(value: value)
+        // Zero all channels first
+        let total = 1 * 22 * 19 * 19
+        for i in 0..<total {
+            array[i] = NSNumber(value: Float(0))
+        }
+
+        // Use the R/G board as the primary position
+        let board = boards.rg
+
+        for y in 0..<GoBoard.size {
+            for x in 0..<GoBoard.size {
+                let stone = board[x, y]
+
+                // Channel 0: board validity (all 1.0 for 19×19)
+                array[[0, 0, y, x] as [NSNumber]] = NSNumber(value: Float(1.0))
+
+                // Channel 1: Black stones (own)
+                if stone == .black {
+                    array[[0, 1, y, x] as [NSNumber]] = NSNumber(value: Float(1.0))
+                }
+
+                // Channel 2: White stones (opponent)
+                if stone == .white {
+                    array[[0, 2, y, x] as [NSNumber]] = NSNumber(value: Float(1.0))
                 }
             }
         }
@@ -108,7 +129,31 @@ final class GoEvaluator {
         return array
     }
 
-    /// Decode MLMultiArray (1, 1, 19, 19) → GoOwnership
+    /// Encode global input (19 features). Mostly zeros for our use case.
+    private func encodeGlobalInput() -> MLMultiArray? {
+        guard let array = try? MLMultiArray(shape: [1, 19], dataType: .float32) else {
+            return nil
+        }
+        for i in 0..<19 {
+            array[i] = NSNumber(value: Float(0))
+        }
+        return array
+    }
+
+    /// Encode metadata input (192 features). All zeros.
+    private func encodeMetaInput() -> MLMultiArray? {
+        guard let array = try? MLMultiArray(shape: [1, 192], dataType: .float32) else {
+            return nil
+        }
+        for i in 0..<192 {
+            array[i] = NSNumber(value: Float(0))
+        }
+        return array
+    }
+
+    // MARK: - Output Decoding
+
+    /// Decode the ownership output (1, 1, 19, 19) → GoOwnership.
     private func decodeOwnership(_ array: MLMultiArray) -> GoOwnership {
         var values = [Float](repeating: 0, count: GoBoard.count)
         for y in 0..<GoBoard.size {
@@ -123,22 +168,19 @@ final class GoEvaluator {
 
 // MARK: - Ownership Result
 
-/// 19×19 ownership map from CoreML evaluation.
+/// 19×19 ownership map from KataGo CoreML evaluation.
 /// Values in [-1, 1]: negative = Black territory, positive = White.
-/// Memory: 361 × 4 bytes = 1,444 bytes.
 struct GoOwnership {
     let values: [Float]  // 361 elements, row-major
 
-    /// How many positions are contested (|ownership| < 0.3)?
-    /// These are the best dithering candidates.
+    /// Pixels near 0 are contested — best dithering candidates.
     var contestedCount: Int {
         values.filter { abs($0) < 0.3 }.count
     }
 
-    /// Average ownership magnitude (0 = fully contested, 1 = fully settled)
+    /// Average ownership magnitude (0 = contested, 1 = settled).
     var settledness: Float {
-        let sum = values.reduce(Float(0)) { $0 + abs($1) }
-        return sum / Float(max(1, values.count))
+        values.reduce(Float(0)) { $0 + abs($1) } / Float(max(1, values.count))
     }
 
     subscript(x: Int, y: Int) -> Float {
