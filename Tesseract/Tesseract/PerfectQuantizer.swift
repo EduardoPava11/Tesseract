@@ -65,31 +65,80 @@ struct PerfectQuantizer {
         let n = rgb.count  // 4096
 
         // ════════════════════════════════════════════
-        // Phase 1: Build per-pixel BlockHist
+        // Phase 1 + 2: Color dithering (F-S on R, G, B independently)
         //
-        // Currently each "block" is 1 pixel (from GPU downsample).
-        // Future: GPU computes real 19×19 block histograms.
-        // The type is the same either way — BlockHist.
+        // Floyd-Steinberg on each color channel SEPARATELY.
+        // Depth controls diffusion: near=accurate, far=diverse.
+        // This fills the color cube by nudging pixels across
+        // quantization boundaries. Epoch is NOT touched here.
+        //
+        // Then wrap as ComposedColor using the Axes types.
         // ════════════════════════════════════════════
 
-        let blockHists = rgb.map { (r, g, b) in
-            BlockHist(
-                r: ChannelHist.from(values: [r]),
-                g: ChannelHist.from(values: [g]),
-                b: ChannelHist.from(values: [b]),
-                blockSide: 1
-            )
+        let w = 64
+        var errorR = [Float](repeating: 0, count: n)
+        var errorG = [Float](repeating: 0, count: n)
+        var errorB = [Float](repeating: 0, count: n)
+        var quantA = [Int](repeating: 0, count: n)
+        var quantB = [Int](repeating: 0, count: n)
+        var quantC = [Int](repeating: 0, count: n)
+
+        let cellCenters: [Float] = [0.125, 0.375, 0.625, 0.875]
+
+        for y in 0..<w {
+            for x in 0..<w {
+                let i = y * w + x
+                let (r, g, b) = rgb[i]
+                let depth = i < depths.count ? depths[i] : Float(0.5)
+
+                // Adjusted = true + accumulated error (clamped)
+                let adjR = r + max(-0.2, min(0.2, errorR[i]))
+                let adjG = g + max(-0.2, min(0.2, errorG[i]))
+                let adjB = b + max(-0.2, min(0.2, errorB[i]))
+
+                // Nearest level per channel
+                let a = min(3, max(0, Int(round(adjR * 3.0))))
+                let bq = min(3, max(0, Int(round(adjG * 3.0))))
+                let c = min(3, max(0, Int(round(adjB * 3.0))))
+                quantA[i] = a; quantB[i] = bq; quantC[i] = c
+
+                // Error per channel
+                let eR = adjR - cellCenters[a]
+                let eG = adjG - cellCenters[bq]
+                let eB = adjB - cellCenters[c]
+
+                // Depth-weighted: near=30% diffusion, far=100%
+                let s = 1.0 - depth * 0.7
+                let dR = eR * s, dG = eG * s, dB = eB * s
+
+                // F-S kernel (color only, epoch untouched)
+                if x + 1 < w {
+                    let j = i + 1
+                    errorR[j] += dR * 7.0/16.0; errorG[j] += dG * 7.0/16.0; errorB[j] += dB * 7.0/16.0
+                }
+                if x > 0 && y + 1 < w {
+                    let j = (y+1)*w + (x-1)
+                    errorR[j] += dR * 3.0/16.0; errorG[j] += dG * 3.0/16.0; errorB[j] += dB * 3.0/16.0
+                }
+                if y + 1 < w {
+                    let j = (y+1)*w + x
+                    errorR[j] += dR * 5.0/16.0; errorG[j] += dG * 5.0/16.0; errorB[j] += dB * 5.0/16.0
+                }
+                if x + 1 < w && y + 1 < w {
+                    let j = (y+1)*w + (x+1)
+                    errorR[j] += dR * 1.0/16.0; errorG[j] += dG * 1.0/16.0; errorB[j] += dB * 1.0/16.0
+                }
+            }
         }
 
-        // ════════════════════════════════════════════
-        // Phase 2: Per-channel bin assignment (independent, orthogonal)
-        //
-        // Uses assignAllChannels from Histogram.swift.
-        // Each channel is assigned independently.
-        // The type system prevents mixing (RBin ≠ GBin ≠ BBin).
-        // ════════════════════════════════════════════
-
-        let colors = assignAllChannels(blockHists)
+        // Wrap dithered levels as ComposedColor (orthogonal types)
+        let colors = (0..<n).map { i in
+            ComposedColor(
+                r: RBin(value: valueToBin(cellCenters[quantA[i]])),
+                g: GBin(value: valueToBin(cellCenters[quantB[i]])),
+                b: BBin(value: valueToBin(cellCenters[quantC[i]]))
+            )
+        }
 
         // ════════════════════════════════════════════
         // Phase 3: Temporal dithering (Floyd-Steinberg on epoch axis)
@@ -105,7 +154,6 @@ struct PerfectQuantizer {
         // Only the epoch changes. This is dithering on T, not on R/G/B.
         // ════════════════════════════════════════════
 
-        let w = 64
         var result = [UInt8](repeating: 0, count: n)
 
         // Compute the ideal continuous "epoch position" per pixel.
@@ -126,8 +174,8 @@ struct PerfectQuantizer {
                 // Ideal continuous epoch = expected value of the distribution
                 let idealEpoch = probs[0] * 0.0 + probs[1] * 1.0 + probs[2] * 2.0 + probs[3] * 3.0
 
-                // Add accumulated temporal error
-                let adjusted = idealEpoch + epochError[i]
+                // Add accumulated temporal error (clamped to prevent runaway)
+                let adjusted = idealEpoch + max(-1.5, min(1.5, epochError[i]))
 
                 // Quantize to nearest integer epoch
                 let quantized = min(3, max(0, Int(round(adjusted))))
