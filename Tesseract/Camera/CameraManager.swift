@@ -189,6 +189,9 @@ final class CameraManager: NSObject, ObservableObject {
             state = .previewing
             logger.info("Camera: session running")
 
+            // Stagger KataGo model load — don't block camera startup
+            goEvaluator.loadIfNeeded()
+
         } catch {
             state = .error(error.localizedDescription)
             logger.error("Camera: \(error.localizedDescription)")
@@ -268,7 +271,12 @@ final class CameraManager: NSObject, ObservableObject {
                 // Recording: analyze full-res blocks + store CapturedFrame
                 if frameBuffer.frameCount < CameraConfig.totalFrames {
                     // CPU reads the FULL CVPixelBuffer for 18×18 block Go analysis
+                    let blockStart = CACurrentMediaTime()
                     let blockEvals = analyzeBlocks(rgbBuffer: rgbBuffer)
+                    let blockMs = (CACurrentMediaTime() - blockStart) * 1000
+                    if logThis {
+                        logger.info("Camera: block analysis \(blockEvals.count) blocks in \(String(format: "%.1f", blockMs))ms")
+                    }
 
                     let captured = CapturedFrame(
                         index: frameIdx,

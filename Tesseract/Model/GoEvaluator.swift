@@ -22,29 +22,52 @@ final class GoEvaluator: @unchecked Sendable {
 
     private var model: MLModel?
     private(set) var isReady = false
+    private var isLoading = false
 
     init() {
-        loadModel()
+        // Don't load on init — stagger to avoid blocking app launch
     }
 
-    // MARK: - Model Loading
+    // MARK: - Model Loading (staggered, background)
 
-    private func loadModel() {
-        let config = MLModelConfiguration()
-        config.computeUnits = .all  // CPU + GPU + Neural Engine
+    /// Load the model in the background. Call after camera is running.
+    func loadIfNeeded() {
+        guard !isReady && !isLoading else { return }
+        isLoading = true
 
-        // Try compiled model first (faster), then mlpackage
-        if let url = Bundle.main.url(forResource: "KataGoModel19x19fp16m1w8LiCh",
-                                      withExtension: "mlmodelc") {
-            do {
-                model = try MLModel(contentsOf: url, configuration: config)
-                isReady = true
-                logger.info("GoEvaluator: loaded compiled model (mlmodelc)")
-            } catch {
-                logger.error("GoEvaluator: failed to load mlmodelc: \(error.localizedDescription)")
+        DispatchQueue.global(qos: .userInitiated).async { [self] in
+            let config = MLModelConfiguration()
+            config.computeUnits = .all
+
+            // Try compiled model (mlmodelc) — Xcode compiles mlpackage at build time
+            if let url = Bundle.main.url(forResource: "KataGoModel19x19fp16m1w8LiCh",
+                                          withExtension: "mlmodelc") {
+                do {
+                    let m = try MLModel(contentsOf: url, configuration: config)
+                    self.model = m
+                    self.isReady = true
+                    logger.info("GoEvaluator: loaded KataGo CoreML model (mlmodelc)")
+                } catch {
+                    logger.error("GoEvaluator: failed to load: \(error.localizedDescription)")
+                }
+            } else {
+                // Try mlpackage directly (for development)
+                if let url = Bundle.main.url(forResource: "KataGoModel19x19fp16m1w8LiCh",
+                                              withExtension: "mlpackage") {
+                    do {
+                        let compiled = try MLModel.compileModel(at: url)
+                        let m = try MLModel(contentsOf: compiled, configuration: config)
+                        self.model = m
+                        self.isReady = true
+                        logger.info("GoEvaluator: compiled and loaded KataGo CoreML model")
+                    } catch {
+                        logger.error("GoEvaluator: failed to compile mlpackage: \(error.localizedDescription)")
+                    }
+                } else {
+                    logger.warning("GoEvaluator: model not found in bundle")
+                }
             }
-        } else {
-            logger.warning("GoEvaluator: no compiled model found. Add KataGoModel19x19fp16m1w8LiCh.mlpackage to the Xcode project.")
+            self.isLoading = false
         }
     }
 
