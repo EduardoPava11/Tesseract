@@ -80,8 +80,8 @@ struct ContentView: View {
             quantizedPreview
                 .padding(.horizontal, 24)
 
-            // Depth zone indicator
-            depthIndicator
+            // R, G, B, D channel previews
+            channelPreviews
                 .padding(.top, 12)
 
             Spacer()
@@ -230,25 +230,37 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Depth Zone Indicator
+    // MARK: - R, G, B, D Channel Previews
 
-    private var depthIndicator: some View {
+    private var channelPreviews: some View {
         HStack(spacing: 4) {
-            ForEach(0..<4, id: \.self) { level in
-                let zone = camera.depthZones.first { Int($0.level) == level }
-                let count = zone?.pixelCount ?? 0
-                let fraction = Float(count) / 4096.0
+            channelThumb(image: camera.previewR, label: "R", tint: .red)
+            channelThumb(image: camera.previewG, label: "G", tint: .green)
+            channelThumb(image: camera.previewB, label: "B", tint: .blue)
+            channelThumb(image: camera.previewD, label: "D", tint: .white)
+        }
+    }
 
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(.white.opacity(Double(fraction) * 0.8 + 0.05))
-                    .frame(width: 56, height: 6)
+    private func channelThumb(image: CGImage?, label: String, tint: Color) -> some View {
+        VStack(spacing: 2) {
+            if let img = image {
+                Image(decorative: img, scale: 1.0)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(width: 48, height: 48)
+                    .clipShape(RoundedRectangle(cornerRadius: 2))
                     .overlay(
-                        Text(level == 0 ? "near" : level == 3 ? "far" : "")
-                            .font(.system(size: 6, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.3))
-                            .offset(y: 10)
+                        RoundedRectangle(cornerRadius: 2)
+                            .stroke(tint.opacity(0.4), lineWidth: 1)
                     )
+            } else {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(.gray.opacity(0.1))
+                    .frame(width: 48, height: 48)
             }
+            Text(label)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundStyle(tint.opacity(0.6))
         }
     }
 

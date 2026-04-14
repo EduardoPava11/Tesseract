@@ -45,9 +45,12 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Published State
 
     @Published var state: CameraState = .idle
-    @Published var previewImage: CGImage?
+    @Published var previewImage: CGImage?       // composite quantized preview
+    @Published var previewR: CGImage?            // R channel (64×64 grayscale)
+    @Published var previewG: CGImage?            // G channel
+    @Published var previewB: CGImage?            // B channel
+    @Published var previewD: CGImage?            // Depth channel
     @Published var previewMeasure: BirkhoffMeasure?
-    @Published var depthZones: [DepthZone] = []
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
 
@@ -233,7 +236,7 @@ final class CameraManager: NSObject, ObservableObject {
             let depthTex = depthBuffer.flatMap { metal.makeDepthTexture(from: $0) }
 
             if let result = metal.downsampleFrame(rgbTexture: rgbTex, depthTexture: depthTex) {
-                // Preview: quick per-frame quantize (approximate, for display only)
+                // Preview: quick quantize + per-channel views (R, G, B, D)
                 let previewIndices = PerfectQuantizer.previewQuantize(
                     rgb: result.rgb,
                     depths: result.depth,
@@ -242,9 +245,17 @@ final class CameraManager: NSObject, ObservableObject {
 
                 let img = buildPreviewImage(indices: previewIndices)
                 let measure = BirkhoffMeasure(paletteIndices: previewIndices)
+                let rImg = buildChannelPreview(values: result.rgb.map(\.0))
+                let gImg = buildChannelPreview(values: result.rgb.map(\.1))
+                let bImg = buildChannelPreview(values: result.rgb.map(\.2))
+                let dImg = buildChannelPreview(values: result.depth)
 
                 Task { @MainActor in
                     self.previewImage = img
+                    self.previewR = rImg
+                    self.previewG = gImg
+                    self.previewB = bImg
+                    self.previewD = dImg
                     self.previewMeasure = measure
                 }
 
@@ -320,16 +331,24 @@ final class CameraManager: NSObject, ObservableObject {
 
         let depths = depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
 
-        // Preview: quick quantize for display
+        // Preview: quick quantize + per-channel views
         let previewIndices = PerfectQuantizer.previewQuantize(
             rgb: pixels, depths: depths, frameIndex: frameIdx
         )
 
         let img = buildPreviewImage(indices: previewIndices)
         let measure = BirkhoffMeasure(paletteIndices: previewIndices)
+        let rImg = buildChannelPreview(values: pixels.map(\.0))
+        let gImg = buildChannelPreview(values: pixels.map(\.1))
+        let bImg = buildChannelPreview(values: pixels.map(\.2))
+        let dImg = buildChannelPreview(values: depths)
 
         Task { @MainActor in
             self.previewImage = img
+            self.previewR = rImg
+            self.previewG = gImg
+            self.previewB = bImg
+            self.previewD = dImg
             self.previewMeasure = measure
         }
 
@@ -441,14 +460,31 @@ final class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Preview Image
+    // MARK: - Preview Images
 
+    /// Build the composite quantized preview from palette indices.
     nonisolated func buildPreviewImage(indices: [UInt8]) -> CGImage? {
         let size = CameraConfig.captureSize
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<(size * size) {
             let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
             rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b
+        }
+        let cs = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: &rgba, width: size, height: size,
+                                  bitsPerComponent: 8, bytesPerRow: size * 4,
+                                  space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        return ctx.makeImage()
+    }
+
+    /// Build a single-channel grayscale preview (R, G, B, or D).
+    nonisolated func buildChannelPreview(values: [Float]) -> CGImage? {
+        let size = CameraConfig.captureSize
+        var rgba = [UInt8](repeating: 255, count: size * size * 4)
+        for i in 0..<min(size * size, values.count) {
+            let v = UInt8(clamping: Int(values[i] * 255))
+            rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v
         }
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: &rgba, width: size, height: size,
