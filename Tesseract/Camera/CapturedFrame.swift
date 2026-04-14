@@ -10,8 +10,7 @@
 
 import Foundation
 
-/// Raw frame data from GPU downsample (pre-quantization).
-/// Contains the 64×64 RGB + depth + per-block histograms.
+/// Raw frame data from GPU downsample + CPU block analysis.
 struct CapturedFrame {
     /// Frame index in the 64-frame sequence (0..63)
     let index: Int
@@ -21,6 +20,12 @@ struct CapturedFrame {
 
     /// Downsampled 64×64 depth values [0,1] (1=near, 0=far)
     let depths: [Float]
+
+    /// Per-block Go evaluation from FULL camera resolution.
+    /// 4096 entries (64×64 grid), each from an 18×18 block of source pixels.
+    /// Computed during capture by CPU reading the CVPixelBuffer directly.
+    /// Memory: 4096 × ~80 bytes = ~320 KB per frame.
+    let blockEvals: [BlockEval]?
 
     /// Capture timestamp
     let timestamp: TimeInterval
