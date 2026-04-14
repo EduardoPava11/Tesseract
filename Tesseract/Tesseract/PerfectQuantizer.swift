@@ -175,7 +175,7 @@ struct PerfectQuantizer {
                 let idealEpoch = probs[0] * 0.0 + probs[1] * 1.0 + probs[2] * 2.0 + probs[3] * 3.0
 
                 // Add accumulated temporal error (clamped to prevent runaway)
-                let adjusted = idealEpoch + max(-1.5, min(1.5, epochError[i]))
+                let adjusted = idealEpoch + max(-0.8, min(0.8, epochError[i]))
 
                 // Quantize to nearest integer epoch
                 let quantized = min(3, max(0, Int(round(adjusted))))
