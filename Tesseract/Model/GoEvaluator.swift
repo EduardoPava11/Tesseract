@@ -22,7 +22,7 @@ final class GoEvaluator: @unchecked Sendable {
 
     private var model: MLModel?
     private(set) var isReady = false
-    private var isLoading = false
+    private(set) var isLoading = false
 
     init() {
         // Don't load on init — stagger to avoid blocking app launch

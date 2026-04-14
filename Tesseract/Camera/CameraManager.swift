@@ -188,9 +188,7 @@ final class CameraManager: NSObject, ObservableObject {
             session.startRunning()
             state = .previewing
             logger.info("Camera: session running")
-
-            // Stagger KataGo model load — don't block camera startup
-            goEvaluator.loadIfNeeded()
+            // KataGo model loads during processing phase, not here
 
         } catch {
             state = .error(error.localizedDescription)
@@ -268,21 +266,13 @@ final class CameraManager: NSObject, ObservableObject {
                     self.previewMeasure = measure
                 }
 
-                // Recording: analyze full-res blocks + store CapturedFrame
+                // Recording: store raw data ONLY — no heavy analysis during capture
                 if frameBuffer.frameCount < CameraConfig.totalFrames {
-                    // CPU reads the FULL CVPixelBuffer for 18×18 block Go analysis
-                    let blockStart = CACurrentMediaTime()
-                    let blockEvals = analyzeBlocks(rgbBuffer: rgbBuffer)
-                    let blockMs = (CACurrentMediaTime() - blockStart) * 1000
-                    if logThis {
-                        logger.info("Camera: block analysis \(blockEvals.count) blocks in \(String(format: "%.1f", blockMs))ms")
-                    }
-
                     let captured = CapturedFrame(
                         index: frameIdx,
                         rgb: result.rgb,
                         depths: result.depth,
-                        blockEvals: blockEvals.isEmpty ? nil : blockEvals,
+                        blockEvals: nil,  // computed during processing phase
                         timestamp: now
                     )
                     let count = frameBuffer.addCapturedFrame(captured)
@@ -372,10 +362,9 @@ final class CameraManager: NSObject, ObservableObject {
 
         // Recording: store CapturedFrame for global compute
         if frameBuffer.frameCount < CameraConfig.totalFrames {
-            let blockEvals = analyzeBlocks(rgbBuffer: rgbBuffer)
             let captured = CapturedFrame(
                 index: frameIdx, rgb: pixels, depths: depths,
-                blockEvals: blockEvals.isEmpty ? nil : blockEvals,
+                blockEvals: nil,
                 timestamp: timestamp
             )
             let count = frameBuffer.addCapturedFrame(captured)
@@ -460,47 +449,59 @@ final class CameraManager: NSObject, ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             // ════════════════════════════════════════════
-            // Phase 1: Go analysis (0% → 40%)
-            // Analyze each frame's pixels as 3 Go boards.
-            // Publish boards to UI for live visualization.
+            // Phase 0: Load KataGo model (0% → 5%)
+            // Only loads here — never during preview/capture.
             // ════════════════════════════════════════════
 
             await MainActor.run {
                 self.processProgress = 0
-                self.processPhase = "Analyzing Go boards..."
+                self.processPhase = "Loading KataGo..."
             }
+
+            self.goEvaluator.loadIfNeeded()
+            // Wait for model to finish loading (up to 10s)
+            for _ in 0..<100 {
+                if self.goEvaluator.isReady || !self.goEvaluator.isLoading { break }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+
+            await MainActor.run {
+                self.processProgress = 0.05
+                self.processPhase = self.goEvaluator.isReady ? "KataGo ready" : "KataGo unavailable — using simple analysis"
+            }
+
+            // ════════════════════════════════════════════
+            // Phase 1: Go analysis per frame (5% → 40%)
+            // Build Go boards from stored 64×64 RGB.
+            // Run KataGo CoreML on complex frames.
+            // ════════════════════════════════════════════
 
             var kataGoEvalCount = 0
             var kataGoTotalContested = 0
 
             for (i, frame) in capturedFrames.enumerated() {
-                let blockEvals = frame.blockEvals ?? []
-                let complexBlocks = blockEvals.filter { needsNNEval($0) }.count
-                let totalLibs = blockEvals.reduce(0) { $0 + $1.ditherBudget }
-                let _ = blockEvals.isEmpty ? Float(0) :
-                    blockEvals.reduce(Float(0)) { $0 + $1.complexity } / Float(blockEvals.count)
+                // Build Go boards from the stored 64×64 pixels
+                let boards = blockToGoBoards(pixels: frame.rgb)
+                let eval = evaluateBlock(boards)
 
-                // Run KataGo CoreML on complex blocks
-                if self.goEvaluator.isReady && complexBlocks > 0 {
-                    let displayBoards = blockToGoBoards(pixels: frame.rgb)
-                    if let ownership = self.goEvaluator.evaluate(displayBoards) {
+                // Run KataGo on complex frames
+                if self.goEvaluator.isReady && needsNNEval(eval) {
+                    if let ownership = self.goEvaluator.evaluate(boards) {
                         kataGoEvalCount += 1
                         kataGoTotalContested += ownership.contestedCount
                     }
                 }
 
-                let displayBoards = blockToGoBoards(pixels: frame.rgb)
-
                 await MainActor.run {
-                    self.processProgress = Float(i + 1) / Float(totalFrames) * 0.4
-                    self.processPhase = "Frame \(i + 1)/\(totalFrames) — \(blockEvals.count) blocks, \(complexBlocks) complex, \(totalLibs) liberties"
-                    self.processBoards = displayBoards
+                    self.processProgress = 0.05 + Float(i + 1) / Float(totalFrames) * 0.35
+                    self.processPhase = "Go analysis \(i + 1)/\(totalFrames) — complexity \(String(format: "%.2f", eval.complexity)), \(eval.ditherBudget) liberties"
+                    self.processBoards = boards
                 }
             }
 
             if kataGoEvalCount > 0 {
                 await MainActor.run {
-                    self.processPhase = "KataGo: \(kataGoEvalCount) frames evaluated, \(kataGoTotalContested) contested positions"
+                    self.processPhase = "KataGo: \(kataGoEvalCount) frames, \(kataGoTotalContested) contested"
                 }
             }
 
