@@ -233,29 +233,30 @@ final class CameraManager: NSObject, ObservableObject {
             let depthTex = depthBuffer.flatMap { metal.makeDepthTexture(from: $0) }
 
             if let result = metal.downsampleFrame(rgbTexture: rgbTex, depthTexture: depthTex) {
-                // Stage 2: CPU perfect quantization
-                let indices = PerfectQuantizer.perfectFrame(
-                    frameIndex: frameIdx,
+                // Preview: quick per-frame quantize (approximate, for display only)
+                let previewIndices = PerfectQuantizer.previewQuantize(
                     rgb: result.rgb,
-                    depths: result.depth
+                    depths: result.depth,
+                    frameIndex: frameIdx
                 )
 
-                // Stage 3: preview + measure + record
-                let img = buildPreviewImage(indices: indices)
-                let measure = BirkhoffMeasure(paletteIndices: indices)
+                let img = buildPreviewImage(indices: previewIndices)
+                let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
                 Task { @MainActor in
                     self.previewImage = img
                     self.previewMeasure = measure
                 }
 
+                // Recording: store CapturedFrame for global compute after capture
                 if frameBuffer.frameCount < CameraConfig.totalFrames {
-                    let count = frameBuffer.addQuantizedFrame(
-                        paletteIndices: indices,
-                        rawRGB: result.rgb,
-                        depth: result.depth,
+                    let captured = CapturedFrame(
+                        index: frameIdx,
+                        rgb: result.rgb,
+                        depths: result.depth,
                         timestamp: now
                     )
+                    let count = frameBuffer.addCapturedFrame(captured)
                     if let count = count {
                         Task { @MainActor in
                             self.state = .recording(count)
@@ -317,28 +318,27 @@ final class CameraManager: NSObject, ObservableObject {
             depthValues = readDepth(db, outSize: outSize)
         }
 
-        // CPU perfect quantization (same as GPU path, just different pixel source)
-        let indices = PerfectQuantizer.perfectFrame(
-            frameIndex: frameIdx,
-            rgb: pixels,
-            depths: depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
+        let depths = depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
+
+        // Preview: quick quantize for display
+        let previewIndices = PerfectQuantizer.previewQuantize(
+            rgb: pixels, depths: depths, frameIndex: frameIdx
         )
 
-        let img = buildPreviewImage(indices: indices)
-        let measure = BirkhoffMeasure(paletteIndices: indices)
+        let img = buildPreviewImage(indices: previewIndices)
+        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
         Task { @MainActor in
             self.previewImage = img
             self.previewMeasure = measure
         }
 
+        // Recording: store CapturedFrame for global compute
         if frameBuffer.frameCount < CameraConfig.totalFrames {
-            let count = frameBuffer.addQuantizedFrame(
-                paletteIndices: indices,
-                rawRGB: pixels,
-                depth: depthValues,
-                timestamp: timestamp
+            let captured = CapturedFrame(
+                index: frameIdx, rgb: pixels, depths: depths, timestamp: timestamp
             )
+            let count = frameBuffer.addCapturedFrame(captured)
             if let count = count {
                 Task { @MainActor in
                     self.state = .recording(count)
@@ -415,13 +415,24 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - GIF Encoding
 
     private func encodeGIF() {
-        let frames = frameBuffer.exportFrames()
-        let measure = frameBuffer.aggregateMeasure()
+        let capturedFrames = frameBuffer.exportCapturedFrames()
 
         Task.detached(priority: .userInitiated) {
-            // Frames are already perfected during capture (PerfectQuantizer runs per-frame).
-            // Just encode to GIF with the preserved tesseract palette.
-            let gifData = GIFEncoder.encode(frames: frames, measure: measure)
+            // CAPTURE-THEN-COMPUTE: process ALL 64 frames globally.
+            // PerfectQuantizer sees the full dataset and can optimize
+            // per-channel distributions + epoch threading.
+            let quantizedFrames = PerfectQuantizer.quantizeGlobal(frames: capturedFrames)
+
+            let measure = quantizedFrames.isEmpty ? nil : {
+                var totalCounts = [Int](repeating: 0, count: 256)
+                for frame in quantizedFrames {
+                    for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
+                }
+                let perFrame = totalCounts.map { $0 / max(1, quantizedFrames.count) }
+                return BirkhoffMeasure(counts: perFrame)
+            }()
+
+            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure)
             await MainActor.run {
                 self.gifData = gifData
                 self.gifMeasure = measure

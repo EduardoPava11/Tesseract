@@ -1,202 +1,132 @@
 // PerfectQuantizer.swift
 // Tesseract
 //
-// Offline CPU perfect pass: re-quantize raw RGB + depth frames
-// with distribution-exact epoch assignment.
+// Capture-then-compute: process ALL 64 frames globally.
 //
-// The GPU preview uses per-pixel hash sampling (fast, approximate).
-// This pass uses GLOBAL distribution matching (deterministic, exact):
-//   1. Group pixels by display color (a,b,c)
-//   2. Compute exact target epoch counts from Gaussian cadence
-//   3. Sort pixels by depth (near first)
-//   4. Assign epochs: near → dominant (stable), far → non-dominant (variable)
+// Uses algebraic types from Axes.swift + Histogram.swift:
+//   BlockHist → ComposedColor → epoch threading → palette indices
 //
-// Properties:
-//   PQ1: All 4096 pixels assigned (bijection)
-//   PQ2: Epoch distribution matches Gaussian cadence ±1 rounding
+// The GPU captures raw 64×64 RGB + depth per frame (CapturedFrame).
+// This module processes them ALL after capture to produce the GIF.
+//
+// Pipeline:
+//   1. Per-pixel BlockHist (14-bin per channel, constructive)
+//   2. Per-channel bin assignment (match supply to bell-curve demand)
+//   3. Epoch threading through each color group (Gaussian cadence)
+//   4. Compose palette indices: d×64 + a×16 + b×4 + c
+//
+// Axioms:
+//   PQ1: All 4096 pixels assigned per frame
+//   PQ2: Epoch distribution matches Gaussian cadence ±1
 //   PQ3: Deterministic (no randomness)
-//   PQ4: Near-depth pixels get dominant epoch (depth-SNR maximized)
-//   PQ5: Color (a,b,c) unchanged from floor quantization
+//   PQ4: Near-depth pixels get dominant epoch
+//   PQ5: Color levels come from bin assignment (not arbitrary)
 
 import Foundation
 
 struct PerfectQuantizer {
 
-    // MARK: - Perfect Pass
+    // MARK: - Global Quantize (capture-then-compute)
 
-    /// Re-quantize all frames with distribution-exact epoch assignment.
-    /// Frames must have rawRGB and depths populated (recording mode).
-    /// Returns new frames with perfected paletteIndices.
-    static func perfectPass(frames: [QuantizedFrame]) -> [QuantizedFrame] {
+    /// Process ALL captured frames globally → QuantizedFrames for GIF.
+    /// This is the main entry point after capture completes.
+    static func quantizeGlobal(frames: [CapturedFrame]) -> [QuantizedFrame] {
         return frames.map { frame in
-            guard let rawRGB = frame.rawRGB else {
-                // No raw data — return frame unchanged (GPU indices)
-                return frame
-            }
-
-            let perfectedIndices = perfectFrame(
+            let indices = quantizeFrame(
                 frameIndex: frame.index,
-                rgb: rawRGB,
+                rgb: frame.rgb,
                 depths: frame.depths
             )
-
-            let measure = BirkhoffMeasure(paletteIndices: perfectedIndices)
-            let subject = analyzeSubject(depths: frame.depths)
-            let anchors = findAnchors(indices: perfectedIndices)
-
             return QuantizedFrame(
                 index: frame.index,
-                paletteIndices: perfectedIndices,
-                rawRGB: rawRGB,
+                paletteIndices: indices,
+                rawRGB: frame.rgb,
                 depths: frame.depths,
-                measure: measure,
-                subjectAnalysis: subject,
-                anchorTrace: anchors,
+                measure: BirkhoffMeasure(paletteIndices: indices),
+                subjectAnalysis: analyzeSubject(depths: frame.depths),
+                anchorTrace: findAnchors(indices: indices),
                 timestamp: frame.timestamp
             )
         }
     }
 
-    // MARK: - Per-Frame Algorithm
+    // MARK: - Per-Frame Quantization
 
-    /// Tesseract cell centers: (level + 0.5) / 4.0
-    private static let cellCenters: [Float] = [0.125, 0.375, 0.625, 0.875]
-
-    /// Quantize one channel to nearest cell center {0,1,2,3}.
-    private static func nearestLevel(_ v: Float) -> Int {
-        min(3, max(0, Int(round(v * 3.0))))
-    }
-
-    /// Perfect quantization for a single frame.
+    /// Quantize one frame using histogram-based bin assignment + epoch threading.
     ///
-    /// Stage 1: Depth-weighted Floyd-Steinberg error diffusion.
-    ///   - Quantize to nearest tesseract cell center (not floor)
-    ///   - Diffuse error to neighbors weighted by depth:
-    ///     near (subject) → low diffusion (preserve accuracy, more detail)
-    ///     far (background) → full diffusion (fill the tesseract)
-    ///
-    /// Stage 2: Distribution-exact epoch assignment (unchanged).
-    ///   - Group by dithered (a,b,c), compute Gaussian targets, assign by depth
-    static func perfectFrame(
+    /// Phase 1: Build per-pixel BlockHist (14-bin per channel)
+    /// Phase 2: Assign bins per channel (match supply → bell-curve demand)
+    /// Phase 3: Thread epochs through each display color group
+    static func quantizeFrame(
         frameIndex z: Int,
         rgb: [(Float, Float, Float)],
         depths: [Float]
     ) -> [UInt8] {
         let n = rgb.count  // 4096
-        let w = 64
 
         // ════════════════════════════════════════════
-        // Stage 1: Depth-weighted error-diffusion dithering
+        // Phase 1: Build per-pixel BlockHist
+        //
+        // Currently each "block" is 1 pixel (from GPU downsample).
+        // Future: GPU computes real 19×19 block histograms.
+        // The type is the same either way — BlockHist.
         // ════════════════════════════════════════════
 
-        // Error accumulator (3 channels per pixel)
-        var errorR = [Float](repeating: 0, count: n)
-        var errorG = [Float](repeating: 0, count: n)
-        var errorB = [Float](repeating: 0, count: n)
-
-        // Dithered quantization result per pixel
-        var quantA = [Int](repeating: 0, count: n)
-        var quantB = [Int](repeating: 0, count: n)
-        var quantC = [Int](repeating: 0, count: n)
-
-        for y in 0..<w {
-            for x in 0..<w {
-                let i = y * w + x
-                let (r, g, b) = rgb[i]
-                let depth = i < depths.count ? depths[i] : Float(0.5)
-
-                // Adjusted color = true color + accumulated error
-                let adjR = r + errorR[i]
-                let adjG = g + errorG[i]
-                let adjB = b + errorB[i]
-
-                // Quantize to nearest cell center
-                let a = nearestLevel(adjR)
-                let bq = nearestLevel(adjG)
-                let c = nearestLevel(adjB)
-                quantA[i] = a; quantB[i] = bq; quantC[i] = c
-
-                // Quantization error (true adjusted - cell center)
-                let errR = adjR - cellCenters[a]
-                let errG = adjG - cellCenters[bq]
-                let errB = adjB - cellCenters[c]
-
-                // Depth-weighted diffusion strength:
-                //   near (depth=1, face): 30% diffusion → preserve subject detail
-                //   far  (depth=0, wall): 100% diffusion → fill the tesseract
-                let strength = 1.0 - depth * 0.7
-
-                // Floyd-Steinberg diffusion kernel
-                let diffR = errR * strength
-                let diffG = errG * strength
-                let diffB = errB * strength
-
-                // Right: (x+1, y) weight 7/16
-                if x + 1 < w {
-                    let j = i + 1
-                    errorR[j] += diffR * 7.0 / 16.0
-                    errorG[j] += diffG * 7.0 / 16.0
-                    errorB[j] += diffB * 7.0 / 16.0
-                }
-                // Below-left: (x-1, y+1) weight 3/16
-                if x > 0 && y + 1 < w {
-                    let j = (y + 1) * w + (x - 1)
-                    errorR[j] += diffR * 3.0 / 16.0
-                    errorG[j] += diffG * 3.0 / 16.0
-                    errorB[j] += diffB * 3.0 / 16.0
-                }
-                // Below: (x, y+1) weight 5/16
-                if y + 1 < w {
-                    let j = (y + 1) * w + x
-                    errorR[j] += diffR * 5.0 / 16.0
-                    errorG[j] += diffG * 5.0 / 16.0
-                    errorB[j] += diffB * 5.0 / 16.0
-                }
-                // Below-right: (x+1, y+1) weight 1/16
-                if x + 1 < w && y + 1 < w {
-                    let j = (y + 1) * w + (x + 1)
-                    errorR[j] += diffR * 1.0 / 16.0
-                    errorG[j] += diffG * 1.0 / 16.0
-                    errorB[j] += diffB * 1.0 / 16.0
-                }
-            }
-        }
-
-        // ════════════════════════════════════════════
-        // Stage 2: Distribution-exact epoch assignment
-        // ════════════════════════════════════════════
-
-        struct PixelInfo {
-            let pixelIndex: Int
-            let a: Int, b: Int, c: Int
-            let depth: Float
-        }
-
-        // Build pixel groups from dithered (a,b,c) values
-        var groups = [Int: [PixelInfo]]()
-        for i in 0..<n {
-            let a = quantA[i], b = quantB[i], c = quantC[i]
-            let depth = i < depths.count ? depths[i] : Float(0.5)
-            let key = a * 16 + b * 4 + c
-            groups[key, default: []].append(
-                PixelInfo(pixelIndex: i, a: a, b: b, c: c, depth: depth)
+        let blockHists = rgb.map { (r, g, b) in
+            BlockHist(
+                r: ChannelHist.from(values: [r]),
+                g: ChannelHist.from(values: [g]),
+                b: ChannelHist.from(values: [b]),
+                blockSide: 1
             )
         }
 
-        // Assign epochs per group
+        // ════════════════════════════════════════════
+        // Phase 2: Per-channel bin assignment (independent, orthogonal)
+        //
+        // Uses assignAllChannels from Histogram.swift.
+        // Each channel is assigned independently.
+        // The type system prevents mixing (RBin ≠ GBin ≠ BBin).
+        // ════════════════════════════════════════════
+
+        let colors = assignAllChannels(blockHists)
+
+        // ════════════════════════════════════════════
+        // Phase 3: Epoch threading through each color group
+        //
+        // Group pixels by display color (a,b,c).
+        // For each group: compute epoch targets from Gaussian cadence.
+        // Sort by depth: near → dominant epoch (stable).
+        // The epoch axis is SEPARATE from color (type-enforced).
+        // ════════════════════════════════════════════
+
         var result = [UInt8](repeating: 0, count: n)
 
+        // Group by display color key (0..63)
+        var groups = [Int: [(pixelIndex: Int, depth: Float)]]()
+        for i in 0..<n {
+            let key = colors[i].displayKey
+            let depth = i < depths.count ? depths[i] : Float(0.5)
+            groups[key, default: []].append((pixelIndex: i, depth: depth))
+        }
+
+        // Thread epochs through each group
         for (_, group) in groups {
             guard !group.isEmpty else { continue }
-            let a = group[0].a, b = group[0].b, c = group[0].c
             let groupN = group.count
 
+            // Average depth → sigma → epoch probabilities
             let avgDepth = group.reduce(Float(0)) { $0 + $1.depth } / Float(groupN)
             let sigma = BinomialCadence.sigmaForDepth(avgDepth)
             let probs = BinomialCadence.gaussianProbs(frame: z, sigma: sigma)
+
+            // Target epoch counts (largest-remainder for exact sum)
             let targets = largestRemainder(total: groupN, weights: probs)
 
+            // Sort by depth descending (near first → gets dominant epoch)
             let sorted = group.sorted { $0.depth > $1.depth }
+
+            // Assign epochs: dominant epoch (most targets) gets near pixels
             let epochOrder = (0..<4).sorted { targets[$0] > targets[$1] }
 
             var offset = 0
@@ -205,7 +135,11 @@ struct PerfectQuantizer {
                 for j in offset..<(offset + count) {
                     guard j < sorted.count else { break }
                     let px = sorted[j]
-                    result[px.pixelIndex] = UInt8(epochIdx * 64 + a * 16 + b * 4 + c)
+                    let color = colors[px.pixelIndex]
+                    result[px.pixelIndex] = paletteIndex(
+                        color: color,
+                        epoch: TessEpoch(value: epochIdx)
+                    )
                 }
                 offset += count
             }
@@ -214,131 +148,122 @@ struct PerfectQuantizer {
         return result
     }
 
-    // MARK: - Largest Remainder Method
+    // MARK: - Quick Preview Quantize (per-frame, approximate)
 
-    /// Distribute `total` items across 4 bins proportional to `weights`,
-    /// ensuring exact sum via largest-remainder rounding.
-    private static func largestRemainder(total: Int, weights: SIMD4<Float>) -> [Int] {
-        // Compute ideal (fractional) counts
-        let ideal = (0..<4).map { Double(weights[$0]) * Double(total) }
+    /// Fast per-frame quantization for live preview display.
+    /// Uses nearest-level quantization (no histogram matching).
+    /// Good enough for 20fps preview, not for GIF.
+    static func previewQuantize(
+        rgb: [(Float, Float, Float)],
+        depths: [Float],
+        frameIndex z: Int
+    ) -> [UInt8] {
+        let n = rgb.count
+        var result = [UInt8](repeating: 0, count: n)
 
-        // Floor each
-        var result = ideal.map { Int($0) }
-        var remainders = (0..<4).map { ideal[$0] - Double(result[$0]) }
-
-        // Distribute leftover to bins with largest remainders
-        var leftover = total - result.reduce(0, +)
-        while leftover > 0 {
-            if let maxIdx = remainders.enumerated().max(by: { $0.element < $1.element })?.offset {
-                result[maxIdx] += 1
-                remainders[maxIdx] = -1  // don't pick again
-                leftover -= 1
-            } else {
-                break
-            }
+        for i in 0..<n {
+            let (r, g, b) = rgb[i]
+            let a = TessLevel(value: min(3, max(0, Int(round(Float(r) * 3.0)))))
+            let bv = TessLevel(value: min(3, max(0, Int(round(Float(g) * 3.0)))))
+            let c = TessLevel(value: min(3, max(0, Int(round(Float(b) * 3.0)))))
+            let depth = i < depths.count ? depths[i] : Float(0.5)
+            let epoch = TessEpoch(value: dominantEpoch(frame: z, depth: depth))
+            result[i] = UInt8(epoch.value * 64 + a.value * 16 + bv.value * 4 + c.value)
         }
 
         return result
     }
 
+    /// Dominant epoch for a pixel given frame and depth
+    private static func dominantEpoch(frame z: Int, depth: Float) -> Int {
+        let probs = BinomialCadence.gaussianProbs(frame: z, sigma: BinomialCadence.sigmaForDepth(depth))
+        var maxP: Float = 0; var maxD = 0
+        for d in 0..<4 {
+            if probs[d] > maxP { maxP = probs[d]; maxD = d }
+        }
+        return maxD
+    }
+
+    // MARK: - Largest Remainder Method
+
+    /// Distribute `total` items across 4 bins proportional to `weights`.
+    static func largestRemainder(total: Int, weights: SIMD4<Float>) -> [Int] {
+        let ideal = (0..<4).map { Double(weights[$0]) * Double(total) }
+        var floored = ideal.map { Int($0) }
+        var remainders = (0..<4).map { ideal[$0] - Double(floored[$0]) }
+        var leftover = total - floored.reduce(0, +)
+        while leftover > 0 {
+            if let maxIdx = remainders.enumerated().max(by: { $0.element < $1.element })?.offset {
+                floored[maxIdx] += 1
+                remainders[maxIdx] = -1
+                leftover -= 1
+            } else { break }
+        }
+        return floored
+    }
+
     // MARK: - Subject Analysis
 
-    /// Measure how depth separates subject from background.
-    /// Does not change quantization — only observes the depth field.
     static func analyzeSubject(depths: [Float]) -> SubjectAnalysis {
         var subCount = 0, bgCount = 0, borderCount = 0
         var subSum: Float = 0, bgSum: Float = 0
-
         for d in depths {
-            if d > 0.6 {
-                subCount += 1; subSum += d
-            } else if d < 0.4 {
-                bgCount += 1; bgSum += d
-            } else {
-                borderCount += 1
-            }
+            if d > 0.6 { subCount += 1; subSum += d }
+            else if d < 0.4 { bgCount += 1; bgSum += d }
+            else { borderCount += 1 }
         }
-
         let subMean = subCount > 0 ? subSum / Float(subCount) : 0.5
         let bgMean = bgCount > 0 ? bgSum / Float(bgCount) : 0.5
         let subSigma = BinomialCadence.sigmaForDepth(subMean)
         let bgSigma = BinomialCadence.sigmaForDepth(bgMean)
-
         return SubjectAnalysis(
-            subjectPixelCount: subCount,
-            backgroundPixelCount: bgCount,
-            borderPixelCount: borderCount,
-            subjectMeanDepth: subMean,
-            backgroundMeanDepth: bgMean,
-            subjectSigma: subSigma,
-            backgroundSigma: bgSigma,
-            resolutionRatio: bgSigma / max(subSigma, 0.001)
+            subjectPixelCount: subCount, backgroundPixelCount: bgCount,
+            borderPixelCount: borderCount, subjectMeanDepth: subMean,
+            backgroundMeanDepth: bgMean, subjectSigma: subSigma,
+            backgroundSigma: bgSigma, resolutionRatio: bgSigma / max(subSigma, 0.001)
         )
     }
 
     // MARK: - Anchor Tracking
 
-    /// Find the singular black and white pixels at the distribution tails.
-    /// Black = (a=0, b=0, c=0), White = (a=3, b=3, c=3).
-    /// These cap the ends of the binomial distribution.
     static func findAnchors(indices: [UInt8]) -> AnchorTrace {
         var blackIdx: Int? = nil, whiteIdx: Int? = nil
         var blackCount = 0, whiteCount = 0
-
         for (i, idx) in indices.enumerated() {
-            let abc = idx % 64  // strip epoch
-            if abc == 0 {  // (a=0, b=0, c=0) = black
-                blackCount += 1
-                if blackIdx == nil { blackIdx = i }
-            }
-            if abc == 63 {  // (a=3, b=3, c=3) = white
-                whiteCount += 1
-                if whiteIdx == nil { whiteIdx = i }
-            }
+            let abc = idx % 64
+            if abc == 0 { blackCount += 1; if blackIdx == nil { blackIdx = i } }
+            if abc == 63 { whiteCount += 1; if whiteIdx == nil { whiteIdx = i } }
         }
-
         return AnchorTrace(
-            blackPixelIndex: blackIdx,
-            blackPaletteIndex: blackIdx.map { indices[$0] },
+            blackPixelIndex: blackIdx, blackPaletteIndex: blackIdx.map { indices[$0] },
             blackEpoch: blackIdx.map { indices[$0] / 64 },
-            whitePixelIndex: whiteIdx,
-            whitePaletteIndex: whiteIdx.map { indices[$0] },
+            whitePixelIndex: whiteIdx, whitePaletteIndex: whiteIdx.map { indices[$0] },
             whiteEpoch: whiteIdx.map { indices[$0] / 64 },
-            blackCount: blackCount,
-            whiteCount: whiteCount
+            blackCount: blackCount, whiteCount: whiteCount
         )
-    }
-
-    // MARK: - Gaussian Probability (matches BinomialCadence)
-
-    private static func gaussianProbs(frame z: Int, sigma: Float) -> SIMD4<Float> {
-        return BinomialCadence.gaussianProbs(frame: z, sigma: sigma)
     }
 }
 
 // MARK: - Analysis Structs
 
-/// Depth-based subject/background separation measurement.
 struct SubjectAnalysis {
-    let subjectPixelCount: Int       // depth > 0.6 (near, face)
-    let backgroundPixelCount: Int    // depth < 0.4 (far, wall)
-    let borderPixelCount: Int        // 0.4...0.6 (transition)
+    let subjectPixelCount: Int
+    let backgroundPixelCount: Int
+    let borderPixelCount: Int
     let subjectMeanDepth: Float
     let backgroundMeanDepth: Float
-    let subjectSigma: Float          // σ for subject (should be ≈ 7.875)
-    let backgroundSigma: Float       // σ for background (should be ≈ 15.75)
-    let resolutionRatio: Float       // backgroundSigma / subjectSigma (≈ 2.0)
+    let subjectSigma: Float
+    let backgroundSigma: Float
+    let resolutionRatio: Float
 }
 
-/// Tracks the singular black and white pixels at the binomial distribution tails.
-/// These are temporal anchors: their epoch traces the Gaussian cadence across frames.
 struct AnchorTrace {
-    let blackPixelIndex: Int?        // position in 64×64 grid
-    let blackPaletteIndex: UInt8?    // palette slot (encodes epoch)
-    let blackEpoch: UInt8?           // d = index / 64
+    let blackPixelIndex: Int?
+    let blackPaletteIndex: UInt8?
+    let blackEpoch: UInt8?
     let whitePixelIndex: Int?
     let whitePaletteIndex: UInt8?
     let whiteEpoch: UInt8?
-    let blackCount: Int              // pixels quantized to black (≈1 at tail)
-    let whiteCount: Int              // pixels quantized to white (≈1 at tail)
+    let blackCount: Int
+    let whiteCount: Int
 }
