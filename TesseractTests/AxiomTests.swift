@@ -216,8 +216,9 @@ final class AxiomTests: XCTestCase {
     func testCadence_crossovers() {
         for (d, cross) in BinomialCadence.crossovers.enumerated() {
             let z = Int(cross.rounded())
-            let pd = BinomialCadence.epochProb(frame: z, epoch: d)
-            let pd1 = BinomialCadence.epochProb(frame: z, epoch: d + 1)
+            let probs = BinomialCadence.epochProbabilities(frame: z)
+            let pd = probs[d]
+            let pd1 = probs[d + 1]
             XCTAssertEqual(pd, pd1, accuracy: 0.15,
                 "Crossover not balanced at frame \(z): P(\(d))=\(pd), P(\(d+1))=\(pd1)")
         }

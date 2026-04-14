@@ -167,7 +167,7 @@ enum BinTarget {
         let ideal = counts.map { Double($0) * Double(n) / Double(total) }
         var floored = ideal.map { Int($0) }
         let remainders = zip(ideal, floored).map { $0.0 - Double($0.1) }
-        var deficit = n - floored.reduce(0, +)
+        let deficit = n - floored.reduce(0, +)
 
         // Distribute deficit to bins with largest remainders
         let sorted = remainders.enumerated()

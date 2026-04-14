@@ -280,7 +280,7 @@ final class MetalPipeline {
             if let depthTex = depthTexture {
                 let depthW = depthTex.width
                 let depthH = depthTex.height
-                let dCropSize = min(depthW, depthH)
+                let _ = min(depthW, depthH)
 
                 // Dynamic crop for depth
                 var ddsParams = DownsampleParamsSwift.fromBuffer(width: depthW, height: depthH)
