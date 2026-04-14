@@ -52,13 +52,15 @@ struct TesseractCoord: Hashable, Equatable, CustomStringConvertible {
         )
     }
 
-    /// sRGB as 8-bit (0-255) for GIF palette table
+    /// sRGB as 8-bit (0-255) for GIF palette table.
+    /// Canonical values: {32, 96, 159, 223} for levels {0, 1, 2, 3}.
+    /// Uses round() to match the Haskell spec (not truncation).
     var sRGB8: (UInt8, UInt8, UInt8) {
         let c = sRGB
         return (
-            UInt8(clamping: Int(c.x * 255)),
-            UInt8(clamping: Int(c.y * 255)),
-            UInt8(clamping: Int(c.z * 255))
+            UInt8(clamping: Int(round(c.x * 255))),
+            UInt8(clamping: Int(round(c.y * 255))),
+            UInt8(clamping: Int(round(c.z * 255)))
         )
     }
 

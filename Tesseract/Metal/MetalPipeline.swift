@@ -44,6 +44,7 @@ final class MetalPipeline {
 
     private var paramsBuffer: MTLBuffer?
     private var downsampleParamsBuffer: MTLBuffer?
+    private var downsampleDepthParamsBuffer: MTLBuffer?
 
     // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
 
@@ -165,6 +166,7 @@ final class MetalPipeline {
         // Params buffers — use STRIDE not size to match Metal alignment
         paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.stride, options: .storageModeShared)
         downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
+        downsampleDepthParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
 
         // Texture cache for CVPixelBuffer → MTLTexture conversion
         var cache: CVMetalTextureCache?
@@ -213,9 +215,12 @@ final class MetalPipeline {
         return texture
     }
 
-    /// Convert a depth CVPixelBuffer (Float32) to a Metal texture.
+    /// Convert a depth CVPixelBuffer to a Metal texture.
+    /// Detects Float16 vs Float32 format dynamically (TrueDepth delivers Float16).
     func makeDepthTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
-        return makeTexture(from: pixelBuffer, pixelFormat: .r32Float)
+        let fmt = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        let metalFmt: MTLPixelFormat = (fmt == kCVPixelFormatType_DepthFloat16) ? .r16Float : .r32Float
+        return makeTexture(from: pixelBuffer, pixelFormat: metalFmt)
     }
 
     // MARK: - Process One Frame
@@ -372,6 +377,122 @@ final class MetalPipeline {
         }
 
         return indices
+    }
+
+    // MARK: - Downsample Only (consolidated path)
+
+    /// GPU Stage: downsample camera textures to 64×64, then read back for CPU.
+    /// Does NOT run the quantize kernel — CPU handles quantization via PerfectQuantizer.
+    /// Uses SEPARATE param buffers for RGB and depth to avoid the overwrite bug.
+    func downsampleFrame(
+        rgbTexture: MTLTexture,
+        depthTexture: MTLTexture?
+    ) -> (rgb: [(Float, Float, Float)], depth: [Float])? {
+        guard isReady else { return nil }
+
+        frameCount += 1
+        let logThis = (frameCount % 20 == 0)
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else { return nil }
+        guard let rgb64 = rgb64Texture, let depth64 = depth64Texture else { return nil }
+
+        // ── Downsample RGB + Depth in one encoder, SEPARATE param buffers ──
+
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
+
+        let gridSize = MTLSize(width: 64, height: 64, depth: 1)
+        let groupSize = MTLSize(width: 8, height: 8, depth: 1)
+
+        // RGB downsample → rgb64Texture
+        var rgbParams = DownsampleParamsSwift.fromBuffer(width: rgbTexture.width, height: rgbTexture.height)
+        downsampleParamsBuffer?.contents().copyMemory(
+            from: &rgbParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
+        )
+        encoder.setComputePipelineState(downsampleRGBState)
+        encoder.setTexture(rgbTexture, index: 0)
+        encoder.setTexture(rgb64, index: 1)
+        encoder.setBuffer(downsampleParamsBuffer, offset: 0, index: 0)
+        encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
+
+        // Depth downsample → depth64Texture (separate buffer!)
+        if let depthTex = depthTexture {
+            var depthParams = DownsampleParamsSwift.fromBuffer(width: depthTex.width, height: depthTex.height)
+            downsampleDepthParamsBuffer?.contents().copyMemory(
+                from: &depthParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
+            )
+            encoder.setComputePipelineState(downsampleDepthState)
+            encoder.setTexture(depthTex, index: 0)
+            encoder.setTexture(depth64, index: 1)
+            encoder.setBuffer(downsampleDepthParamsBuffer, offset: 0, index: 0)
+            encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
+        }
+
+        encoder.endEncoding()
+
+        // Submit and wait
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        if commandBuffer.error != nil { return nil }
+
+        // ── Read back both textures ──
+
+        guard let rgbData = readbackRGB(), let depthData = readbackDepth() else { return nil }
+
+        if logThis {
+            logger.debug("MetalPipeline: downsample \(rgbTexture.width)×\(rgbTexture.height) → 64×64, depth=\(depthTexture != nil)")
+        }
+
+        return (rgb: rgbData, depth: depthData)
+    }
+
+    // MARK: - Texture Readback (for CPU perfect pass)
+
+    /// Read back the downsampled 64×64 RGB texture after GPU processing.
+    /// Call only after processFrame() succeeds (textures are filled).
+    func readbackRGB() -> [(Float, Float, Float)]? {
+        guard let tex = rgb64Texture else { return nil }
+        let size = CameraConfig.captureSize  // 64
+        let pixelCount = size * size
+
+        // rgba16Float: 4 × Float16 = 8 bytes per pixel
+        var rawData = [UInt16](repeating: 0, count: pixelCount * 4)
+        tex.getBytes(&rawData,
+                     bytesPerRow: size * 4 * MemoryLayout<UInt16>.size,
+                     from: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                                     size: MTLSize(width: size, height: size, depth: 1)),
+                     mipmapLevel: 0)
+
+        // Convert Float16 RGBA → (Float, Float, Float) RGB
+        var result = [(Float, Float, Float)]()
+        result.reserveCapacity(pixelCount)
+        for i in 0..<pixelCount {
+            let r = Float(Float16(bitPattern: rawData[i * 4]))
+            let g = Float(Float16(bitPattern: rawData[i * 4 + 1]))
+            let b = Float(Float16(bitPattern: rawData[i * 4 + 2]))
+            result.append((r, g, b))
+        }
+        return result
+    }
+
+    /// Read back the downsampled 64×64 depth texture after GPU processing.
+    func readbackDepth() -> [Float]? {
+        guard let tex = depth64Texture else { return nil }
+        let size = CameraConfig.captureSize
+        let pixelCount = size * size
+
+        // rgba16Float for depth: only R channel used
+        var rawData = [UInt16](repeating: 0, count: pixelCount * 4)
+        tex.getBytes(&rawData,
+                     bytesPerRow: size * 4 * MemoryLayout<UInt16>.size,
+                     from: MTLRegion(origin: MTLOrigin(x: 0, y: 0, z: 0),
+                                     size: MTLSize(width: size, height: size, depth: 1)),
+                     mipmapLevel: 0)
+
+        return (0..<pixelCount).map { i in
+            let f = Float(Float16(bitPattern: rawData[i * 4]))
+            return f.isFinite && f > 0 ? f : 0.5
+        }
     }
 
     // MARK: - Debug Logging

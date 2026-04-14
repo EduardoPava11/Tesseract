@@ -37,7 +37,7 @@ struct BinomialCadence {
         gaussianProbs(frame: z, sigma: sigma)
     }
 
-    private static func gaussianProbs(frame z: Int, sigma s: Float) -> SIMD4<Float> {
+    static func gaussianProbs(frame z: Int, sigma s: Float) -> SIMD4<Float> {
         let zf = Float(z)
         let s2 = 2.0 * s * s
         let raw = SIMD4<Float>(

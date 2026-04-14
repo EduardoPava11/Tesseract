@@ -11,8 +11,11 @@ import simd
 struct QuantizedFrame {
     let index: Int                // 0..63
     let paletteIndices: [UInt8]   // 4096 entries (64×64)
+    let rawRGB: [(Float, Float, Float)]?  // 4096 sRGB pixels — nil in preview, populated during recording for CPU perfect pass
     let depths: [Float]           // 4096 continuous depth values [0,1]
     let measure: BirkhoffMeasure
+    let subjectAnalysis: SubjectAnalysis?  // depth-based subject/background separation
+    let anchorTrace: AnchorTrace?          // black/white distribution tail anchors
     let timestamp: TimeInterval
 
     /// Width and height are always 64
@@ -59,10 +62,12 @@ final class FrameBuffer: @unchecked Sendable {
     // MARK: - Add Pre-Quantized Frame (from Metal)
 
     /// Add a frame that was already quantized by the Metal pipeline.
+    /// Pass rawRGB during recording for the CPU perfect pass.
     /// Returns current frame count, or nil if not recording / full.
     @discardableResult
     func addQuantizedFrame(
         paletteIndices: [UInt8],
+        rawRGB: [(Float, Float, Float)]? = nil,
         depth: [Float]?,
         timestamp: TimeInterval
     ) -> Int? {
@@ -76,11 +81,17 @@ final class FrameBuffer: @unchecked Sendable {
         let depthValues = depth ?? [Float](repeating: 0.5, count: QuantizedFrame.pixelCount)
         let measure = BirkhoffMeasure(paletteIndices: paletteIndices)
 
+        let subject = PerfectQuantizer.analyzeSubject(depths: depthValues)
+        let anchors = PerfectQuantizer.findAnchors(indices: paletteIndices)
+
         let frame = QuantizedFrame(
             index: frameIndex,
             paletteIndices: paletteIndices,
+            rawRGB: rawRGB,
             depths: depthValues,
             measure: measure,
+            subjectAnalysis: subject,
+            anchorTrace: anchors,
             timestamp: timestamp
         )
 
@@ -122,12 +133,18 @@ final class FrameBuffer: @unchecked Sendable {
         )
 
         let measure = BirkhoffMeasure(paletteIndices: indices)
+        let dv = depthValues ?? [Float](repeating: 0.5, count: QuantizedFrame.pixelCount)
+        let subject = PerfectQuantizer.analyzeSubject(depths: dv)
+        let anchors = PerfectQuantizer.findAnchors(indices: indices)
 
         let frame = QuantizedFrame(
             index: frameIndex,
             paletteIndices: indices,
-            depths: depthValues ?? [Float](repeating: 0.5, count: QuantizedFrame.pixelCount),
+            rawRGB: rgb,
+            depths: dv,
             measure: measure,
+            subjectAnalysis: subject,
+            anchorTrace: anchors,
             timestamp: timestamp
         )
 

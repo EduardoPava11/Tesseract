@@ -191,34 +191,97 @@ final class CameraManager: NSObject, ObservableObject {
     nonisolated(unsafe) private static var _frameCounter: Int = 0
     nonisolated(unsafe) private static var _depthFrames: Int = 0
     nonisolated(unsafe) private static var _noDepthFrames: Int = 0
+    nonisolated(unsafe) private static var _lastTimestamp: CFTimeInterval = 0
+    nonisolated(unsafe) private static var _fpsAccum: Double = 0
+    nonisolated(unsafe) private static var _fpsCount: Int = 0
 
     nonisolated func processFrame(rgbBuffer: CVPixelBuffer, depthBuffer: CVPixelBuffer?) {
         let rgbW = CVPixelBufferGetWidth(rgbBuffer)
         let rgbH = CVPixelBufferGetHeight(rgbBuffer)
         Self._frameCounter += 1
 
-        // Track depth presence
-        if depthBuffer != nil {
-            Self._depthFrames += 1
-        } else {
-            Self._noDepthFrames += 1
+        // ── Frame timing ──
+        let now = CACurrentMediaTime()
+        let delta = now - Self._lastTimestamp
+        Self._lastTimestamp = now
+        if delta > 0 && delta < 1.0 {  // skip first frame and outliers
+            Self._fpsAccum += delta
+            Self._fpsCount += 1
         }
 
-        // Log every 20 frames
-        if Self._frameCounter % 20 == 1 {
-            logger.info("Camera: frame \(Self._frameCounter) RGB=\(rgbW)×\(rgbH) depth=\(depthBuffer != nil ? "YES" : "NO") (total: \(Self._depthFrames) with depth, \(Self._noDepthFrames) without)")
+        if depthBuffer != nil { Self._depthFrames += 1 } else { Self._noDepthFrames += 1 }
 
-            if let db = depthBuffer {
-                let dW = CVPixelBufferGetWidth(db)
-                let dH = CVPixelBufferGetHeight(db)
-                let fmt = CVPixelBufferGetPixelFormatType(db)
-                logger.info("Camera: depth \(dW)×\(dH) format=\(fmt)")
+        let logThis = Self._frameCounter % 20 == 1
+        if logThis {
+            let avgFPS = Self._fpsCount > 0 ? Double(Self._fpsCount) / Self._fpsAccum : 0
+            logger.info("Camera: frame \(Self._frameCounter) RGB=\(rgbW)×\(rgbH) depth=\(depthBuffer != nil ? "YES" : "NO") avgFPS=\(String(format: "%.1f", avgFPS)) delta=\(String(format: "%.1fms", delta * 1000))")
+            Self._fpsAccum = 0; Self._fpsCount = 0
+        }
+
+        let frameIdx = frameBuffer.frameCount
+
+        // ════════════════════════════════════════════════════════
+        // CONSOLIDATED PATH: GPU downsample → CPU PerfectQuantize
+        // GPU does parallel texture reads (megapixel → 64×64).
+        // CPU does deterministic distribution matching (4096 pixels).
+        // ════════════════════════════════════════════════════════
+
+        // Stage 1: GPU downsample (camera res → 64×64 with rotation)
+        if let metal = _metalPipeline,
+           let rgbTex = metal.makeTexture(from: rgbBuffer, pixelFormat: .bgra8Unorm) {
+
+            let depthTex = depthBuffer.flatMap { metal.makeDepthTexture(from: $0) }
+
+            if let result = metal.downsampleFrame(rgbTexture: rgbTex, depthTexture: depthTex) {
+                // Stage 2: CPU perfect quantization
+                let indices = PerfectQuantizer.perfectFrame(
+                    frameIndex: frameIdx,
+                    rgb: result.rgb,
+                    depths: result.depth
+                )
+
+                // Stage 3: preview + measure + record
+                let img = buildPreviewImage(indices: indices)
+                let measure = BirkhoffMeasure(paletteIndices: indices)
+
+                Task { @MainActor in
+                    self.previewImage = img
+                    self.previewMeasure = measure
+                }
+
+                if frameBuffer.frameCount < CameraConfig.totalFrames {
+                    let count = frameBuffer.addQuantizedFrame(
+                        paletteIndices: indices,
+                        rawRGB: result.rgb,
+                        depth: result.depth,
+                        timestamp: now
+                    )
+                    if let count = count {
+                        Task { @MainActor in
+                            self.state = .recording(count)
+                            if count >= CameraConfig.totalFrames {
+                                self.state = .processing
+                                self.encodeGIF()
+                            }
+                        }
+                    }
+                }
+                return
             }
         }
 
-        let logThis = Self._frameCounter % 20 == 1
+        // ── CPU fallback (GPU unavailable) ──
+        processFrameCPU(rgbBuffer: rgbBuffer, depthBuffer: depthBuffer, frameIdx: frameIdx, timestamp: now)
+    }
 
-        // Dynamic crop: square from short side, centered
+    /// CPU-only frame processing: reads pixels directly from CVPixelBuffer.
+    /// Used when Metal is unavailable (simulator, old device).
+    nonisolated private func processFrameCPU(
+        rgbBuffer: CVPixelBuffer, depthBuffer: CVPixelBuffer?,
+        frameIdx: Int, timestamp: CFTimeInterval
+    ) {
+        let rgbW = CVPixelBufferGetWidth(rgbBuffer)
+        let rgbH = CVPixelBufferGetHeight(rgbBuffer)
         let outSize = CameraConfig.captureSize
         let cropSize = min(rgbW, rgbH)
         let cropX = (rgbW - cropSize) / 2
@@ -226,7 +289,6 @@ final class CameraManager: NSObject, ObservableObject {
         let step = cropSize / outSize
         let half = step / 2
 
-        // Read RGB pixels
         CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(rgbBuffer, .readOnly) }
 
@@ -239,8 +301,6 @@ final class CameraManager: NSObject, ObservableObject {
 
         for y in 0..<outSize {
             for x in 0..<outSize {
-                // videoRotationAngle=90 reports portrait dims but pixels may still
-                // be in landscape memory layout. Apply 90° CCW to correct.
                 let srcX = cropX + y * step + half
                 let srcY = cropY + (outSize - 1 - x) * step + half
                 guard srcX < rgbW && srcY < rgbH else { pixels.append((0,0,0)); continue }
@@ -252,33 +312,18 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // Read depth (if available)
         var depthValues: [Float]?
         if let db = depthBuffer {
             depthValues = readDepth(db, outSize: outSize)
-
-            // Log depth stats every 20 frames
-            if logThis, let dv = depthValues {
-                let valid = dv.filter { $0 > 0 && $0 < 1 }
-                if !valid.isEmpty {
-                    let minD = valid.min()!
-                    let maxD = valid.max()!
-                    let meanD = valid.reduce(0, +) / Float(valid.count)
-                    logger.info("Camera: depth values min=\(String(format: "%.3f", minD)) max=\(String(format: "%.3f", maxD)) mean=\(String(format: "%.3f", meanD)) valid=\(valid.count)/\(dv.count)")
-                } else {
-                    logger.warning("Camera: depth all zeros or invalid (\(dv.count) values)")
-                }
-            }
         }
 
-        // Continuous depth → σ → epochs. No zones.
-        // σ(depth) = σ_base × (2 - depth). The 4⁴ emerges naturally.
-        let frameIdx = frameBuffer.frameCount
-        let indices = TesseractPalette.quantizeFrame(
-            frame: frameIdx, pixels: pixels, depths: depthValues
+        // CPU perfect quantization (same as GPU path, just different pixel source)
+        let indices = PerfectQuantizer.perfectFrame(
+            frameIndex: frameIdx,
+            rgb: pixels,
+            depths: depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
         )
 
-        // Preview
         let img = buildPreviewImage(indices: indices)
         let measure = BirkhoffMeasure(paletteIndices: indices)
 
@@ -287,12 +332,12 @@ final class CameraManager: NSObject, ObservableObject {
             self.previewMeasure = measure
         }
 
-        // Recording
         if frameBuffer.frameCount < CameraConfig.totalFrames {
             let count = frameBuffer.addQuantizedFrame(
                 paletteIndices: indices,
+                rawRGB: pixels,
                 depth: depthValues,
-                timestamp: CACurrentMediaTime()
+                timestamp: timestamp
             )
             if let count = count {
                 Task { @MainActor in
@@ -374,6 +419,8 @@ final class CameraManager: NSObject, ObservableObject {
         let measure = frameBuffer.aggregateMeasure()
 
         Task.detached(priority: .userInitiated) {
+            // Frames are already perfected during capture (PerfectQuantizer runs per-frame).
+            // Just encode to GIF with the preserved tesseract palette.
             let gifData = GIFEncoder.encode(frames: frames, measure: measure)
             await MainActor.run {
                 self.gifData = gifData

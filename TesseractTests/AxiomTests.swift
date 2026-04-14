@@ -293,4 +293,304 @@ final class AxiomTests: XCTestCase {
         // They're at opposite corners of the projected cube
         XCTAssertGreaterThan(simd_distance(b, w), 1.0)
     }
+
+    // ════════════════════════════════════════════════
+    // GIF ENCODER — PALETTE ROUNDTRIP
+    // ════════════════════════════════════════════════
+
+    /// Verify that GIF encoding preserves the 256-entry tesseract palette.
+    /// The Global Color Table (bytes 13-780) must match TesseractPalette.gifColorTable.
+    func testGIF_palettePreserved() {
+        // Create a frame with known indices (0,1,2,...,255 repeated 16×)
+        let indices: [UInt8] = (0..<4096).map { UInt8($0 % 256) }
+        let frame = QuantizedFrame(
+            index: 0,
+            paletteIndices: indices,
+            rawRGB: nil,
+            depths: [Float](repeating: 0.5, count: 4096),
+            measure: BirkhoffMeasure(paletteIndices: indices),
+            subjectAnalysis: nil,
+            anchorTrace: nil,
+            timestamp: 0
+        )
+
+        let gifData = GIFEncoder.encode(frames: [frame])
+        XCTAssertNotNil(gifData, "GIF encoding should succeed")
+
+        guard let data = gifData else { return }
+
+        // Verify GIF89a header
+        let header = data.prefix(6)
+        XCTAssertEqual(header, Data([0x47, 0x49, 0x46, 0x38, 0x39, 0x61]),
+            "GIF header should be GIF89a")
+
+        // Verify Logical Screen Descriptor
+        XCTAssertEqual(data[6], 64)   // width low byte
+        XCTAssertEqual(data[7], 0)    // width high byte
+        XCTAssertEqual(data[8], 64)   // height low byte
+        XCTAssertEqual(data[9], 0)    // height high byte
+        XCTAssertEqual(data[10], 0xF7, "Packed byte should indicate 256-entry GCT")
+
+        // Verify Global Color Table matches tesseract palette
+        let gctStart = 13
+        let gctEnd = gctStart + 768  // 256 × 3
+        let gctData = data[gctStart..<gctEnd]
+        XCTAssertEqual(Data(gctData), TesseractPalette.gifColorTable,
+            "GCT must match TesseractPalette.gifColorTable byte-for-byte")
+
+        // Verify palette has 256 entries (768 bytes)
+        XCTAssertEqual(TesseractPalette.gifColorTable.count, 768,
+            "Palette should be exactly 768 bytes (256 × 3)")
+
+        // Verify trailer
+        XCTAssertEqual(data.last, 0x3B, "GIF should end with trailer 0x3B")
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 1a: PALETTE BYTE EXACTNESS
+    // ════════════════════════════════════════════════
+
+    /// Canonical sRGB8 values: {32, 96, 159, 223} for levels {0, 1, 2, 3}.
+    /// This test FAILS if sRGB8 uses truncation instead of rounding.
+    func testSRGB8_exactBytes() {
+        let expected: [UInt8] = [32, 96, 159, 223]
+        for level: UInt8 in 0...3 {
+            let tc = TesseractCoord(d: 0, a: level, b: 0, c: 0)
+            XCTAssertEqual(tc.sRGB8.0, expected[Int(level)],
+                "Level \(level): R should be \(expected[Int(level)]), got \(tc.sRGB8.0)")
+        }
+        // Verify ALL 256 palette entries use ONLY canonical values
+        for i: UInt8 in 0...255 {
+            let (r, g, b) = TesseractCoord(index: i).sRGB8
+            XCTAssertTrue(expected.contains(r), "Index \(i): R=\(r) not in {32,96,159,223}")
+            XCTAssertTrue(expected.contains(g), "Index \(i): G=\(g) not in {32,96,159,223}")
+            XCTAssertTrue(expected.contains(b), "Index \(i): B=\(b) not in {32,96,159,223}")
+        }
+    }
+
+    /// Black = (32,32,32), White = (223,223,223). Exact bytes.
+    func testSRGB8_blackWhiteExact() {
+        let black = TesseractCoord.black.sRGB8
+        XCTAssertEqual(black, (32, 32, 32), "Black must be (32,32,32)")
+        let white = TesseractCoord.white.sRGB8
+        XCTAssertEqual(white, (223, 223, 223), "White must be (223,223,223)")
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 1b: GCT ROUNDTRIP
+    // ════════════════════════════════════════════════
+
+    func testGCT_exactBytes() {
+        let gct = TesseractPalette.gifColorTable
+        XCTAssertEqual(gct.count, 768, "GCT must be 768 bytes (256 × 3)")
+
+        // Index 0 = black = (32, 32, 32)
+        XCTAssertEqual(gct[0], 32); XCTAssertEqual(gct[1], 32); XCTAssertEqual(gct[2], 32)
+        // Index 255 = white = (223, 223, 223)
+        XCTAssertEqual(gct[765], 223); XCTAssertEqual(gct[766], 223); XCTAssertEqual(gct[767], 223)
+
+        // All bytes must be from canonical set
+        let canonical: Set<UInt8> = [32, 96, 159, 223]
+        for i in 0..<768 {
+            XCTAssertTrue(canonical.contains(gct[i]),
+                "GCT byte \(i) = \(gct[i]) not in {32,96,159,223}")
+        }
+    }
+
+    func testGIF_GCTinEncodedFile() {
+        let indices: [UInt8] = (0..<4096).map { UInt8($0 % 256) }
+        let frame = QuantizedFrame(
+            index: 0, paletteIndices: indices, rawRGB: nil,
+            depths: [Float](repeating: 0.5, count: 4096),
+            measure: BirkhoffMeasure(paletteIndices: indices),
+            subjectAnalysis: nil, anchorTrace: nil, timestamp: 0
+        )
+        guard let data = GIFEncoder.encode(frames: [frame]) else {
+            XCTFail("GIF encoding failed"); return
+        }
+        // Bytes 13-780 = GCT
+        let gctSlice = Data(data[13..<781])
+        XCTAssertEqual(gctSlice, TesseractPalette.gifColorTable,
+            "GCT in encoded GIF must match TesseractPalette.gifColorTable")
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 1c: PERFECTQUANTIZER AXIOMS PQ1-PQ5
+    // ════════════════════════════════════════════════
+
+    /// Synthetic test data: gradient RGB + center-near depth
+    private func syntheticFrame() -> (rgb: [(Float,Float,Float)], depths: [Float]) {
+        let rgb = (0..<4096).map { i -> (Float,Float,Float) in
+            let x = Float(i % 64) / 63.0
+            let y = Float(i / 64) / 63.0
+            return (x, y, 0.5)
+        }
+        let depths = (0..<4096).map { i -> Float in
+            let x = abs(Float(i % 64) - 31.5) / 31.5
+            let y = abs(Float(i / 64) - 31.5) / 31.5
+            return 1.0 - sqrt(x*x + y*y) / sqrt(2.0)
+        }
+        return (rgb, depths)
+    }
+
+    /// PQ1: All 4096 pixels assigned, all indices in [0,255]
+    func testPQ1_allAssigned() {
+        let (rgb, depths) = syntheticFrame()
+        let indices = PerfectQuantizer.perfectFrame(frameIndex: 8, rgb: rgb, depths: depths)
+        XCTAssertEqual(indices.count, 4096, "PQ1: must produce 4096 indices")
+        for (i, idx) in indices.enumerated() {
+            XCTAssertTrue(idx <= 255, "PQ1: index \(i) = \(idx) > 255")
+        }
+    }
+
+    /// PQ3: Deterministic — same input → same output
+    func testPQ3_deterministic() {
+        let (rgb, depths) = syntheticFrame()
+        let run1 = PerfectQuantizer.perfectFrame(frameIndex: 24, rgb: rgb, depths: depths)
+        let run2 = PerfectQuantizer.perfectFrame(frameIndex: 24, rgb: rgb, depths: depths)
+        XCTAssertEqual(run1, run2, "PQ3: same input must produce identical output")
+    }
+
+    /// PQ5: Color (a,b,c) preserved from floor quantization
+    func testPQ5_colorPreserved() {
+        let (rgb, depths) = syntheticFrame()
+        let indices = PerfectQuantizer.perfectFrame(frameIndex: 16, rgb: rgb, depths: depths)
+        for (i, idx) in indices.enumerated() {
+            let (r, g, b) = rgb[i]
+            let expectedA = min(3, max(0, Int(r * 4.0)))
+            let expectedB = min(3, max(0, Int(g * 4.0)))
+            let expectedC = min(3, max(0, Int(b * 4.0)))
+            let actualA = Int(idx % 64) / 16
+            let actualB = (Int(idx % 64) % 16) / 4
+            let actualC = Int(idx) % 4
+            XCTAssertEqual(actualA, expectedA, "PQ5 pixel \(i): a mismatch")
+            XCTAssertEqual(actualB, expectedB, "PQ5 pixel \(i): b mismatch")
+            XCTAssertEqual(actualC, expectedC, "PQ5 pixel \(i): c mismatch")
+        }
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 1d: DEPTH-SIGMA FORMULA
+    // ════════════════════════════════════════════════
+
+    func testDepthSigma_exactValues() {
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(1.0), 7.875, accuracy: eps,
+            "Near (face): σ = 7.875")
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.0), 15.75, accuracy: eps,
+            "Far (wall): σ = 15.75")
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.5), 11.8125, accuracy: eps,
+            "Mid: σ = 11.8125")
+    }
+
+    func testDepthSigma_monotonic() {
+        // Nearer depth → smaller sigma (tighter epochs)
+        var prevSigma = BinomialCadence.sigmaForDepth(0.0)
+        for d in stride(from: Float(0.1), through: 1.0, by: 0.1) {
+            let sigma = BinomialCadence.sigmaForDepth(d)
+            XCTAssertLessThan(sigma, prevSigma,
+                "σ must decrease as depth increases (d=\(d))")
+            prevSigma = sigma
+        }
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 2: SUBJECT ANALYSIS
+    // ════════════════════════════════════════════════
+
+    func testSubjectAnalysis_centerNear() {
+        let (_, depths) = syntheticFrame()  // center-near depth map
+        let analysis = PerfectQuantizer.analyzeSubject(depths: depths)
+
+        XCTAssertGreaterThan(analysis.subjectPixelCount, 0, "Should have subject pixels")
+        XCTAssertGreaterThan(analysis.backgroundPixelCount, 0, "Should have background pixels")
+        XCTAssertGreaterThan(analysis.resolutionRatio, 1.0,
+            "Background σ should be larger than subject σ")
+        XCTAssertLessThan(analysis.subjectSigma, analysis.backgroundSigma,
+            "Subject should have tighter epochs than background")
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 3: BLACK/WHITE ANCHORS
+    // ════════════════════════════════════════════════
+
+    /// Black and white anchors exist in a gradient frame
+    func testAnchors_existInGradient() {
+        let (rgb, depths) = syntheticFrame()
+        let indices = PerfectQuantizer.perfectFrame(frameIndex: 8, rgb: rgb, depths: depths)
+        let anchors = PerfectQuantizer.findAnchors(indices: indices)
+
+        XCTAssertNotNil(anchors.blackPixelIndex, "Gradient should have a black pixel (a=0,b=0,c=0)")
+        XCTAssertNotNil(anchors.whitePixelIndex, "Gradient should have a white pixel (a=3,b=3,c=3)")
+    }
+
+    /// Anchor epochs should follow the Gaussian cadence across frames
+    func testAnchors_epochCadence() {
+        let (rgb, depths) = syntheticFrame()
+        var blackEpochs: [UInt8] = []
+
+        for z in 0..<64 {
+            let indices = PerfectQuantizer.perfectFrame(frameIndex: z, rgb: rgb, depths: depths)
+            let anchors = PerfectQuantizer.findAnchors(indices: indices)
+            if let e = anchors.blackEpoch {
+                blackEpochs.append(e)
+            }
+        }
+
+        // Black should exist in most frames
+        XCTAssertGreaterThan(blackEpochs.count, 48,
+            "Black anchor should exist in >75% of frames")
+
+        // Epochs should progress 0→1→2→3 across the 64 frames
+        if blackEpochs.count >= 4 {
+            let earlyEpoch = blackEpochs[4]   // frame ~4 → epoch 0
+            let midEpoch = blackEpochs[blackEpochs.count / 2]  // ~frame 32 → epoch 2
+            let lateEpoch = blackEpochs[blackEpochs.count - 4] // ~frame 60 → epoch 3
+            XCTAssertLessThanOrEqual(earlyEpoch, midEpoch,
+                "Epoch should increase over time")
+            XCTAssertLessThanOrEqual(midEpoch, lateEpoch,
+                "Epoch should increase over time")
+        }
+    }
+
+    // ════════════════════════════════════════════════
+    // LAYER 4: INTEGRATION
+    // ════════════════════════════════════════════════
+
+    func testPipeline_syntheticFullRoundtrip() {
+        let (rgb, depths) = syntheticFrame()
+
+        // Process all 64 frames
+        var frames: [QuantizedFrame] = []
+        for z in 0..<64 {
+            let indices = PerfectQuantizer.perfectFrame(frameIndex: z, rgb: rgb, depths: depths)
+            let measure = BirkhoffMeasure(paletteIndices: indices)
+            let subject = PerfectQuantizer.analyzeSubject(depths: depths)
+            let anchors = PerfectQuantizer.findAnchors(indices: indices)
+            frames.append(QuantizedFrame(
+                index: z, paletteIndices: indices, rawRGB: rgb, depths: depths,
+                measure: measure, subjectAnalysis: subject, anchorTrace: anchors,
+                timestamp: Double(z) / 20.0
+            ))
+        }
+
+        // Encode to GIF
+        let gifData = GIFEncoder.encode(frames: frames)
+        XCTAssertNotNil(gifData, "64-frame GIF encoding should succeed")
+
+        guard let data = gifData else { return }
+
+        // Verify structure
+        XCTAssertEqual(data[0], 0x47, "GIF magic byte 0")  // 'G'
+        XCTAssertEqual(data[10], 0xF7, "Packed byte: 256-entry GCT")
+        XCTAssertEqual(data.last, 0x3B, "Trailer byte")
+
+        // GCT matches
+        XCTAssertEqual(Data(data[13..<781]), TesseractPalette.gifColorTable)
+
+        // All frames have anchors
+        for frame in frames {
+            XCTAssertNotNil(frame.anchorTrace?.blackPixelIndex,
+                "Frame \(frame.index): missing black anchor")
+        }
+    }
 }
