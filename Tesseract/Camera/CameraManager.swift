@@ -54,6 +54,11 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
 
+    // Processing progress (shown during compute phase)
+    @Published var processProgress: Float = 0        // 0.0 → 1.0
+    @Published var processPhase: String = ""          // "Analyzing frame 12/64"
+    @Published var processBoards: GoBoards?           // live Go board snapshot
+
     // MARK: - Capture
 
     private let session = AVCaptureSession()
@@ -435,14 +440,76 @@ final class CameraManager: NSObject, ObservableObject {
 
     private func encodeGIF() {
         let capturedFrames = frameBuffer.exportCapturedFrames()
+        let totalFrames = capturedFrames.count
 
         Task.detached(priority: .userInitiated) {
-            // CAPTURE-THEN-COMPUTE: process ALL 64 frames globally.
-            // PerfectQuantizer sees the full dataset and can optimize
-            // per-channel distributions + epoch threading.
-            let quantizedFrames = PerfectQuantizer.quantizeGlobal(frames: capturedFrames)
+            // ════════════════════════════════════════════
+            // Phase 1: Go analysis (0% → 40%)
+            // Analyze each frame's pixels as 3 Go boards.
+            // Publish boards to UI for live visualization.
+            // ════════════════════════════════════════════
 
-            let measure = quantizedFrames.isEmpty ? nil : {
+            await MainActor.run {
+                self.processProgress = 0
+                self.processPhase = "Analyzing Go boards..."
+            }
+
+            for (i, frame) in capturedFrames.enumerated() {
+                // Build 3 Go boards from the 64×64 RGB pixels
+                // (treating the whole frame as one block for now)
+                let boards = blockToGoBoards(pixels: frame.rgb)
+                let eval = evaluateBlock(boards)
+
+                await MainActor.run {
+                    self.processProgress = Float(i + 1) / Float(totalFrames) * 0.4
+                    self.processPhase = "Go analysis \(i + 1)/\(totalFrames) — complexity \(String(format: "%.2f", eval.complexity)), \(eval.ditherBudget) liberties"
+                    self.processBoards = boards
+                }
+            }
+
+            // ════════════════════════════════════════════
+            // Phase 2: Quantize all frames (40% → 80%)
+            // PerfectQuantizer with color + temporal dithering.
+            // ════════════════════════════════════════════
+
+            await MainActor.run {
+                self.processPhase = "Quantizing tesseract..."
+            }
+
+            var quantizedFrames: [QuantizedFrame] = []
+            for (i, frame) in capturedFrames.enumerated() {
+                let indices = PerfectQuantizer.quantizeFrame(
+                    frameIndex: frame.index,
+                    rgb: frame.rgb,
+                    depths: frame.depths
+                )
+                quantizedFrames.append(QuantizedFrame(
+                    index: frame.index,
+                    paletteIndices: indices,
+                    rawRGB: frame.rgb,
+                    depths: frame.depths,
+                    measure: BirkhoffMeasure(paletteIndices: indices),
+                    subjectAnalysis: PerfectQuantizer.analyzeSubject(depths: frame.depths),
+                    anchorTrace: PerfectQuantizer.findAnchors(indices: indices),
+                    timestamp: frame.timestamp
+                ))
+
+                await MainActor.run {
+                    self.processProgress = 0.4 + Float(i + 1) / Float(totalFrames) * 0.4
+                    self.processPhase = "Quantizing frame \(i + 1)/\(totalFrames)"
+                }
+            }
+
+            // ════════════════════════════════════════════
+            // Phase 3: Encode GIF (80% → 100%)
+            // ════════════════════════════════════════════
+
+            await MainActor.run {
+                self.processPhase = "Encoding GIF..."
+                self.processProgress = 0.85
+            }
+
+            let measure: BirkhoffMeasure? = quantizedFrames.isEmpty ? nil : {
                 var totalCounts = [Int](repeating: 0, count: 256)
                 for frame in quantizedFrames {
                     for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
@@ -452,7 +519,11 @@ final class CameraManager: NSObject, ObservableObject {
             }()
 
             let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure)
+
             await MainActor.run {
+                self.processProgress = 1.0
+                self.processPhase = "Done"
+                self.processBoards = nil
                 self.gifData = gifData
                 self.gifMeasure = measure
                 self.state = .done
