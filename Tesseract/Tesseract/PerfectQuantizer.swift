@@ -92,56 +92,75 @@ struct PerfectQuantizer {
         let colors = assignAllChannels(blockHists)
 
         // ════════════════════════════════════════════
-        // Phase 3: Epoch threading through each color group
+        // Phase 3: Temporal dithering (Floyd-Steinberg on epoch axis)
         //
-        // Group pixels by display color (a,b,c).
-        // For each group: compute epoch targets from Gaussian cadence.
-        // Sort by depth: near → dominant epoch (stable).
-        // The epoch axis is SEPARATE from color (type-enforced).
+        // For each pixel: compute ideal continuous epoch from Gaussian cadence.
+        // Quantize to nearest integer epoch (0..3).
+        // Diffuse temporal error to spatial neighbors.
+        // Depth controls diffusion strength:
+        //   near (face): low diffusion → locked to dominant epoch (stable)
+        //   far (wall): full diffusion → smooth epoch transitions (variable)
+        //
+        // The COLOR is FROZEN from Phase 2 (type-enforced).
+        // Only the epoch changes. This is dithering on T, not on R/G/B.
         // ════════════════════════════════════════════
 
+        let w = 64
         var result = [UInt8](repeating: 0, count: n)
 
-        // Group by display color key (0..63)
-        var groups = [Int: [(pixelIndex: Int, depth: Float)]]()
-        for i in 0..<n {
-            let key = colors[i].displayKey
-            let depth = i < depths.count ? depths[i] : Float(0.5)
-            groups[key, default: []].append((pixelIndex: i, depth: depth))
-        }
+        // Compute the ideal continuous "epoch position" per pixel.
+        // This is the weighted average of epoch indices by their probabilities:
+        //   idealEpoch = Σ d × P(d|z, depth_i) ∈ [0, 3]
+        // For frame 8: idealEpoch ≈ 0.15 (mostly epoch 0)
+        // For frame 24: idealEpoch ≈ 1.1 (mostly epoch 1)
 
-        // Thread epochs through each group
-        for (_, group) in groups {
-            guard !group.isEmpty else { continue }
-            let groupN = group.count
+        var epochError = [Float](repeating: 0, count: n)
 
-            // Average depth → sigma → epoch probabilities
-            let avgDepth = group.reduce(Float(0)) { $0 + $1.depth } / Float(groupN)
-            let sigma = BinomialCadence.sigmaForDepth(avgDepth)
-            let probs = BinomialCadence.gaussianProbs(frame: z, sigma: sigma)
+        for y in 0..<w {
+            for x in 0..<w {
+                let i = y * w + x
+                let depth = i < depths.count ? depths[i] : Float(0.5)
+                let sigma = BinomialCadence.sigmaForDepth(depth)
+                let probs = BinomialCadence.gaussianProbs(frame: z, sigma: sigma)
 
-            // Target epoch counts (largest-remainder for exact sum)
-            let targets = largestRemainder(total: groupN, weights: probs)
+                // Ideal continuous epoch = expected value of the distribution
+                let idealEpoch = probs[0] * 0.0 + probs[1] * 1.0 + probs[2] * 2.0 + probs[3] * 3.0
 
-            // Sort by depth descending (near first → gets dominant epoch)
-            let sorted = group.sorted { $0.depth > $1.depth }
+                // Add accumulated temporal error
+                let adjusted = idealEpoch + epochError[i]
 
-            // Assign epochs: dominant epoch (most targets) gets near pixels
-            let epochOrder = (0..<4).sorted { targets[$0] > targets[$1] }
+                // Quantize to nearest integer epoch
+                let quantized = min(3, max(0, Int(round(adjusted))))
 
-            var offset = 0
-            for epochIdx in epochOrder {
-                let count = targets[epochIdx]
-                for j in offset..<(offset + count) {
-                    guard j < sorted.count else { break }
-                    let px = sorted[j]
-                    let color = colors[px.pixelIndex]
-                    result[px.pixelIndex] = paletteIndex(
-                        color: color,
-                        epoch: TessEpoch(value: epochIdx)
-                    )
+                // Compose palette index (color frozen from Phase 2, epoch from dithering)
+                result[i] = paletteIndex(
+                    color: colors[i],
+                    epoch: TessEpoch(value: quantized)
+                )
+
+                // Temporal error = ideal - quantized
+                let err = adjusted - Float(quantized)
+
+                // Depth-weighted diffusion:
+                //   near (depth=1): 30% diffusion → preserve subject stability
+                //   far (depth=0): 100% diffusion → smooth epoch transitions
+                let strength = 1.0 - depth * 0.7
+
+                let diff = err * strength
+
+                // Floyd-Steinberg kernel on temporal error
+                if x + 1 < w {
+                    epochError[i + 1] += diff * 7.0 / 16.0
                 }
-                offset += count
+                if x > 0 && y + 1 < w {
+                    epochError[(y + 1) * w + (x - 1)] += diff * 3.0 / 16.0
+                }
+                if y + 1 < w {
+                    epochError[(y + 1) * w + x] += diff * 5.0 / 16.0
+                }
+                if x + 1 < w && y + 1 < w {
+                    epochError[(y + 1) * w + (x + 1)] += diff * 1.0 / 16.0
+                }
             }
         }
 
