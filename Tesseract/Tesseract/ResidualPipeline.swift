@@ -138,8 +138,141 @@ func identifyPhase(gate: ConfidenceGate, depth: Float) -> Phase {
 }
 
 // ════════════════════════════════════════════════════════════════
-// § 5. ENERGY
+// § 5. RESIDUAL QUANTIZE — the full pipeline
+//
+// teacher(pyramid) → baseline (d,a,b,c,g)
+// gene(flatten(pyramid)) → direction ∈ [-1,1]^5
+// Decision(histogram) → confidence gate
+// δ = direction × (1-confidence) × max_delta
+// final = teacher + δ → palette index
 // ════════════════════════════════════════════════════════════════
+
+/// Full residual quantization: teacher + gene correction + confidence gate.
+/// This is the CORRECT path that replaces direct gene.forward().
+func residualQuantize(
+    gene: GeneWeights,
+    pyramid: BlockPyramid,
+    frameIndex: Int,
+    mode: CubeMode
+) -> (paletteIndex: UInt8, globalWeight: Float) {
+    // 1. Teacher baseline (from Decision.swift)
+    let nativeHist: (ChannelPyramid) -> CountedHist = { ch in
+        switch mode {
+        case .training: return ch.coarse
+        case .inference: return ch.medium
+        }
+    }
+
+    let rDecision = ChannelDecision(from: nativeHist(pyramid.r))
+    let gDecision = ChannelDecision(from: nativeHist(pyramid.g))
+    let bDecision = ChannelDecision(from: nativeHist(pyramid.b))
+
+    // Teacher epoch from BinomialCadence
+    let epochProbs = BinomialCadence.epochProbabilities(frame: frameIndex, depth: pyramid.depth)
+    let teacherEpoch = (0..<4).max(by: { epochProbs[$0] < epochProbs[$1] }) ?? 0
+
+    // Teacher global weight
+    let histConf = (rDecision.confidence + gDecision.confidence + bDecision.confidence) / 3.0
+    let teacherG = TeacherDecision.globalWeight(histConfidence: histConf, depth: pyramid.depth)
+
+    let teacher = TeacherOutput(
+        d: teacherEpoch,
+        a: rDecision.level,
+        b: gDecision.level,
+        c: bDecision.level,
+        g: teacherG
+    )
+
+    // 2. Gene direction (NN forward pass)
+    let input = pyramid.flatten()
+    let (_, _) = gene.forward(input)  // we don't use the direct output
+
+    // Extract raw direction (pre-sigmoid) — approximate via re-running layers
+    // For now: use the gene output difference from teacher as a proxy
+    // In production: gene outputs raw direction, not final index
+    let rawDir: [Float] = {
+        // Run the gene and interpret its output as direction
+        // The gene's tanh output IS the direction in [-1,1]^5
+        var hidden = [Float](repeating: 0, count: GeneWeights.hiddenDim)
+        let w1Base = 0
+        let b1Base = GeneWeights.hiddenDim * GeneWeights.inputDim
+        for h in 0..<GeneWeights.hiddenDim {
+            var sum = gene.weights[b1Base + h]
+            let wRow = w1Base + h * GeneWeights.inputDim
+            for i in 0..<GeneWeights.inputDim {
+                sum += gene.weights[wRow + i] * input[i]
+            }
+            hidden[h] = max(0, sum)
+        }
+        let w2Base = GeneWeights.attentionCount
+        let b2Base = w2Base + GeneWeights.outputDim * GeneWeights.hiddenDim
+        var raw = [Float](repeating: 0, count: GeneWeights.outputDim)
+        for o in 0..<GeneWeights.outputDim {
+            var sum = gene.weights[b2Base + o]
+            let wRow = w2Base + o * GeneWeights.hiddenDim
+            for h in 0..<GeneWeights.hiddenDim {
+                sum += gene.weights[wRow + h] * hidden[h]
+            }
+            raw[o] = sum
+        }
+        return raw  // pre-tanh: gateDelta applies tanh internally
+    }()
+
+    // 3. Confidence gate
+    let gate = ConfidenceGate(
+        r: rDecision.confidence,
+        g: gDecision.confidence,
+        b: bDecision.confidence,
+        epoch: epochProbs.max() ?? 0.25,
+        global: teacherG
+    )
+
+    // 4. Gated δ
+    let delta = gateDelta(rawDirection: rawDir, gate: gate)
+
+    // 5. Apply residual
+    let final = applyResidual(teacher: teacher, delta: delta)
+
+    return (final.paletteIndex, final.g)
+}
+
+// ════════════════════════════════════════════════════════════════
+// § 6. ENERGY
+// ════════════════════════════════════════════════════════════════
+
+// ════════════════════════════════════════════════════════════════
+// § 7. TEACHER TARGETS — convert PerfectQuantizer output to training data
+// ════════════════════════════════════════════════════════════════
+
+/// Decompose palette indices + depths into (d, a, b, c, g) teacher targets.
+/// The `g` value blends histogram confidence with depth.
+func teacherTargets(
+    indices: [UInt8],
+    depths: [Float],
+    pyramids: [BlockPyramid]
+) -> [[Float]] {
+    return indices.enumerated().map { (i, idx) in
+        let d = Float(Int(idx) / 64)
+        let a = Float((Int(idx) % 64) / 16)
+        let b = Float((Int(idx) % 16) / 4)
+        let c = Float(Int(idx) % 4)
+
+        // Global weight from confidence + depth
+        let g: Float
+        if i < pyramids.count {
+            let pyr = pyramids[i]
+            let depth = i < depths.count ? depths[i] : 0.5
+            let histConf = (pyr.r.coarse.levelConfidence
+                          + pyr.g.coarse.levelConfidence
+                          + pyr.b.coarse.levelConfidence) / 3.0
+            g = TeacherDecision.globalWeight(histConfidence: histConf, depth: depth)
+        } else {
+            g = i < depths.count ? depths[i] : 0.5
+        }
+
+        return [d, a, b, c, g]
+    }
+}
 
 /// Energy of a residual assignment: lower = better
 struct Energy {

@@ -226,6 +226,7 @@ final class CameraManager: NSObject, ObservableObject {
         compositeAlpha = min(1, alpha + delta)
         compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
         state = .refining(compositeAlpha)
+        recomputeGIF()  // Gap 4 fix: GIF updates when α changes
     }
 
     /// Counter-clockwise: decrease α (back toward base)
@@ -234,6 +235,7 @@ final class CameraManager: NSObject, ObservableObject {
         compositeAlpha = max(0, alpha - delta)
         compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
         state = .refining(compositeAlpha)
+        recomputeGIF()  // Gap 4 fix: GIF updates when α changes
     }
 
     /// TAP in any phase = export the current GIF
