@@ -14,6 +14,10 @@ import CoreImage
 import CoreMedia
 import os.log
 
+#if canImport(MLX)
+import MLX
+#endif
+
 private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
 /// Camera state machine
@@ -241,11 +245,115 @@ final class CameraManager: NSObject, ObservableObject {
     /// TAP in any phase = export the current GIF
     func tapExport() {
         // Export is available at any phase — doesn't end the session in Phase 1
-        // In Phase 3: TAP exports and ends
+        // In Phase 3: TAP exports, trains on final choice, and ends
         if case .refining = state {
+            // Gap 3: Train the NN on the user's final choice
+            trainOnFinalChoice()
             state = .done
         }
         // In Phase 1: TAP exports but stays in dualExplore (handled by the view)
+    }
+
+    // MARK: - Gap 3: Training from User Preferences
+
+    #if canImport(MLX)
+    private var geneTrainer: GeneTrainer?
+    #endif
+
+    /// Train the gene NN on the user's final composition choice.
+    /// Called when the user TAPs to export in Phase 3.
+    /// The composite gene at the chosen α is the PREFERRED output.
+    private func trainOnFinalChoice() {
+        #if canImport(MLX)
+        let capturedFrames = frameBuffer.exportCapturedFrames()
+        guard !capturedFrames.isEmpty else { return }
+
+        let finalGene = compositeGene
+
+        Task.detached(priority: .userInitiated) {
+            // 1. Compute real BlockPyramid inputs
+            let allPyramids = capturedFrames.flatMap { frame in
+                BlockPyramid.computeAll(
+                    rgb: frame.rgb,
+                    depths: frame.depths,
+                    frameIndex: frame.index,
+                    totalFrames: CameraConfig.totalFrames
+                )
+            }
+
+            // 2. Compute teacher targets (PerfectQuantizer output)
+            let allTeacherIndices = capturedFrames.flatMap { frame in
+                PerfectQuantizer.quantizeFrame(
+                    frameIndex: frame.index,
+                    rgb: frame.rgb,
+                    depths: frame.depths
+                )
+            }
+            let allDepths = capturedFrames.flatMap { $0.depths }
+            let targets = teacherTargets(
+                indices: allTeacherIndices,
+                depths: allDepths,
+                pyramids: allPyramids
+            )
+
+            // 3. Compute preferred output (residual with final gene)
+            let preferred: [[Float]] = allPyramids.enumerated().map { (i, pyr) in
+                let (idx, g) = finalGene.forward(pyr.flatten())
+                let d = Float(Int(idx) / 64)
+                let a = Float((Int(idx) % 64) / 16)
+                let b = Float((Int(idx) % 16) / 4)
+                let c = Float(Int(idx) % 4)
+                return [d, a, b, c, g]
+            }
+
+            // 4. Build confidence gates from histograms
+            let gates: [[Float]] = allPyramids.map { pyr in
+                let rConf = pyr.r.coarse.levelConfidence
+                let gConf = pyr.g.coarse.levelConfidence
+                let bConf = pyr.b.coarse.levelConfidence
+                let eConf: Float = 0.5  // epoch confidence from cadence
+                let gConf2 = TeacherDecision.globalWeight(
+                    histConfidence: (rConf + gConf + bConf) / 3,
+                    depth: pyr.depth
+                )
+                return [
+                    (1 - eConf) * 0.5,   // epoch gate
+                    (1 - rConf) * 0.5,   // R gate
+                    (1 - gConf) * 0.5,   // G gate
+                    (1 - bConf) * 0.5,   // B gate
+                    (1 - gConf2) * 0.3   // global gate
+                ]
+            }
+
+            // 5. Train (MLX arrays)
+            let inputArr = MLXArray(allPyramids.flatMap { $0.flatten() })
+                .reshaped([allPyramids.count, BlockPyramid.inputDim])
+            let teacherArr = MLXArray(targets.flatMap { $0 })
+                .reshaped([targets.count, 5])
+            let preferredArr = MLXArray(preferred.flatMap { $0 })
+                .reshaped([preferred.count, 5])
+            let gateArr = MLXArray(gates.flatMap { $0 })
+                .reshaped([gates.count, 5])
+
+            // Initialize trainer if needed
+            if await MainActor.run(body: { self.geneTrainer }) == nil {
+                let module = GeneModule()
+                module.importWeights(finalGene)
+                let trainer = GeneTrainer(model: module)
+                await MainActor.run { self.geneTrainer = trainer }
+            }
+
+            if let trainer = await MainActor.run(body: { self.geneTrainer }) {
+                let loss = trainer.trainFromInteraction(
+                    allInputs: inputArr,
+                    allTeacher: teacherArr,
+                    allConfidence: gateArr,
+                    allPreferred: preferredArr
+                )
+                print("Gene training: loss=\(loss) steps=\(trainer.totalSteps)")
+            }
+        }
+        #endif
     }
 
     /// Build a VoxelCube from the last captured+quantized frames.
