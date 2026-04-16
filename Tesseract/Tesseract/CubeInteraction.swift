@@ -158,7 +158,7 @@ func interpolateGenes(alpha: Float, geneA: GeneWeights, geneB: GeneWeights) -> G
 // DOWN: decrease → NN pays less attention (more static)
 // ════════════════════════════════════════════════════════════════
 
-private func perturbEpochAxis(_ gene: GeneWeights, scale: Float, increase: Bool) -> GeneWeights {
+func perturbEpochAxis(_ gene: GeneWeights, scale: Float, increase: Bool) -> GeneWeights {
     var newWeights = gene.weights
     let inputDim = GeneWeights.inputDim
     let frameNormSlot = 127  // input slot for z/(K-1)

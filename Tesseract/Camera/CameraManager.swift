@@ -17,17 +17,32 @@ import os.log
 private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
 /// Camera state machine
+/// Composition order: which gene is the base?
+enum CompositionOrder: Equatable {
+    case aIntoB  // A is base, B is residual
+    case bIntoA  // B is base, A is residual
+}
+
+/// Three-phase state machine: Dual Explore → Compose → Refine
 enum CameraState: Equatable {
-    case idle, previewing, recording(Int), processing, swiping(Int), done, error(String)
-    //                                                  ^^^^^^^^^^^
-    //                                        swiping(generation) — swipe-to-train loop
-    //                                        generation increments on each LEFT swipe
+    case idle
+    case previewing
+    case recording(Int)
+    case processing
+    case dualExplore(Int)         // Phase 1: generation counter, two GIFs
+    case composing(CompositionOrder)  // Phase 2: instant, compute composite
+    case refining(Float)           // Phase 3: α ∈ [0,1], single composite GIF
+    case done
+    case error(String)
+
     static func == (lhs: CameraState, rhs: CameraState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle), (.previewing, .previewing),
              (.processing, .processing), (.done, .done): return true
         case (.recording(let a), .recording(let b)): return a == b
-        case (.swiping(let a), .swiping(let b)): return a == b
+        case (.dualExplore(let a), .dualExplore(let b)): return a == b
+        case (.composing(let a), .composing(let b)): return a == b
+        case (.refining(let a), .refining(let b)): return a == b
         case (.error(let a), .error(let b)): return a == b
         default: return false
         }
@@ -92,11 +107,16 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var processPhase: String = ""          // "Analyzing frame 12/64"
     @Published var processBoards: GoBoards?           // live Go board snapshot
 
-    // MARK: - Gene State (swipe-to-train)
-    @Published var currentGene: GeneWeights = .defaultWeights()
-    @Published var swipeGeneration: Int = 0
-    @Published var eliteMap = EliteMap()
-    private var previousGene: GeneWeights = .defaultWeights()
+    // MARK: - Gene State (three-phase interaction)
+    @Published var geneA: GeneWeights = .defaultWeights()
+    @Published var geneB: GeneWeights = .defaultWeights()
+    @Published var compositeGene: GeneWeights = .defaultWeights()
+    @Published var compositeAlpha: Float = 0.5
+    @Published var generation: Int = 0
+    private var previousGeneA: GeneWeights = .defaultWeights()
+    private var previousGeneB: GeneWeights = .defaultWeights()
+    private var baseGene: GeneWeights = .defaultWeights()   // for composition
+    private var otherGene: GeneWeights = .defaultWeights()  // for composition
     private var sobolExplorer = SobolExplorer()
 
     // MARK: - Capture
@@ -134,31 +154,96 @@ final class CameraManager: NSObject, ObservableObject {
         state = .recording(0)
     }
 
-    // MARK: - Swipe Actions (Gene.hs §10: TAP/LEFT/RIGHT)
+    // MARK: - Phase 1: Dual Exploration (↑↓←→ steer BOTH GIFs)
 
-    /// LEFT swipe: Sobol quasi-random perturbation. Guaranteed new direction.
-    func swipeLeft() {
-        guard case .swiping = state else { return }
-        previousGene = currentGene
-        currentGene = sobolExplorer.perturb(currentGene, scale: 0.05)
-        swipeGeneration += 1
-        state = .swiping(swipeGeneration)
-        recomputeGIF()
+    /// Swipe steers BOTH genes in the same direction.
+    /// They diverge because they started from different points.
+    func dualSwipe(_ direction: SwipeDirection) {
+        guard case .dualExplore = state else { return }
+        previousGeneA = geneA
+        previousGeneB = geneB
+
+        switch direction {
+        case .up:
+            geneA = perturbEpochAxis(geneA, scale: 0.03, increase: true)
+            geneB = perturbEpochAxis(geneB, scale: 0.03, increase: true)
+        case .down:
+            geneA = perturbEpochAxis(geneA, scale: 0.03, increase: false)
+            geneB = perturbEpochAxis(geneB, scale: 0.03, increase: false)
+        case .left:
+            geneA = sobolExplorer.perturb(geneA, scale: 0.05)
+            geneB = sobolExplorer.perturb(geneB, scale: 0.05)
+        case .right:
+            geneA = previousGeneA
+            geneB = previousGeneB
+        }
+        generation += 1
+        state = .dualExplore(generation)
     }
 
-    /// RIGHT swipe: revert to previous gene. Recompute GIF.
-    func swipeRight() {
-        guard case .swiping = state else { return }
-        let temp = currentGene
-        currentGene = previousGene
-        previousGene = temp
-        recomputeGIF()
+    // MARK: - Phase 2: Composition (irreversible)
+
+    /// TAP+HOLD drag A→B or B→A triggers composition.
+    /// This is IRREVERSIBLE. A and B are consumed.
+    func compose(order: CompositionOrder) {
+        guard case .dualExplore = state else { return }
+
+        switch order {
+        case .aIntoB:
+            baseGene = geneA
+            otherGene = geneB
+        case .bIntoA:
+            baseGene = geneB
+            otherGene = geneA
+        }
+
+        compositeAlpha = 0.5
+        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
+        state = .composing(order)
+
+        // Immediately transition to refining
+        state = .refining(compositeAlpha)
     }
 
-    /// TAP: accept current gene. Transition to .done.
-    func tapAccept() {
-        guard case .swiping = state else { return }
-        state = .done
+    /// Compose two genes: base + α × (other - base)
+    private func composeGenes(base: GeneWeights, other: GeneWeights, alpha: Float) -> GeneWeights {
+        var weights = [Float](repeating: 0, count: GeneWeights.totalCount)
+        for i in 0..<GeneWeights.attentionCount {
+            let residual = other.weights[i] - base.weights[i]
+            weights[i] = base.weights[i] + alpha * residual
+        }
+        for i in GeneWeights.attentionCount..<GeneWeights.totalCount {
+            weights[i] = base.weights[i]  // CORE from base
+        }
+        return GeneWeights(weights: weights)
+    }
+
+    // MARK: - Phase 3: Refinement (CW/CCW adjust α)
+
+    /// Clockwise: increase α (more of the other gene's influence)
+    func rotateCW(delta: Float = 0.05) {
+        guard case .refining(let alpha) = state else { return }
+        compositeAlpha = min(1, alpha + delta)
+        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
+        state = .refining(compositeAlpha)
+    }
+
+    /// Counter-clockwise: decrease α (back toward base)
+    func rotateCCW(delta: Float = 0.05) {
+        guard case .refining(let alpha) = state else { return }
+        compositeAlpha = max(0, alpha - delta)
+        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
+        state = .refining(compositeAlpha)
+    }
+
+    /// TAP in any phase = export the current GIF
+    func tapExport() {
+        // Export is available at any phase — doesn't end the session in Phase 1
+        // In Phase 3: TAP exports and ends
+        if case .refining = state {
+            state = .done
+        }
+        // In Phase 1: TAP exports but stays in dualExplore (handled by the view)
     }
 
     /// Build a VoxelCube from the last captured+quantized frames.
@@ -180,7 +265,7 @@ final class CameraManager: NSObject, ObservableObject {
     private func recomputeGIF() {
         let capturedFrames = frameBuffer.exportCapturedFrames()
         guard !capturedFrames.isEmpty else { return }
-        let gene = currentGene
+        let gene = geneA  // Phase 1: use gene A for recompute
 
         Task.detached(priority: .userInitiated) {
             var quantizedFrames: [QuantizedFrame] = []
@@ -255,13 +340,6 @@ final class CameraManager: NSObject, ObservableObject {
                 await MainActor.run {
                     self.gifData = data
                     self.gifMeasure = overallMeasure
-
-                    // Place in MAP-Elites grid
-                    self.eliteMap.place(
-                        gene: gene, beauty: beauty,
-                        descriptor: descriptor, gifData: data,
-                        entropy: entropy
-                    )
                 }
             }
         }
@@ -703,10 +781,12 @@ final class CameraManager: NSObject, ObservableObject {
                 self.processBoards = nil
                 self.gifData = gifData
                 self.gifMeasure = measure
-                self.swipeGeneration = 0
+                self.generation = 0
                 self.sobolExplorer.reset()
-                self.eliteMap.reset()
-                self.state = .swiping(0)  // enter swipe-to-train loop
+                // Initialize two genes: A = default, B = perturbed
+                self.geneA = GeneWeights.defaultWeights()
+                self.geneB = self.geneA.perturbed(scale: 0.05, seed: 42)
+                self.state = .dualExplore(0)  // Phase 1: dual exploration
             }
         }
     }
