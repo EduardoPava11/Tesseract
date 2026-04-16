@@ -350,7 +350,7 @@ final class CameraManager: NSObject, ObservableObject {
                     allConfidence: gateArr,
                     allPreferred: preferredArr
                 )
-                print("Gene training: loss=\(loss) steps=\(trainer.totalSteps)")
+                logger.info("Gene training: loss=\(loss) steps=\(trainer.totalSteps)")
             }
         }
         #endif

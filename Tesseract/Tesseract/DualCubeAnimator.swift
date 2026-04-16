@@ -62,6 +62,20 @@ class DualCubeAnimator: ObservableObject {
     var oldFramesB: [[UInt8]] = []
     var newFramesB: [[UInt8]] = []
 
+    /// Cached side/top projections (recomputed only on cube/gene change, not per frame)
+    private var cachedSideA: [[UInt8]] = []
+    private var cachedSideB: [[UInt8]] = []
+    private var cachedTopA: [[UInt8]] = []
+    private var cachedTopB: [[UInt8]] = []
+
+    /// Rebuild side/top caches (call when cubes change, NOT per frame)
+    func rebuildProjectionCaches() {
+        cachedSideA = cubeA.sliceAll(axis: .x)
+        cachedSideB = cubeB.sliceAll(axis: .x)
+        cachedTopA = cubeA.sliceAll(axis: .y)
+        cachedTopB = cubeB.sliceAll(axis: .y)
+    }
+
     /// Which axis was last dominant
     private var lastAxis: SliceAxis = .z
 
@@ -88,6 +102,9 @@ class DualCubeAnimator: ObservableObject {
 
         if let f = framesA.first { self.frameA = f }
         if let f = framesB.first { self.frameB = f }
+
+        // Cache side/top projections once at init
+        rebuildProjectionCaches()
     }
 
     // ── Playback (20fps, synced) ──
@@ -117,15 +134,11 @@ class DualCubeAnimator: ObservableObject {
             // Curtain complete: show new frames directly
             frameA = newFramesA.indices.contains(frameIndex) ? newFramesA[frameIndex] : []
             frameB = newFramesB.indices.contains(frameIndex) ? newFramesB[frameIndex] : []
-            // Side/top projections (sliced from the voxel cubes)
-            let sA = cubeA.sliceAll(axis: .x)
-            let sB = cubeB.sliceAll(axis: .x)
-            let tA = cubeA.sliceAll(axis: .y)
-            let tB = cubeB.sliceAll(axis: .y)
-            sideFrameA = sA.indices.contains(frameIndex) ? sA[frameIndex] : []
-            sideFrameB = sB.indices.contains(frameIndex) ? sB[frameIndex] : []
-            topFrameA = tA.indices.contains(frameIndex) ? tA[frameIndex] : []
-            topFrameB = tB.indices.contains(frameIndex) ? tB[frameIndex] : []
+            // Side/top from CACHED projections (not recomputed per frame)
+            sideFrameA = cachedSideA.indices.contains(frameIndex) ? cachedSideA[frameIndex] : []
+            sideFrameB = cachedSideB.indices.contains(frameIndex) ? cachedSideB[frameIndex] : []
+            topFrameA = cachedTopA.indices.contains(frameIndex) ? cachedTopA[frameIndex] : []
+            topFrameB = cachedTopB.indices.contains(frameIndex) ? cachedTopB[frameIndex] : []
         } else {
             // Curtain in progress: blend row-by-row
             frameA = blendWithCurtain(
@@ -256,7 +269,7 @@ class DualCubeAnimator: ObservableObject {
                 self.cubeB = localCubeB
                 self.newFramesA = framesA
                 self.newFramesB = framesB
-                // Curtain is already in progress — new frames will reveal gradually
+                self.rebuildProjectionCaches()  // rebuild side/top after NN update
             }
         }
     }

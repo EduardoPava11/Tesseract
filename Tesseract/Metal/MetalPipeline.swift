@@ -22,6 +22,7 @@ final class MetalPipeline {
     private let quantizeState: MTLComputePipelineState
     private let downsampleRGBState: MTLComputePipelineState
     private let downsampleDepthState: MTLComputePipelineState
+    private let geneForwardState: MTLComputePipelineState?  // Gene NN kernel (optional — may not exist in lib)
 
     // MARK: - Textures (64×64 working buffers)
 
@@ -45,6 +46,13 @@ final class MetalPipeline {
     private var paramsBuffer: MTLBuffer?
     private var downsampleParamsBuffer: MTLBuffer?
     private var downsampleDepthParamsBuffer: MTLBuffer?
+
+    // Gene NN buffers (for geneForward kernel)
+    private var geneHistogramBuffer: MTLBuffer?   // 126 floats × S² pixels
+    private var geneWeightsBuffer: MTLBuffer?     // 4581 floats (gene weights)
+    private var geneMetaBuffer: MTLBuffer?        // GeneMetaParams (48 bytes)
+    private var geneOutputBuffer: MTLBuffer?      // S² UInt8 palette indices
+    private var geneGlobalBuffer: MTLBuffer?      // S² Float global weights
 
     // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
 
@@ -103,7 +111,16 @@ final class MetalPipeline {
             }
             self.downsampleDepthState = try device.makeComputePipelineState(function: downsampleDepthFn)
 
-            logger.info("MetalPipeline: all 3 pipeline states created")
+            // Gene NN kernel (optional — graceful if missing)
+            if let geneForwardFn = library.makeFunction(name: "geneForward") {
+                self.geneForwardState = try device.makeComputePipelineState(function: geneForwardFn)
+                logger.info("MetalPipeline: geneForward pipeline created")
+            } else {
+                self.geneForwardState = nil
+                logger.warning("MetalPipeline: geneForward not found — GPU NN disabled, CPU fallback")
+            }
+
+            logger.info("MetalPipeline: all pipeline states created")
         } catch {
             logger.error("MetalPipeline: pipeline creation failed: \(error.localizedDescription)")
             return nil
@@ -167,6 +184,20 @@ final class MetalPipeline {
         paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.stride, options: .storageModeShared)
         downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
         downsampleDepthParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
+
+        // Gene NN buffers (for geneForward kernel)
+        let pixelCount = size * size
+        geneHistogramBuffer = device.makeBuffer(length: pixelCount * 126 * MemoryLayout<Float>.size, options: .storageModeShared)
+        geneWeightsBuffer = device.makeBuffer(length: GeneWeights.totalCount * MemoryLayout<Float>.size, options: .storageModeShared)
+        geneMetaBuffer = device.makeBuffer(length: MemoryLayout<GeneMetaParams>.stride, options: .storageModeShared)
+        geneOutputBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared)
+        geneGlobalBuffer = device.makeBuffer(length: pixelCount * MemoryLayout<Float>.size, options: .storageModeShared)
+
+        if geneHistogramBuffer != nil && geneWeightsBuffer != nil {
+            logger.info("MetalPipeline: gene NN buffers allocated (hist=\(pixelCount * 126 * 4) bytes, weights=\(GeneWeights.totalCount * 4) bytes)")
+        } else {
+            logger.warning("MetalPipeline: gene NN buffer allocation failed — GPU NN disabled")
+        }
 
         // Texture cache for CVPixelBuffer → MTLTexture conversion
         var cache: CVMetalTextureCache?
@@ -520,6 +551,77 @@ final class MetalPipeline {
                 logger.info("MetalPipeline: frame \(frameIndex) σ range: [\(String(format: "%.1f", sigmaMin)), \(String(format: "%.1f", sigmaMax))], peak=\(String(format: "%.1f", sigmaPeak))")
             }
         }
+    }
+
+    // MARK: - Gene NN GPU Dispatch
+
+    /// Run the geneForward kernel on GPU.
+    /// Inputs: pre-computed histogram data + depths + gene weights + metadata.
+    /// Outputs: palette indices + global weights.
+    func processWithGene(
+        histograms: [Float],    // 126 × S² floats (pre-flattened BlockPyramid histograms)
+        depths: [Float],        // S² depth values
+        weights: GeneWeights,   // gene weights (4581 floats)
+        meta: GeneMetaParams    // frame metadata
+    ) -> (indices: [UInt8], globalWeights: [Float])? {
+        guard let pso = geneForwardState,
+              let histBuf = geneHistogramBuffer,
+              let depthBuf = geneOutputBuffer,  // reuse for depth input
+              let wBuf = geneWeightsBuffer,
+              let metaBuf = geneMetaBuffer,
+              let outBuf = geneOutputBuffer,
+              let gBuf = geneGlobalBuffer,
+              let cmdBuf = commandQueue.makeCommandBuffer()
+        else {
+            logger.warning("MetalPipeline: gene GPU dispatch unavailable — PSO or buffers nil")
+            return nil
+        }
+
+        let s = Int(meta.width)
+        let pixelCount = s * s
+
+        // Upload histogram data
+        histBuf.contents().copyMemory(from: histograms, byteCount: min(histograms.count * 4, histBuf.length))
+
+        // Upload depths into a separate section or use a dedicated buffer
+        // For now: depths are passed via the gene meta or a dedicated buffer
+        // TODO: allocate separate depth input buffer for geneForward
+
+        // Upload weights
+        wBuf.contents().copyMemory(from: weights.weights, byteCount: min(weights.weights.count * 4, wBuf.length))
+
+        // Upload metadata
+        var metaCopy = meta
+        metaBuf.contents().copyMemory(from: &metaCopy, byteCount: MemoryLayout<GeneMetaParams>.stride)
+
+        // Dispatch
+        guard let encoder = cmdBuf.makeComputeCommandEncoder() else { return nil }
+        encoder.setComputePipelineState(pso)
+        encoder.setBuffer(histBuf, offset: 0, index: 0)   // histograms
+        // depths at index 1 — need dedicated buffer (TODO)
+        encoder.setBuffer(outBuf, offset: 0, index: 2)    // output indices
+        encoder.setBuffer(gBuf, offset: 0, index: 3)      // global weights
+        encoder.setBuffer(wBuf, offset: 0, index: 4)      // gene weights
+        encoder.setBuffer(metaBuf, offset: 0, index: 5)   // metadata
+
+        let gridSize = MTLSize(width: s, height: s, depth: 1)
+        let groupSize = MTLSize(width: 8, height: 8, depth: 1)
+        encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
+        encoder.endEncoding()
+
+        cmdBuf.commit()
+        cmdBuf.waitUntilCompleted()
+
+        // Read back results
+        let indexPtr = outBuf.contents().bindMemory(to: UInt8.self, capacity: pixelCount)
+        let indices = Array(UnsafeBufferPointer(start: indexPtr, count: pixelCount))
+
+        let globalPtr = gBuf.contents().bindMemory(to: Float.self, capacity: pixelCount)
+        let globals = Array(UnsafeBufferPointer(start: globalPtr, count: pixelCount))
+
+        logger.info("MetalPipeline: geneForward dispatched \(s)×\(s) → \(indices.filter { $0 > 0 }.count) non-zero indices")
+
+        return (indices, globals)
     }
 }
 

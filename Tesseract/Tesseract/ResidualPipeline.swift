@@ -277,11 +277,12 @@ func teacherTargets(
 /// Energy of a residual assignment: lower = better
 struct Energy {
     let reconstruction: Float  // Hamming distance from teacher
-    let beauty: Float          // 1/M (inverse Birkhoff)
-    let smoothness: Float      // spatial coherence
+    let beauty: Float          // 1/M (inverse Birkhoff, lower = more beautiful)
+    let smoothness: Float      // spatial incoherence (lower = smoother)
     let total: Float           // weighted sum
 
-    static func compute(
+    /// Compute energy for a single pixel (teacher vs final)
+    static func computePixel(
         teacher: TeacherOutput, final: FinalOutput,
         alpha: Float = 0.4, beta: Float = 0.4, gamma: Float = 0.2
     ) -> Energy {
@@ -291,14 +292,37 @@ struct Energy {
             (teacher.b != final.b ? 1 : 0) +
             (teacher.c != final.c ? 1 : 0)
         )
-        // beauty and smoothness computed from full frame (placeholder)
-        let beauty: Float = 0
-        let smooth: Float = 0
-        return Energy(
-            reconstruction: recon,
-            beauty: beauty,
-            smoothness: smooth,
-            total: alpha * recon + beta * beauty + gamma * smooth
-        )
+        return Energy(reconstruction: recon, beauty: 0, smoothness: 0,
+                       total: alpha * recon)
+    }
+
+    /// Compute energy for a full frame of palette indices.
+    /// beauty = inverse Birkhoff. smoothness = neighbor coherence.
+    static func computeFrame(
+        indices: [UInt8], width: Int,
+        alpha: Float = 0.4, beta: Float = 0.4, gamma: Float = 0.2
+    ) -> Energy {
+        // Beauty: inverse Birkhoff measure
+        let measure = BirkhoffMeasure(paletteIndices: indices)
+        let beauty = 1.0 / max(measure.beauty, 0.001)
+
+        // Smoothness: mean absolute difference between horizontal neighbors
+        var totalDiff: Float = 0
+        var count: Float = 0
+        for i in 0..<indices.count {
+            let x = i % width
+            if x + 1 < width {
+                totalDiff += abs(Float(Int(indices[i]) - Int(indices[i + 1])))
+                count += 1
+            }
+            if i + width < indices.count {
+                totalDiff += abs(Float(Int(indices[i]) - Int(indices[i + width])))
+                count += 1
+            }
+        }
+        let smooth = count > 0 ? totalDiff / (count * 255.0) : 0  // normalized to [0,1]
+
+        let total = alpha * 0 + beta * beauty + gamma * smooth  // recon=0 for full frame
+        return Energy(reconstruction: 0, beauty: beauty, smoothness: smooth, total: total)
     }
 }
