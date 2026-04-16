@@ -472,49 +472,73 @@ struct ContentView: View {
         VStack(spacing: 0) {
             Spacer(minLength: 4)
 
-            // ── GIF A (top point in gene space) ──
-            gifPointView(frame: dualAnimator.frameA, label: "A")
-                .onTapGesture { shareCurrentGIF() }  // TAP = export
-                .onLongPressGesture {
-                    // TAP+HOLD on A → compose A+B (A is base)
-                    camera.compose(order: .aIntoB)
-                }
+            // ── Cube A (top point in gene space) ──
+            CubeGIFView(
+                frontFrame: dualAnimator.frameA,
+                sideFrame: dualAnimator.sideFrameA,
+                topFrame: dualAnimator.topFrameA,
+                rotationY: Double(dualAnimator.rotation.angleY),
+                rotationX: Double(dualAnimator.rotation.angleX),
+                size: 180,
+                buildImage: { camera.buildPreviewImage(indices: $0) },
+                label: "A"
+            )
+            .onTapGesture { shareCurrentGIF() }
+            .onLongPressGesture { camera.compose(order: .aIntoB) }
 
-            Spacer(minLength: 12)
+            Spacer(minLength: 8)
 
-            // Gesture hints
-            HStack(spacing: 16) {
-                Text("↑temporal ↓stable ←explore →revert")
+            // Frame sync + hints
+            VStack(spacing: 2) {
+                Text("gen \(generation)  \(dualAnimator.frameIndex + 1)/\(dualAnimator.totalFrames)")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.2))
+                Text("↑↓←→ steer · hold+drag = compose")
                     .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.25))
+                    .foregroundStyle(.white.opacity(0.2))
             }
 
-            // Frame sync
-            Text("gen \(generation)  \(dualAnimator.frameIndex + 1)/\(dualAnimator.totalFrames)")
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.2))
+            Spacer(minLength: 8)
 
-            Spacer(minLength: 12)
-
-            // ── GIF B (bottom point in gene space) ──
-            gifPointView(frame: dualAnimator.frameB, label: "B")
-                .onTapGesture { shareCurrentGIF() }  // TAP = export
-                .onLongPressGesture {
-                    // TAP+HOLD on B → compose B+A (B is base)
-                    camera.compose(order: .bIntoA)
-                }
+            // ── Cube B (bottom point in gene space) ──
+            CubeGIFView(
+                frontFrame: dualAnimator.frameB,
+                sideFrame: dualAnimator.sideFrameB,
+                topFrame: dualAnimator.topFrameB,
+                rotationY: Double(dualAnimator.rotation.angleY),
+                rotationX: Double(dualAnimator.rotation.angleX),
+                size: 180,
+                buildImage: { camera.buildPreviewImage(indices: $0) },
+                label: "B"
+            )
+            .onTapGesture { shareCurrentGIF() }
+            .onLongPressGesture { camera.compose(order: .bIntoA) }
 
             Spacer(minLength: 4)
         }
         .gesture(
-            DragGesture(minimumDistance: 40)
+            DragGesture(minimumDistance: 20)
+                .onChanged { value in
+                    // Slow drag = rotate cubes in 3D
+                    dualAnimator.rotation.angleY = Float(value.translation.width) * 0.005
+                    dualAnimator.rotation.angleX = Float(value.translation.height) * 0.005
+                }
                 .onEnded { value in
-                    let dx = value.translation.width
-                    let dy = value.translation.height
-                    if abs(dx) > abs(dy) {
-                        camera.dualSwipe(dx < 0 ? .left : .right)
-                    } else {
-                        camera.dualSwipe(dy < 0 ? .up : .down)
+                    // Fast flick = directional swipe (steer genes)
+                    let speed = sqrt(pow(value.velocity.width, 2) + pow(value.velocity.height, 2))
+                    if speed > 500 {
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        if abs(dx) > abs(dy) {
+                            camera.dualSwipe(dx < 0 ? .left : .right)
+                        } else {
+                            camera.dualSwipe(dy < 0 ? .up : .down)
+                        }
+                    }
+                    // Spring back to front view
+                    withAnimation(.spring(duration: 0.3)) {
+                        dualAnimator.rotation.angleY = 0
+                        dualAnimator.rotation.angleX = 0
                     }
                 }
         )

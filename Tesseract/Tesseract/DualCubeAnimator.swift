@@ -24,9 +24,15 @@ class DualCubeAnimator: ObservableObject {
 
     // ── Display State ──
 
-    /// Two frames playing in sync: left and right GIF
-    @Published var frameA: [UInt8] = []   // current frame for cube A
-    @Published var frameB: [UInt8] = []   // current frame for cube B
+    /// Front frames playing in sync
+    @Published var frameA: [UInt8] = []   // front face for cube A
+    @Published var frameB: [UInt8] = []   // front face for cube B
+    /// Side projection frames (spatiotemporal Y×T)
+    @Published var sideFrameA: [UInt8] = []
+    @Published var sideFrameB: [UInt8] = []
+    /// Top projection frames (spatiotemporal X×T)
+    @Published var topFrameA: [UInt8] = []
+    @Published var topFrameB: [UInt8] = []
     @Published var frameIndex: Int = 0
     @Published var totalFrames: Int = 64
     @Published var isPlaying: Bool = true
@@ -111,6 +117,15 @@ class DualCubeAnimator: ObservableObject {
             // Curtain complete: show new frames directly
             frameA = newFramesA.indices.contains(frameIndex) ? newFramesA[frameIndex] : []
             frameB = newFramesB.indices.contains(frameIndex) ? newFramesB[frameIndex] : []
+            // Side/top projections (sliced from the voxel cubes)
+            let sA = cubeA.sliceAll(axis: .x)
+            let sB = cubeB.sliceAll(axis: .x)
+            let tA = cubeA.sliceAll(axis: .y)
+            let tB = cubeB.sliceAll(axis: .y)
+            sideFrameA = sA.indices.contains(frameIndex) ? sA[frameIndex] : []
+            sideFrameB = sB.indices.contains(frameIndex) ? sB[frameIndex] : []
+            topFrameA = tA.indices.contains(frameIndex) ? tA[frameIndex] : []
+            topFrameB = tB.indices.contains(frameIndex) ? tB[frameIndex] : []
         } else {
             // Curtain in progress: blend row-by-row
             frameA = blendWithCurtain(
