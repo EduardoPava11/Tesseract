@@ -75,7 +75,7 @@ struct PerfectQuantizer {
         // Then wrap as ComposedColor using the Axes types.
         // ════════════════════════════════════════════
 
-        let w = 64
+        let w = CameraConfig.outputSize  // 64 or 128 depending on mode
         var errorR = [Float](repeating: 0, count: n)
         var errorG = [Float](repeating: 0, count: n)
         var errorB = [Float](repeating: 0, count: n)

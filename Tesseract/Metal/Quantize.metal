@@ -139,12 +139,14 @@ kernel void quantizeWithDepth(
 // § 5. DOWNSAMPLE KERNEL: camera resolution → 64×64
 // ════════════════════════════════════════════════════════════════
 
-// Dynamic downsample params (computed from actual buffer dimensions)
+// Dynamic downsample params (universal 768 crop, from Block.hs)
 struct DownsampleParams {
-    uint cropX;         // (width - cropSize) / 2
-    uint cropY;         // (height - cropSize) / 2
-    uint step;          // cropSize / 64
+    uint cropX;         // (sensorWidth - cropSize) / 2
+    uint cropY;         // (sensorHeight - cropSize) / 2
+    uint step;          // cropSize / outputSize, integer
     uint halfStep;      // step / 2
+    uint outputSize;    // 64, 128, or 256
+    uint _pad;          // pad to 24 bytes (6 × uint)
 };
 
 // Port of FrameGeometry.hs rgbSource/depthSource:
@@ -159,12 +161,12 @@ kernel void downsampleRGB(
     constant DownsampleParams& params           [[buffer(0)]],
     uint2 gid                                   [[thread_position_in_grid]]
 ) {
-    if (gid.x >= 64 || gid.y >= 64) return;
+    if (gid.x >= params.outputSize || gid.y >= params.outputSize) return;
 
     // 90° CCW: videoRotationAngle=90 reports portrait dims but pixel memory
     // may still be landscape. Rotate in the read.
     uint srcX = params.cropX + gid.y * params.step + params.halfStep;
-    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
+    uint srcY = params.cropY + (params.outputSize - 1 - gid.x) * params.step + params.halfStep;
 
     float4 color = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(color, gid);
@@ -176,11 +178,11 @@ kernel void downsampleDepth(
     constant DownsampleParams& params           [[buffer(0)]],
     uint2 gid                                   [[thread_position_in_grid]]
 ) {
-    if (gid.x >= 64 || gid.y >= 64) return;
+    if (gid.x >= params.outputSize || gid.y >= params.outputSize) return;
 
     // 90° CCW (same as RGB)
     uint srcX = params.cropX + gid.y * params.step + params.halfStep;
-    uint srcY = params.cropY + (63 - gid.x) * params.step + params.halfStep;
+    uint srcY = params.cropY + (params.outputSize - 1 - gid.x) * params.step + params.halfStep;
 
     float4 depth = srcTexture.read(uint2(srcX, srcY));
     dstTexture.write(depth, gid);

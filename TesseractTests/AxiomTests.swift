@@ -153,11 +153,13 @@ final class AxiomTests: XCTestCase {
     // EPOCH AXIOMS E1-E3
     // ════════════════════════════════════════════════
 
-    // (E1) 4 epochs × 16 frames = 64
+    // (E1) 4 epochs × (K/4) frames = K
     func testE1_epochFrames() {
+        let k = CameraConfig.totalFrames
+        let fpe = k / 4  // frames per epoch
         for d in 0..<4 {
-            let frames = (0..<64).filter { $0 / 16 == d }
-            XCTAssertEqual(frames.count, 16, "Epoch \(d) doesn't have 16 frames")
+            let frames = (0..<k).filter { $0 / fpe == d }
+            XCTAssertEqual(frames.count, fpe, "Epoch \(d) should have \(fpe) frames")
         }
     }
 
@@ -183,7 +185,8 @@ final class AxiomTests: XCTestCase {
 
     // Σ P(d|z) = 1 for all z
     func testCadence_normalized() {
-        for z in 0..<64 {
+        let k = CameraConfig.totalFrames
+        for z in 0..<k {
             let probs = BinomialCadence.epochProbabilities(frame: z)
             let sum = probs[0] + probs[1] + probs[2] + probs[3]
             XCTAssertEqual(sum, 1.0, accuracy: eps, "Cadence not normalized at frame \(z)")
@@ -192,7 +195,8 @@ final class AxiomTests: XCTestCase {
 
     // P(d|z) is smooth: <10% change per frame
     func testCadence_smooth() {
-        for z in 0..<63 {
+        let k = CameraConfig.totalFrames
+        for z in 0..<(k - 1) {
             let p1 = BinomialCadence.epochProbabilities(frame: z)
             let p2 = BinomialCadence.epochProbabilities(frame: z + 1)
             for d in 0..<4 {
@@ -302,13 +306,14 @@ final class AxiomTests: XCTestCase {
     /// Verify that GIF encoding preserves the 256-entry tesseract palette.
     /// The Global Color Table (bytes 13-780) must match TesseractPalette.gifColorTable.
     func testGIF_palettePreserved() {
-        // Create a frame with known indices (0,1,2,...,255 repeated 16×)
-        let indices: [UInt8] = (0..<4096).map { UInt8($0 % 256) }
+        // Create a frame with known indices (0,1,2,...,255 repeated)
+        let n = CameraConfig.pixelCount
+        let indices: [UInt8] = (0..<n).map { UInt8($0 % 256) }
         let frame = QuantizedFrame(
             index: 0,
             paletteIndices: indices,
             rawRGB: nil,
-            depths: [Float](repeating: 0.5, count: 4096),
+            depths: [Float](repeating: 0.5, count: n),
             measure: BirkhoffMeasure(paletteIndices: indices),
             subjectAnalysis: nil,
             anchorTrace: nil,
@@ -399,10 +404,11 @@ final class AxiomTests: XCTestCase {
     }
 
     func testGIF_GCTinEncodedFile() {
-        let indices: [UInt8] = (0..<4096).map { UInt8($0 % 256) }
+        let n = CameraConfig.pixelCount
+        let indices: [UInt8] = (0..<n).map { UInt8($0 % 256) }
         let frame = QuantizedFrame(
             index: 0, paletteIndices: indices, rawRGB: nil,
-            depths: [Float](repeating: 0.5, count: 4096),
+            depths: [Float](repeating: 0.5, count: n),
             measure: BirkhoffMeasure(paletteIndices: indices),
             subjectAnalysis: nil, anchorTrace: nil, timestamp: 0
         )
@@ -420,15 +426,19 @@ final class AxiomTests: XCTestCase {
     // ════════════════════════════════════════════════
 
     /// Synthetic test data: gradient RGB + center-near depth
+    /// Uses CameraConfig.outputSize so it works at any CubeLevel.
     private func syntheticFrame() -> (rgb: [(Float,Float,Float)], depths: [Float]) {
-        let rgb = (0..<4096).map { i -> (Float,Float,Float) in
-            let x = Float(i % 64) / 63.0
-            let y = Float(i / 64) / 63.0
+        let s = CameraConfig.outputSize  // 64, 128, or 256
+        let n = s * s
+        let rgb = (0..<n).map { i -> (Float,Float,Float) in
+            let x = Float(i % s) / Float(s - 1)
+            let y = Float(i / s) / Float(s - 1)
             return (x, y, 0.5)
         }
-        let depths = (0..<4096).map { i -> Float in
-            let x = abs(Float(i % 64) - 31.5) / 31.5
-            let y = abs(Float(i / 64) - 31.5) / 31.5
+        let half = Float(s - 1) / 2.0
+        let depths = (0..<n).map { i -> Float in
+            let x = abs(Float(i % s) - half) / half
+            let y = abs(Float(i / s) - half) / half
             return 1.0 - sqrt(x*x + y*y) / sqrt(2.0)
         }
         return (rgb, depths)
@@ -437,8 +447,8 @@ final class AxiomTests: XCTestCase {
     /// PQ1: All 4096 pixels assigned, all indices in [0,255]
     func testPQ1_allAssigned() {
         let (rgb, depths) = syntheticFrame()
-        let indices = PerfectQuantizer.perfectFrame(frameIndex: 8, rgb: rgb, depths: depths)
-        XCTAssertEqual(indices.count, 4096, "PQ1: must produce 4096 indices")
+        let indices = PerfectQuantizer.quantizeFrame(frameIndex: 8, rgb: rgb, depths: depths)
+        XCTAssertEqual(indices.count, CameraConfig.pixelCount, "PQ1: must produce \(CameraConfig.pixelCount) indices")
         for (i, idx) in indices.enumerated() {
             XCTAssertTrue(idx <= 255, "PQ1: index \(i) = \(idx) > 255")
         }
@@ -447,15 +457,15 @@ final class AxiomTests: XCTestCase {
     /// PQ3: Deterministic — same input → same output
     func testPQ3_deterministic() {
         let (rgb, depths) = syntheticFrame()
-        let run1 = PerfectQuantizer.perfectFrame(frameIndex: 24, rgb: rgb, depths: depths)
-        let run2 = PerfectQuantizer.perfectFrame(frameIndex: 24, rgb: rgb, depths: depths)
+        let run1 = PerfectQuantizer.quantizeFrame(frameIndex: 24, rgb: rgb, depths: depths)
+        let run2 = PerfectQuantizer.quantizeFrame(frameIndex: 24, rgb: rgb, depths: depths)
         XCTAssertEqual(run1, run2, "PQ3: same input must produce identical output")
     }
 
     /// PQ5: Color (a,b,c) preserved from floor quantization
     func testPQ5_colorPreserved() {
         let (rgb, depths) = syntheticFrame()
-        let indices = PerfectQuantizer.perfectFrame(frameIndex: 16, rgb: rgb, depths: depths)
+        let indices = PerfectQuantizer.quantizeFrame(frameIndex: 16, rgb: rgb, depths: depths)
         for (i, idx) in indices.enumerated() {
             let (r, g, b) = rgb[i]
             let expectedA = min(3, max(0, Int(r * 4.0)))
@@ -475,12 +485,14 @@ final class AxiomTests: XCTestCase {
     // ════════════════════════════════════════════════
 
     func testDepthSigma_exactValues() {
-        XCTAssertEqual(BinomialCadence.sigmaForDepth(1.0), 7.875, accuracy: eps,
-            "Near (face): σ = 7.875")
-        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.0), 15.75, accuracy: eps,
-            "Far (wall): σ = 15.75")
-        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.5), 11.8125, accuracy: eps,
-            "Mid: σ = 11.8125")
+        // σ(depth) = σ_base × (2 - depth), σ_base = (K-1)/8
+        let sb = BinomialCadence.sigmaBase  // (K-1)/8, depends on CameraConfig.level
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(1.0), sb * 1.0, accuracy: eps,
+            "Near (face): σ = σ_base × 1")
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.0), sb * 2.0, accuracy: eps,
+            "Far (wall): σ = σ_base × 2")
+        XCTAssertEqual(BinomialCadence.sigmaForDepth(0.5), sb * 1.5, accuracy: eps,
+            "Mid: σ = σ_base × 1.5")
     }
 
     func testDepthSigma_monotonic() {
@@ -517,7 +529,7 @@ final class AxiomTests: XCTestCase {
     /// Black and white anchors exist in a gradient frame
     func testAnchors_existInGradient() {
         let (rgb, depths) = syntheticFrame()
-        let indices = PerfectQuantizer.perfectFrame(frameIndex: 8, rgb: rgb, depths: depths)
+        let indices = PerfectQuantizer.quantizeFrame(frameIndex: 8, rgb: rgb, depths: depths)
         let anchors = PerfectQuantizer.findAnchors(indices: indices)
 
         XCTAssertNotNil(anchors.blackPixelIndex, "Gradient should have a black pixel (a=0,b=0,c=0)")
@@ -529,8 +541,9 @@ final class AxiomTests: XCTestCase {
         let (rgb, depths) = syntheticFrame()
         var blackEpochs: [UInt8] = []
 
-        for z in 0..<64 {
-            let indices = PerfectQuantizer.perfectFrame(frameIndex: z, rgb: rgb, depths: depths)
+        let k = CameraConfig.totalFrames
+        for z in 0..<k {
+            let indices = PerfectQuantizer.quantizeFrame(frameIndex: z, rgb: rgb, depths: depths)
             let anchors = PerfectQuantizer.findAnchors(indices: indices)
             if let e = anchors.blackEpoch {
                 blackEpochs.append(e)
@@ -538,7 +551,7 @@ final class AxiomTests: XCTestCase {
         }
 
         // Black should exist in most frames
-        XCTAssertGreaterThan(blackEpochs.count, 48,
+        XCTAssertGreaterThan(blackEpochs.count, k * 3 / 4,
             "Black anchor should exist in >75% of frames")
 
         // Epochs should progress 0→1→2→3 across the 64 frames
@@ -560,10 +573,11 @@ final class AxiomTests: XCTestCase {
     func testPipeline_syntheticFullRoundtrip() {
         let (rgb, depths) = syntheticFrame()
 
-        // Process all 64 frames
+        // Process all K frames (64, 32, or 16 depending on level)
+        let totalFrames = CameraConfig.totalFrames
         var frames: [QuantizedFrame] = []
-        for z in 0..<64 {
-            let indices = PerfectQuantizer.perfectFrame(frameIndex: z, rgb: rgb, depths: depths)
+        for z in 0..<totalFrames {
+            let indices = PerfectQuantizer.quantizeFrame(frameIndex: z, rgb: rgb, depths: depths)
             let measure = BirkhoffMeasure(paletteIndices: indices)
             let subject = PerfectQuantizer.analyzeSubject(depths: depths)
             let anchors = PerfectQuantizer.findAnchors(indices: indices)
@@ -576,7 +590,7 @@ final class AxiomTests: XCTestCase {
 
         // Encode to GIF
         let gifData = GIFEncoder.encode(frames: frames)
-        XCTAssertNotNil(gifData, "64-frame GIF encoding should succeed")
+        XCTAssertNotNil(gifData, "\(totalFrames)-frame GIF encoding should succeed")
 
         guard let data = gifData else { return }
 

@@ -63,7 +63,7 @@ struct GIFEncoder {
 
         // ── 5. Comment Extension (Birkhoff measure) ──
         if let m = measure {
-            let comment = "Tesseract 4^4 | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | R1+R3=R4 sigma=\(String(format: "%.3f", BinomialCadence.sigma))"
+            let comment = "Tesseract 4^4 | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | R1+R3=R4 sigma=\(String(format: "%.3f", BinomialCadence.sigmaBase))"
             writeCommentExtension(comment, to: &data)
         }
 

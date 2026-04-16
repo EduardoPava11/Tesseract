@@ -2,8 +2,8 @@ name: Tesseract
 options:
   bundleIdPrefix: com.tesseract
   deploymentTarget:
-    iOS: "18.0"
-  xcodeVersion: "16.3"
+    iOS: "26.0"
+  xcodeVersion: "26.0"
   defaultConfig: Release
 
 configs:

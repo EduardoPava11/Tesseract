@@ -10,17 +10,17 @@ import simd
 /// A single quantized frame ready for GIF encoding.
 struct QuantizedFrame {
     let index: Int                // 0..63
-    let paletteIndices: [UInt8]   // 4096 entries (64×64)
-    let rawRGB: [(Float, Float, Float)]?  // 4096 sRGB pixels — nil in preview, populated during recording for CPU perfect pass
-    let depths: [Float]           // 4096 continuous depth values [0,1]
+    let paletteIndices: [UInt8]   // outputSize² entries
+    let rawRGB: [(Float, Float, Float)]?  // outputSize² sRGB pixels — nil in preview, populated during recording for CPU perfect pass
+    let depths: [Float]           // outputSize² continuous depth values [0,1]
     let measure: BirkhoffMeasure
     let subjectAnalysis: SubjectAnalysis?  // depth-based subject/background separation
     let anchorTrace: AnchorTrace?          // black/white distribution tail anchors
     let timestamp: TimeInterval
 
-    /// Width and height are always 64
-    static let size = 64
-    static let pixelCount = size * size  // 4096
+    /// Output dimensions from CameraConfig
+    static var size: Int { CameraConfig.outputSize }
+    static var pixelCount: Int { size * size }
 }
 
 /// Accumulates frames during recording, then produces the final 64-frame sequence.
@@ -34,7 +34,7 @@ final class FrameBuffer: @unchecked Sendable {
     private var isRecording = false
 
     /// Maximum frames for one GIF
-    private let capacity = CameraConfig.totalFrames  // 64
+    private var capacity: Int { CameraConfig.totalFrames }  // S×K=4096: 64, 32, or 16
 
     // MARK: - Recording Control
 

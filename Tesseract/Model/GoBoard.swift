@@ -180,7 +180,6 @@ func evaluateBlock(_ boards: GoBoards) -> BlockEval {
                      complexity: avgCmplx, ditherBudget: totalLibs)
 }
 
-/// Should this block get CoreML/KataGo evaluation?
-func needsNNEval(_ eval: BlockEval) -> Bool {
-    eval.complexity > 0.2
-}
+// needsNNEval removed — KataGo deprecated.
+// Territory + liberties from evaluateBlock() are sufficient.
+// See spec/deprecated/DEPRECATED.md for rationale.

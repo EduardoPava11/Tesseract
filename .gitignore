@@ -13,3 +13,9 @@ xcuserdata/
 # Generated
 Tesseract.xcodeproj/
 Tesseract/Info.plist
+
+# Haskell build artifacts
+spec/**/*.hi
+spec/**/*.o
+spec/**/*.dyn_hi
+spec/**/*.dyn_o

@@ -131,7 +131,7 @@ final class MetalPipeline {
     // MARK: - Resource Allocation
 
     private func allocateResources() -> Bool {
-        let size = CameraConfig.captureSize  // 64
+        let size = CameraConfig.outputSize  // 64
 
         // 64×64 RGBA Float16 textures
         let desc = MTLTextureDescriptor.texture2DDescriptor(
@@ -262,7 +262,7 @@ final class MetalPipeline {
             // Dynamic crop from actual buffer dimensions
             let srcW = rgbTexture.width
             let srcH = rgbTexture.height
-            var dsParams = DownsampleParamsSwift.fromBuffer(width: srcW, height: srcH)
+            var dsParams = DownsampleParamsSwift.fromRGBBuffer(width: srcW, height: srcH)
             downsampleParamsBuffer?.contents().copyMemory(
                 from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
             )
@@ -272,7 +272,7 @@ final class MetalPipeline {
             encoder.setTexture(rgb64, index: 1)
             encoder.setBuffer(downsampleParamsBuffer, offset: 0, index: 0)
 
-            let gridSize = MTLSize(width: 64, height: 64, depth: 1)
+            let gridSize = MTLSize(width: CameraConfig.outputSize, height: CameraConfig.outputSize, depth: 1)
             let groupSize = MTLSize(width: 8, height: 8, depth: 1)
             encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
 
@@ -283,7 +283,7 @@ final class MetalPipeline {
                 let _ = min(depthW, depthH)
 
                 // Dynamic crop for depth
-                var ddsParams = DownsampleParamsSwift.fromBuffer(width: depthW, height: depthH)
+                var ddsParams = DownsampleParamsSwift.fromDepthBuffer(width: depthW, height: depthH)
                 downsampleParamsBuffer?.contents().copyMemory(
                     from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
                 )
@@ -322,12 +322,12 @@ final class MetalPipeline {
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
             var params = QuantizeParamsSwift(
-                epochCenters: SIMD4<Float>(7.875, 23.625, 39.375, 55.125),
-                sigmaBase: 7.875,
+                epochCenters: BinomialCadence.centers,
+                sigmaBase: BinomialCadence.sigmaBase,
                 frameIndex: UInt32(frameIndex),
                 seed: seed,
-                width: UInt32(CameraConfig.captureSize),
-                height: UInt32(CameraConfig.captureSize),
+                width: UInt32(CameraConfig.outputSize),
+                height: UInt32(CameraConfig.outputSize),
                 debugFlags: logThisFrame ? 1 : 0
             )
 
@@ -343,7 +343,7 @@ final class MetalPipeline {
             encoder.setBuffer(epochCountsBuffer, offset: 0, index: 2)
             encoder.setBuffer(sigmaHistBuffer, offset: 0, index: 3)
 
-            let gridSize = MTLSize(width: 64, height: 64, depth: 1)
+            let gridSize = MTLSize(width: CameraConfig.outputSize, height: CameraConfig.outputSize, depth: 1)
             let groupSize = MTLSize(width: 8, height: 8, depth: 1)
             encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
             encoder.endEncoding()
@@ -400,11 +400,11 @@ final class MetalPipeline {
 
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
 
-        let gridSize = MTLSize(width: 64, height: 64, depth: 1)
+        let gridSize = MTLSize(width: CameraConfig.outputSize, height: CameraConfig.outputSize, depth: 1)
         let groupSize = MTLSize(width: 8, height: 8, depth: 1)
 
         // RGB downsample → rgb64Texture
-        var rgbParams = DownsampleParamsSwift.fromBuffer(width: rgbTexture.width, height: rgbTexture.height)
+        var rgbParams = DownsampleParamsSwift.fromRGBBuffer(width: rgbTexture.width, height: rgbTexture.height)
         downsampleParamsBuffer?.contents().copyMemory(
             from: &rgbParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
         )
@@ -416,7 +416,7 @@ final class MetalPipeline {
 
         // Depth downsample → depth64Texture (separate buffer!)
         if let depthTex = depthTexture {
-            var depthParams = DownsampleParamsSwift.fromBuffer(width: depthTex.width, height: depthTex.height)
+            var depthParams = DownsampleParamsSwift.fromDepthBuffer(width: depthTex.width, height: depthTex.height)
             downsampleDepthParamsBuffer?.contents().copyMemory(
                 from: &depthParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
             )
@@ -452,7 +452,7 @@ final class MetalPipeline {
     /// Call only after processFrame() succeeds (textures are filled).
     func readbackRGB() -> [(Float, Float, Float)]? {
         guard let tex = rgb64Texture else { return nil }
-        let size = CameraConfig.captureSize  // 64
+        let size = CameraConfig.outputSize  // 64
         let pixelCount = size * size
 
         // rgba16Float: 4 × Float16 = 8 bytes per pixel
@@ -478,7 +478,7 @@ final class MetalPipeline {
     /// Read back the downsampled 64×64 depth texture after GPU processing.
     func readbackDepth() -> [Float]? {
         guard let tex = depth64Texture else { return nil }
-        let size = CameraConfig.captureSize
+        let size = CameraConfig.outputSize
         let pixelCount = size * size
 
         // rgba16Float for depth: only R channel used
@@ -538,23 +538,38 @@ struct QuantizeParamsSwift {
     var _pad: UInt32 = 0            // offset 40 (pad to 48)
 }
 
-// Must match Metal DownsampleParams (16 bytes)
+// Must match Metal DownsampleParams (24 bytes: 6 × UInt32)
 struct DownsampleParamsSwift {
     var cropX: UInt32
     var cropY: UInt32
     var step: UInt32
     var halfStep: UInt32
+    var outputSize: UInt32
+    var _pad: UInt32 = 0
 
-    /// Compute dynamic params from actual buffer dimensions.
-    /// Square crop from short side, centered, downsample to 64×64.
-    static func fromBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
-        let cropSize = min(width, height)
+    /// Compute params from actual buffer dimensions + universal 768 crop.
+    /// Crop is FORCED to 768 (RGB) or 256 (depth), centered in buffer.
+    static func fromRGBBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
+        let cropSize = CameraConfig.rgbCrop  // 768, always
         let cropX = (width - cropSize) / 2
         let cropY = (height - cropSize) / 2
-        let step = cropSize / 64
+        let step = CameraConfig.rgbStep     // 768 / outputSize, integer
         return DownsampleParamsSwift(
             cropX: UInt32(cropX), cropY: UInt32(cropY),
-            step: UInt32(step), halfStep: UInt32(step / 2)
+            step: UInt32(step), halfStep: UInt32(step / 2),
+            outputSize: UInt32(CameraConfig.outputSize)
+        )
+    }
+
+    static func fromDepthBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
+        let cropSize = CameraConfig.depthCrop  // 256, always
+        let cropX = (width - cropSize) / 2
+        let cropY = (height - cropSize) / 2
+        let step = CameraConfig.depthStep     // 256 / outputSize, integer
+        return DownsampleParamsSwift(
+            cropX: UInt32(cropX), cropY: UInt32(cropY),
+            step: UInt32(step), halfStep: UInt32(step / 2),
+            outputSize: UInt32(CameraConfig.outputSize)
         )
     }
 }

@@ -7,7 +7,7 @@
 // .photo preset: full 4:3 sensor FOV (not cropped 16:9).
 // AVCaptureDataOutputSynchronizer: paired RGB+depth delivery.
 // videoRotationAngle=90 on BOTH connections: portrait buffers.
-// Dynamic crop: reads dimensions from buffer, no hardcoded constants.
+// Universal 768 crop: forced, centered in whatever the sensor gives.
 
 import AVFoundation
 import CoreImage
@@ -18,25 +18,58 @@ private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
 /// Camera state machine
 enum CameraState: Equatable {
-    case idle, previewing, recording(Int), processing, done, error(String)
+    case idle, previewing, recording(Int), processing, swiping(Int), done, error(String)
+    //                                                  ^^^^^^^^^^^
+    //                                        swiping(generation) — swipe-to-train loop
+    //                                        generation increments on each LEFT swipe
     static func == (lhs: CameraState, rhs: CameraState) -> Bool {
         switch (lhs, rhs) {
         case (.idle, .idle), (.previewing, .previewing),
              (.processing, .processing), (.done, .done): return true
         case (.recording(let a), .recording(let b)): return a == b
+        case (.swiping(let a), .swiping(let b)): return a == b
         case (.error(let a), .error(let b)): return a == b
         default: return false
         }
     }
 }
 
-/// Constants
+/// Two cubes: Training 64³, Inference 128³. S = K (cube invariant).
+/// From spec/algebra/Block.hs — verified by 14 axioms.
+enum CubeMode: Int, CaseIterable {
+    case training  = 64   // 64×64×64    (S=K=64,  step=12, native=Coarse)
+    case inference = 128  // 128×128×128 (S=K=128, step=6,  native=Medium)
+
+    var spatialSide: Int { rawValue }
+    var frameCount: Int { rawValue }      // S = K (cube)
+    var framesPerEpoch: Int { frameCount / 4 }
+
+    var label: String {
+        switch self {
+        case .training:  return "64³ train"
+        case .inference: return "128³ infer"
+        }
+    }
+}
+
 enum CameraConfig {
-    static let captureSize = 64
+    // Universal crop (fits any TrueDepth sensor ≥1080 RGB, ≥360 depth)
+    static let rgbCrop = 768
+    static let depthCrop = 256
+    static let scaleFactor = 3
+    static let paletteSize = 256  // 4⁴, always
+
+    // Active mode (Training 64³ or Inference 128³)
+    nonisolated(unsafe) static var mode: CubeMode = .training
+    static var outputSize: Int { mode.spatialSide }
+    static var totalFrames: Int { mode.frameCount }
+    static var rgbStep: Int { rgbCrop / outputSize }
+    static var depthStep: Int { depthCrop / outputSize }
+    static var pixelCount: Int { outputSize * outputSize }
+
     static let displayScale = 4
-    static let displaySize = captureSize * displayScale
+    static var displaySize: Int { outputSize * displayScale }
     static let targetFPS = 20
-    static let totalFrames = 64
 }
 
 @MainActor
@@ -46,7 +79,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     @Published var state: CameraState = .idle
     @Published var previewImage: CGImage?       // composite quantized preview
-    @Published var previewR: CGImage?            // R channel (64×64 grayscale)
+    @Published var previewR: CGImage?            // R channel (outputSize² grayscale)
     @Published var previewG: CGImage?            // G channel
     @Published var previewB: CGImage?            // B channel
     @Published var previewD: CGImage?            // Depth channel
@@ -58,6 +91,13 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var processProgress: Float = 0        // 0.0 → 1.0
     @Published var processPhase: String = ""          // "Analyzing frame 12/64"
     @Published var processBoards: GoBoards?           // live Go board snapshot
+
+    // MARK: - Gene State (swipe-to-train)
+    @Published var currentGene: GeneWeights = .defaultWeights()
+    @Published var swipeGeneration: Int = 0
+    @Published var eliteMap = EliteMap()
+    private var previousGene: GeneWeights = .defaultWeights()
+    private var sobolExplorer = SobolExplorer()
 
     // MARK: - Capture
 
@@ -71,7 +111,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let frameBuffer = FrameBuffer()
     nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
-    private let goEvaluator = GoEvaluator()
+    // GoEvaluator removed — territory analysis in GoBoard.swift is sufficient
     nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
@@ -92,6 +132,139 @@ final class CameraManager: NSObject, ObservableObject {
         gifMeasure = nil
         frameBuffer.startRecording()
         state = .recording(0)
+    }
+
+    // MARK: - Swipe Actions (Gene.hs §10: TAP/LEFT/RIGHT)
+
+    /// LEFT swipe: Sobol quasi-random perturbation. Guaranteed new direction.
+    func swipeLeft() {
+        guard case .swiping = state else { return }
+        previousGene = currentGene
+        currentGene = sobolExplorer.perturb(currentGene, scale: 0.05)
+        swipeGeneration += 1
+        state = .swiping(swipeGeneration)
+        recomputeGIF()
+    }
+
+    /// RIGHT swipe: revert to previous gene. Recompute GIF.
+    func swipeRight() {
+        guard case .swiping = state else { return }
+        let temp = currentGene
+        currentGene = previousGene
+        previousGene = temp
+        recomputeGIF()
+    }
+
+    /// TAP: accept current gene. Transition to .done.
+    func tapAccept() {
+        guard case .swiping = state else { return }
+        state = .done
+    }
+
+    /// Build a VoxelCube from the last captured+quantized frames.
+    func buildVoxelCube() -> VoxelCube {
+        let capturedFrames = frameBuffer.exportCapturedFrames()
+        let paletteFrames: [[UInt8]] = capturedFrames.map { frame in
+            PerfectQuantizer.quantizeFrame(
+                frameIndex: frame.index,
+                rgb: frame.rgb,
+                depths: frame.depths
+            )
+        }
+        return VoxelCube(frames: paletteFrames)
+    }
+
+    /// Recompute GIF from stored capture using current gene (CPU path).
+    /// The gene's forward pass produces palette indices directly.
+    /// Each swipe produces a DIFFERENT GIF from the SAME capture.
+    private func recomputeGIF() {
+        let capturedFrames = frameBuffer.exportCapturedFrames()
+        guard !capturedFrames.isEmpty else { return }
+        let gene = currentGene
+
+        Task.detached(priority: .userInitiated) {
+            var quantizedFrames: [QuantizedFrame] = []
+            let k = capturedFrames.count
+
+            for frame in capturedFrames {
+                // Gene CPU forward pass: each pixel → 137-float input → palette index
+                let n = frame.rgb.count
+                var indices = [UInt8](repeating: 0, count: n)
+                let frameNorm: Float = k > 1 ? Float(frame.index) / Float(k - 1) : 0
+
+                for i in 0..<n {
+                    // Build a minimal 137-float input for this pixel.
+                    // In production: pre-computed BlockPyramid histograms.
+                    // Here: approximate with single-pixel "histogram" (peaked at one bin).
+                    let (r, g, b) = frame.rgb[i]
+                    let depth = frame.depths[i]
+
+                    var input = [Float](repeating: 0, count: GeneWeights.inputDim)
+                    // Slots [0..125]: 3ch × 3scales × 14bins — peak bin only
+                    for (chIdx, val) in [(0, r), (1, g), (2, b)] {
+                        let bin = min(13, max(0, Int(val * 14)))
+                        for scaleIdx in 0..<3 {
+                            let offset = chIdx * 42 + scaleIdx * 14
+                            input[offset + bin] = 1.0  // peaked frequency
+                        }
+                    }
+                    // Slots 126-127: depth + frame
+                    input[126] = depth
+                    input[127] = frameNorm
+                    // Slots 128-131: sample counts
+                    input[128] = 144; input[129] = 36; input[130] = 9
+                    input[131] = Float(CameraConfig.depthStep * CameraConfig.depthStep)
+                    // Slots 132-136: entropy (uniform for now)
+                    for j in 132..<137 { input[j] = 1.0 }
+
+                    let (idx, _g) = gene.forward(input)
+                    indices[i] = idx
+                    // _g = global weight, used for adaptive palette (future)
+                }
+
+                quantizedFrames.append(QuantizedFrame(
+                    index: frame.index,
+                    paletteIndices: indices,
+                    rawRGB: frame.rgb,
+                    depths: frame.depths,
+                    measure: BirkhoffMeasure(paletteIndices: indices),
+                    subjectAnalysis: nil,
+                    anchorTrace: nil,
+                    timestamp: frame.timestamp
+                ))
+            }
+
+            // Compute overall measure across all frames
+            let overallMeasure: BirkhoffMeasure? = quantizedFrames.isEmpty ? nil : {
+                var totalCounts = [Int](repeating: 0, count: 256)
+                for frame in quantizedFrames {
+                    for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
+                }
+                let perFrame = totalCounts.map { $0 / max(1, quantizedFrames.count) }
+                return BirkhoffMeasure(counts: perFrame)
+            }()
+
+            // Compute entropy for MAP-Elites placement
+            let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
+            let entropy = EntropyMeasure.compute(paletteIndices: allIndices)
+            let descriptor = Descriptor.from(entropy)
+            let beauty = overallMeasure?.beauty ?? 0
+
+            // Encode GIF
+            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure) {
+                await MainActor.run {
+                    self.gifData = data
+                    self.gifMeasure = overallMeasure
+
+                    // Place in MAP-Elites grid
+                    self.eliteMap.place(
+                        gene: gene, beauty: beauty,
+                        descriptor: descriptor, gifData: data,
+                        entropy: entropy
+                    )
+                }
+            }
+        }
     }
 
     func stop() {
@@ -188,7 +361,7 @@ final class CameraManager: NSObject, ObservableObject {
             session.startRunning()
             state = .previewing
             logger.info("Camera: session running")
-            // KataGo model loads during processing phase, not here
+            // Go territory analysis runs during processing phase, not here
 
         } catch {
             state = .error(error.localizedDescription)
@@ -232,11 +405,11 @@ final class CameraManager: NSObject, ObservableObject {
 
         // ════════════════════════════════════════════════════════
         // CONSOLIDATED PATH: GPU downsample → CPU PerfectQuantize
-        // GPU does parallel texture reads (megapixel → 64×64).
-        // CPU does deterministic distribution matching (4096 pixels).
+        // GPU: parallel texture reads (megapixel → S×S via 768 crop).
+        // CPU: deterministic distribution matching (S² pixels).
         // ════════════════════════════════════════════════════════
 
-        // Stage 1: GPU downsample (camera res → 64×64 with rotation)
+        // Stage 1: GPU downsample (camera res → S×S with rotation)
         if let metal = _metalPipeline,
            let rgbTex = metal.makeTexture(from: rgbBuffer, pixelFormat: .bgra8Unorm) {
 
@@ -302,11 +475,11 @@ final class CameraManager: NSObject, ObservableObject {
     ) {
         let rgbW = CVPixelBufferGetWidth(rgbBuffer)
         let rgbH = CVPixelBufferGetHeight(rgbBuffer)
-        let outSize = CameraConfig.captureSize
-        let cropSize = min(rgbW, rgbH)
+        let outSize = CameraConfig.outputSize
+        let cropSize = CameraConfig.rgbCrop  // 768, forced
         let cropX = (rgbW - cropSize) / 2
         let cropY = (rgbH - cropSize) / 2
-        let step = cropSize / outSize
+        let step = CameraConfig.rgbStep     // 768 / outSize, integer
         let half = step / 2
 
         CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
@@ -392,13 +565,12 @@ final class CameraManager: NSObject, ObservableObject {
             return [Float](repeating: 0.5, count: outSize * outSize)
         }
 
-        // Depth may be Float16 — convert via CVPixelBuffer format
         let formatType = CVPixelBufferGetPixelFormatType(depthBuffer)
 
-        let dCropSize = min(dW, dH)
+        let dCropSize = CameraConfig.depthCrop  // 256, forced
         let dCropX = (dW - dCropSize) / 2
         let dCropY = (dH - dCropSize) / 2
-        let dStep = dCropSize / outSize
+        let dStep = CameraConfig.depthStep    // 256 / outSize, integer
         let dHalf = dStep / 2
 
         var values = [Float]()
@@ -449,59 +621,26 @@ final class CameraManager: NSObject, ObservableObject {
 
         Task.detached(priority: .userInitiated) {
             // ════════════════════════════════════════════
-            // Phase 0: Load KataGo model (0% → 5%)
-            // Only loads here — never during preview/capture.
+            // Phase 1: Go analysis per frame (0% → 40%)
+            // Sample first 361 pixels (19×19) for Go territory analysis.
+            // This is a SAMPLE of the frame, not the full grid.
+            // Territory + liberties = dithering guidance.
             // ════════════════════════════════════════════
 
             await MainActor.run {
                 self.processProgress = 0
-                self.processPhase = "Loading KataGo..."
+                self.processPhase = "Analyzing color structure..."
             }
-
-            self.goEvaluator.loadIfNeeded()
-            // Wait for model to finish loading (up to 10s)
-            for _ in 0..<100 {
-                if self.goEvaluator.isReady || !self.goEvaluator.isLoading { break }
-                try? await Task.sleep(for: .milliseconds(100))
-            }
-
-            await MainActor.run {
-                self.processProgress = 0.05
-                self.processPhase = self.goEvaluator.isReady ? "KataGo ready" : "KataGo unavailable — using simple analysis"
-            }
-
-            // ════════════════════════════════════════════
-            // Phase 1: Go analysis per frame (5% → 40%)
-            // Build Go boards from stored 64×64 RGB.
-            // Run KataGo CoreML on complex frames.
-            // ════════════════════════════════════════════
-
-            var kataGoEvalCount = 0
-            var kataGoTotalContested = 0
 
             for (i, frame) in capturedFrames.enumerated() {
-                // Build Go boards from the stored 64×64 pixels
+                // Go analysis on first 19×19 = 361 pixels (blockToGoBoards reads up to GoBoard.count)
                 let boards = blockToGoBoards(pixels: frame.rgb)
                 let eval = evaluateBlock(boards)
 
-                // Run KataGo on complex frames
-                if self.goEvaluator.isReady && needsNNEval(eval) {
-                    if let ownership = self.goEvaluator.evaluate(boards) {
-                        kataGoEvalCount += 1
-                        kataGoTotalContested += ownership.contestedCount
-                    }
-                }
-
                 await MainActor.run {
-                    self.processProgress = 0.05 + Float(i + 1) / Float(totalFrames) * 0.35
+                    self.processProgress = Float(i + 1) / Float(totalFrames) * 0.40
                     self.processPhase = "Go analysis \(i + 1)/\(totalFrames) — complexity \(String(format: "%.2f", eval.complexity)), \(eval.ditherBudget) liberties"
                     self.processBoards = boards
-                }
-            }
-
-            if kataGoEvalCount > 0 {
-                await MainActor.run {
-                    self.processPhase = "KataGo: \(kataGoEvalCount) frames, \(kataGoTotalContested) contested"
                 }
             }
 
@@ -560,11 +699,14 @@ final class CameraManager: NSObject, ObservableObject {
 
             await MainActor.run {
                 self.processProgress = 1.0
-                self.processPhase = "Done"
+                self.processPhase = "Swipe to explore"
                 self.processBoards = nil
                 self.gifData = gifData
                 self.gifMeasure = measure
-                self.state = .done
+                self.swipeGeneration = 0
+                self.sobolExplorer.reset()
+                self.eliteMap.reset()
+                self.state = .swiping(0)  // enter swipe-to-train loop
             }
         }
     }
@@ -573,7 +715,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Build the composite quantized preview from palette indices.
     nonisolated func buildPreviewImage(indices: [UInt8]) -> CGImage? {
-        let size = CameraConfig.captureSize
+        let size = CameraConfig.outputSize
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<(size * size) {
             let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
@@ -589,7 +731,7 @@ final class CameraManager: NSObject, ObservableObject {
 
     /// Build a single-channel grayscale preview (R, G, B, or D).
     nonisolated func buildChannelPreview(values: [Float]) -> CGImage? {
-        let size = CameraConfig.captureSize
+        let size = CameraConfig.outputSize
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<min(size * size, values.count) {
             let v = UInt8(clamping: Int(values[i] * 255))
@@ -605,18 +747,17 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Full-Resolution Block Analysis
 
-    /// Read 18×18 blocks from the FULL CVPixelBuffer and compute Go analysis per block.
-    /// This accesses the raw camera data (1608×1206), not the downsampled 64×64.
-    /// Returns 4096 BlockEvals — one per output pixel position.
-    /// Time: ~27ms per frame. Memory: ~320 KB per frame.
+    /// Read step×step blocks from the FULL CVPixelBuffer and compute Go analysis per block.
+    /// Uses universal 768 crop centered in whatever the sensor gives.
+    /// Returns outputSize² BlockEvals — one per output pixel position.
     nonisolated func analyzeBlocks(rgbBuffer: CVPixelBuffer) -> [BlockEval] {
         let rgbW = CVPixelBufferGetWidth(rgbBuffer)
         let rgbH = CVPixelBufferGetHeight(rgbBuffer)
-        let outSize = CameraConfig.captureSize  // 64
-        let cropSize = min(rgbW, rgbH)
+        let outSize = CameraConfig.outputSize
+        let cropSize = CameraConfig.rgbCrop  // 768, forced
         let cropX = (rgbW - cropSize) / 2
         let cropY = (rgbH - cropSize) / 2
-        let step = cropSize / outSize  // ~18
+        let step = CameraConfig.rgbStep     // 768 / outSize, integer
 
         CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(rgbBuffer, .readOnly) }
