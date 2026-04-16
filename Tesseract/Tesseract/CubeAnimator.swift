@@ -93,47 +93,35 @@ class CubeAnimator: ObservableObject {
     func updateForCurrentView() {
         let axis = rotation.dominantAxis
 
-        // The NN processes each frame of the current projection.
-        // For now: use the gene CPU forward pass.
-        // In production: Metal geneForward kernel for real-time.
+        // NN processes each frame via the REAL residual pipeline.
+        // Reconstructs RGB from palette indices → builds BlockPyramids → residualQuantize.
         cube.updateForView(axis: axis) { [gene] frame, depth in
-            // Each pixel in the frame → gene forward → new palette index
-            let frameCount = VoxelCube.size
-            let frameNorm: Float = frameCount > 1 ? Float(depth) / Float(frameCount - 1) : 0
+            let s = VoxelCube.size
+            guard frame.count == s * s else { return frame }
 
+            // Reconstruct approximate RGB from palette indices
+            let rgb: [(Float, Float, Float)] = frame.map { idx in
+                let a = Float((Int(idx) % 64) / 16)
+                let b = Float((Int(idx) % 16) / 4)
+                let c = Float(Int(idx) % 4)
+                return ((a + 0.5) / 4.0, (b + 0.5) / 4.0, (c + 0.5) / 4.0)
+            }
+
+            // Build real pyramids
+            let depths = [Float](repeating: 0.5, count: s * s)
+            let pyramids = BlockPyramid.computeAll(
+                rgb: rgb, depths: depths,
+                frameIndex: depth, totalFrames: s
+            )
+
+            // Residual pipeline for each pixel
             var newFrame = frame
-            for i in 0..<frame.count {
-                // Build minimal input (approximate — full pyramid in production)
-                var input = [Float](repeating: 0, count: GeneWeights.inputDim)
-
-                // The existing palette index tells us the current (d,a,b,c)
-                let idx = Int(frame[i])
-                let d = idx / 64
-                let a = (idx % 64) / 16
-                let b = (idx % 16) / 4
-                let c = idx % 4
-
-                // Peak the histogram at the current level's bins
-                // (approximate: in production, use actual block histograms)
-                let rBin = min(13, a * 4 + 1)
-                let gBin = min(13, b * 4 + 1)
-                let bBin = min(13, c * 4 + 1)
-
-                for scale in 0..<3 {
-                    input[0 * 42 + scale * 14 + rBin] = 1.0  // R peaked
-                    input[1 * 42 + scale * 14 + gBin] = 1.0  // G peaked
-                    input[2 * 42 + scale * 14 + bBin] = 1.0  // B peaked
-                }
-
-                // Metadata
-                input[126] = 0.5          // depth (unknown in side view)
-                input[127] = frameNorm    // frame position
-                input[128] = 144; input[129] = 36; input[130] = 9  // sample counts
-                input[131] = 16  // depth samples
-                for j in 132..<137 { input[j] = 1.0 }  // entropy (uniform)
-
-                let (newIdx, _g) = gene.forward(input)
-                newFrame[i] = newIdx
+            for i in 0..<min(frame.count, pyramids.count) {
+                let (idx, _) = residualQuantize(
+                    gene: gene, pyramid: pyramids[i],
+                    frameIndex: depth, mode: .training
+                )
+                newFrame[i] = idx
             }
             return newFrame
         }

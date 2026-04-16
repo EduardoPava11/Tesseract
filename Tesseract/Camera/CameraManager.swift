@@ -382,39 +382,23 @@ final class CameraManager: NSObject, ObservableObject {
             let k = capturedFrames.count
 
             for frame in capturedFrames {
-                // Gene CPU forward pass: each pixel → 137-float input → palette index
+                // Build REAL BlockPyramids from captured RGB
+                let pyramids = BlockPyramid.computeAll(
+                    rgb: frame.rgb,
+                    depths: frame.depths,
+                    frameIndex: frame.index,
+                    totalFrames: k
+                )
+
+                // Run residual pipeline for each pixel
                 let n = frame.rgb.count
                 var indices = [UInt8](repeating: 0, count: n)
-                let frameNorm: Float = k > 1 ? Float(frame.index) / Float(k - 1) : 0
-
-                for i in 0..<n {
-                    // Build a minimal 137-float input for this pixel.
-                    // In production: pre-computed BlockPyramid histograms.
-                    // Here: approximate with single-pixel "histogram" (peaked at one bin).
-                    let (r, g, b) = frame.rgb[i]
-                    let depth = frame.depths[i]
-
-                    var input = [Float](repeating: 0, count: GeneWeights.inputDim)
-                    // Slots [0..125]: 3ch × 3scales × 14bins — peak bin only
-                    for (chIdx, val) in [(0, r), (1, g), (2, b)] {
-                        let bin = min(13, max(0, Int(val * 14)))
-                        for scaleIdx in 0..<3 {
-                            let offset = chIdx * 42 + scaleIdx * 14
-                            input[offset + bin] = 1.0  // peaked frequency
-                        }
-                    }
-                    // Slots 126-127: depth + frame
-                    input[126] = depth
-                    input[127] = frameNorm
-                    // Slots 128-131: sample counts
-                    input[128] = 144; input[129] = 36; input[130] = 9
-                    input[131] = Float(CameraConfig.depthStep * CameraConfig.depthStep)
-                    // Slots 132-136: entropy (uniform for now)
-                    for j in 132..<137 { input[j] = 1.0 }
-
-                    let (idx, _g) = gene.forward(input)
+                for i in 0..<min(n, pyramids.count) {
+                    let (idx, _) = residualQuantize(
+                        gene: gene, pyramid: pyramids[i],
+                        frameIndex: frame.index, mode: .training
+                    )
                     indices[i] = idx
-                    // _g = global weight, used for adaptive palette (future)
                 }
 
                 quantizedFrames.append(QuantizedFrame(
