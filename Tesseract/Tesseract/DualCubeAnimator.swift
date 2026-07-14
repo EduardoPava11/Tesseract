@@ -1,85 +1,44 @@
 // DualCubeAnimator.swift
 // Tesseract
 //
-// Two GIFs side by side, playing in sync at 20fps.
-// Each GIF is a POINT in the gene's dimensional space.
-// The user sees two options — two ways the NN interprets the capture.
+// Drives two flat GIFs side-by-side at 20fps with frame scrubbing.
+// Each GIF is a different NN interpretation of the same captured data.
+// Computes per-frame stats (beauty, entropy, colors, motion, diff).
 //
-// When the cube rotates to a new face:
-//   1. The OLD GIF keeps playing in the new orientation (no freeze)
-//   2. The NN recomputes in the background
-//   3. A curtain effect reveals the NEW GIF row-by-row
-//      in the direction of the rotation
-//
-// The curtain: a moving boundary (row or column) slides across.
-// Pixels above the boundary = new GIF. Below = old GIF.
-// This creates a smooth reveal that follows the rotation direction.
+// On startup: immediately runs the NN for both genes so A ≠ B from frame 1.
 
 import Foundation
 import Combine
+import os.log
 
-/// Drives two synchronized GIF cubes with curtain reveal on rotation.
+private let logger = Logger(subsystem: "com.tesseract.app", category: "DualCubeAnimator")
+
 @MainActor
 class DualCubeAnimator: ObservableObject {
 
-    // ── Display State ──
+    // ── Playback ──
 
-    /// Front frames playing in sync
-    @Published var frameA: [UInt8] = []   // front face for cube A
-    @Published var frameB: [UInt8] = []   // front face for cube B
-    /// Side projection frames (spatiotemporal Y×T)
-    @Published var sideFrameA: [UInt8] = []
-    @Published var sideFrameB: [UInt8] = []
-    /// Top projection frames (spatiotemporal X×T)
-    @Published var topFrameA: [UInt8] = []
-    @Published var topFrameB: [UInt8] = []
     @Published var frameIndex: Int = 0
-    @Published var totalFrames: Int = 64
+    @Published var isScrubbing: Bool = false
     @Published var isPlaying: Bool = true
 
-    /// Curtain reveal progress: 0 = all old, 1 = all new
-    @Published var curtainProgress: Float = 1.0
+    // ── Stats ──
 
-    /// Curtain direction: which way the new GIF slides in
-    @Published var curtainDirection: CurtainDirection = .none
+    @Published var statsA: GIFFrameStats = .empty
+    @Published var statsB: GIFFrameStats = .empty
+    @Published var pixelDiff: [Int] = []
 
-    /// Rotation state
-    @Published var rotation = CubeRotation()
+    // ── Cube version (bumped when NN finishes) ──
 
-    // ── Cubes ──
+    @Published var cubeVersion: Int = 0
 
-    /// Two cubes = two points in gene space
+    // ── Cubes + Genes ──
+
     var cubeA: VoxelCube
     var cubeB: VoxelCube
-
-    /// Gene A and Gene B — two different aesthetic interpretations
     var geneA: GeneWeights
     var geneB: GeneWeights
 
-    /// Frames before NN update (for curtain blend)
-    var oldFramesA: [[UInt8]] = []
-    var newFramesA: [[UInt8]] = []
-    var oldFramesB: [[UInt8]] = []
-    var newFramesB: [[UInt8]] = []
-
-    /// Cached side/top projections (recomputed only on cube/gene change, not per frame)
-    private var cachedSideA: [[UInt8]] = []
-    private var cachedSideB: [[UInt8]] = []
-    private var cachedTopA: [[UInt8]] = []
-    private var cachedTopB: [[UInt8]] = []
-
-    /// Rebuild side/top caches (call when cubes change, NOT per frame)
-    func rebuildProjectionCaches() {
-        cachedSideA = cubeA.sliceAll(axis: .x)
-        cachedSideB = cubeB.sliceAll(axis: .x)
-        cachedTopA = cubeA.sliceAll(axis: .y)
-        cachedTopB = cubeB.sliceAll(axis: .y)
-    }
-
-    /// Which axis was last dominant
-    private var lastAxis: SliceAxis = .z
-
-    /// Timer for 20fps sync
     private var timer: Timer?
 
     // ── Init ──
@@ -91,169 +50,51 @@ class DualCubeAnimator: ObservableObject {
         self.cubeB = cubeB
         self.geneA = geneA
         self.geneB = geneB
-
-        let framesA = cubeA.sliceAll(axis: .z)
-        let framesB = cubeB.sliceAll(axis: .z)
-        self.newFramesA = framesA
-        self.newFramesB = framesB
-        self.oldFramesA = framesA
-        self.oldFramesB = framesB
-        self.totalFrames = framesA.count
-
-        if let f = framesA.first { self.frameA = f }
-        if let f = framesB.first { self.frameB = f }
-
-        // Cache side/top projections once at init
-        rebuildProjectionCaches()
     }
 
-    // ── Playback (20fps, synced) ──
+    // ── Playback ──
 
     func startPlayback() {
         isPlaying = true
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isPlaying else { return }
-                self.advanceFrame()
+                guard let self, self.isPlaying, !self.isScrubbing else { return }
+                self.frameIndex = (self.frameIndex + 1) % VoxelCube.size
             }
         }
+
+        // Run NN immediately so A and B diverge from frame 1
+        reprocessCubes(axis: .z)
     }
 
     func stopPlayback() {
         isPlaying = false
         timer?.invalidate()
+        timer = nil
     }
 
-    private func advanceFrame() {
-        guard totalFrames > 0 else { return }
-        frameIndex = (frameIndex + 1) % totalFrames
+    // ── Scrubbing ──
 
-        // Blend old and new frames based on curtain progress
-        if curtainProgress >= 1.0 {
-            // Curtain complete: show new frames directly
-            frameA = newFramesA.indices.contains(frameIndex) ? newFramesA[frameIndex] : []
-            frameB = newFramesB.indices.contains(frameIndex) ? newFramesB[frameIndex] : []
-            // Side/top from CACHED projections (not recomputed per frame)
-            sideFrameA = cachedSideA.indices.contains(frameIndex) ? cachedSideA[frameIndex] : []
-            sideFrameB = cachedSideB.indices.contains(frameIndex) ? cachedSideB[frameIndex] : []
-            topFrameA = cachedTopA.indices.contains(frameIndex) ? cachedTopA[frameIndex] : []
-            topFrameB = cachedTopB.indices.contains(frameIndex) ? cachedTopB[frameIndex] : []
-        } else {
-            // Curtain in progress: blend row-by-row
-            frameA = blendWithCurtain(
-                old: oldFramesA.indices.contains(frameIndex) ? oldFramesA[frameIndex] : [],
-                new: newFramesA.indices.contains(frameIndex) ? newFramesA[frameIndex] : []
-            )
-            frameB = blendWithCurtain(
-                old: oldFramesB.indices.contains(frameIndex) ? oldFramesB[frameIndex] : [],
-                new: newFramesB.indices.contains(frameIndex) ? newFramesB[frameIndex] : []
-            )
-            // Advance curtain
-            curtainProgress += 1.0 / 20.0  // reveal over ~1 second (20 frames)
-            curtainProgress = min(1.0, curtainProgress)
-        }
+    func scrub(to frame: Int) {
+        isScrubbing = true
+        frameIndex = max(0, min(VoxelCube.size - 1, frame))
     }
 
-    // ── Curtain Blend ──
-
-    /// Blend old and new frames with a sliding boundary.
-    /// The boundary moves in the curtain direction.
-    private func blendWithCurtain(old: [UInt8], new: [UInt8]) -> [UInt8] {
-        let s = VoxelCube.size
-        guard old.count == s * s, new.count == s * s else { return new }
-
-        var result = old
-        let boundary = Int(curtainProgress * Float(s))
-
-        switch curtainDirection {
-        case .left:
-            // New pixels slide in from the right
-            for y in 0..<s {
-                for x in (s - boundary)..<s {
-                    result[y * s + x] = new[y * s + x]
-                }
-            }
-        case .right:
-            // New pixels slide in from the left
-            for y in 0..<s {
-                for x in 0..<boundary {
-                    result[y * s + x] = new[y * s + x]
-                }
-            }
-        case .up:
-            // New pixels slide in from the bottom
-            for y in (s - boundary)..<s {
-                for x in 0..<s {
-                    result[y * s + x] = new[y * s + x]
-                }
-            }
-        case .down:
-            // New pixels slide in from the top
-            for y in 0..<boundary {
-                for x in 0..<s {
-                    result[y * s + x] = new[y * s + x]
-                }
-            }
-        case .none:
-            return new
-        }
-        return result
+    func endScrub() {
+        isScrubbing = false
     }
 
-    // ── Rotation ──
+    // ── NN Reprocessing ──
 
-    /// User dragged: update rotation, trigger NN if face changed
-    func rotate(deltaX: Float, deltaY: Float) {
-        rotation.angleY += deltaX * 0.01
-        rotation.angleX += deltaY * 0.01
-
-        let newAxis = rotation.dominantAxis
-
-        if newAxis != lastAxis {
-            // Face changed → start curtain reveal
-            curtainDirection = curtainDirectionFrom(oldAxis: lastAxis, newAxis: newAxis, deltaX: deltaX, deltaY: deltaY)
-            curtainProgress = 0
-
-            // Save old frames (they keep playing during NN compute)
-            oldFramesA = newFramesA
-            oldFramesB = newFramesB
-
-            // Immediately slice the old voxels in the new orientation
-            // (this is fast — just re-indexing, no NN)
-            newFramesA = cubeA.sliceAll(axis: newAxis)
-            newFramesB = cubeB.sliceAll(axis: newAxis)
-            totalFrames = newFramesA.count
-
-            // Trigger NN update in background
-            recomputeInBackground(axis: newAxis)
-
-            lastAxis = newAxis
-        }
-    }
-
-    /// Determine curtain slide direction from the rotation gesture
-    private func curtainDirectionFrom(oldAxis: SliceAxis, newAxis: SliceAxis,
-                                       deltaX: Float, deltaY: Float) -> CurtainDirection {
-        if abs(deltaX) > abs(deltaY) {
-            return deltaX > 0 ? .left : .right
-        } else {
-            return deltaY > 0 ? .up : .down
-        }
-    }
-
-    // ── NN Background Update ──
-
-    /// Re-process voxels for the new view. Runs on a background thread.
-    /// When done, updates newFrames → curtain reveals the result.
-    private func recomputeInBackground(axis: SliceAxis) {
+    func reprocessCubes(axis: SliceAxis) {
+        logger.info("DualCubeAnimator: reprocessing cubes (axis=\(String(describing: axis)))")
         let gA = geneA
         let gB = geneB
         var localCubeA = cubeA
         var localCubeB = cubeB
 
         Task.detached(priority: .userInitiated) {
-            // NN forward pass on both cubes
             localCubeA.updateForView(axis: axis) { frame, depth in
                 Self.processFrame(frame: frame, depth: depth, totalFrames: VoxelCube.size, gene: gA)
             }
@@ -261,29 +102,34 @@ class DualCubeAnimator: ObservableObject {
                 Self.processFrame(frame: frame, depth: depth, totalFrames: VoxelCube.size, gene: gB)
             }
 
-            let framesA = localCubeA.sliceAll(axis: axis)
-            let framesB = localCubeB.sliceAll(axis: axis)
+            // Compute stats on background thread
+            let sA = GIFStatsComputer.compute(cube: localCubeA)
+            let sB = GIFStatsComputer.compute(cube: localCubeB)
+            let diff = GIFStatsComputer.computeDiff(cubeA: localCubeA, cubeB: localCubeB)
+
+            // Count how many pixels changed
+            let totalPixels = VoxelCube.size * VoxelCube.size * VoxelCube.size
+            let diffCount = diff.reduce(0, +)
 
             await MainActor.run {
                 self.cubeA = localCubeA
                 self.cubeB = localCubeB
-                self.newFramesA = framesA
-                self.newFramesB = framesB
-                self.rebuildProjectionCaches()  // rebuild side/top after NN update
+                self.statsA = sA
+                self.statsB = sB
+                self.pixelDiff = diff
+                self.cubeVersion += 1
+                logger.info("DualCubeAnimator: NN done. avgBeauty A=\(sA.avgBeauty) B=\(sB.avgBeauty) totalDiff=\(diffCount)/\(totalPixels)")
             }
         }
     }
 
-    /// Process one frame using the gene via the REAL residual pipeline.
-    /// Builds BlockPyramids from the existing palette indices (reverse-engineered
-    /// from the voxel data) and runs residualQuantize for each pixel.
+    /// Process one frame via the residual pipeline.
     nonisolated private static func processFrame(
         frame: [UInt8], depth: Int, totalFrames: Int, gene: GeneWeights
     ) -> [UInt8] {
         let s = VoxelCube.size
         guard frame.count == s * s else { return frame }
 
-        // Reconstruct approximate RGB from palette indices for pyramid building
         let rgb: [(Float, Float, Float)] = frame.map { idx in
             let a = Float((Int(idx) % 64) / 16)
             let b = Float((Int(idx) % 16) / 4)
@@ -291,14 +137,12 @@ class DualCubeAnimator: ObservableObject {
             return ((a + 0.5) / 4.0, (b + 0.5) / 4.0, (c + 0.5) / 4.0)
         }
 
-        // Build real pyramids from the reconstructed RGB
-        let depths = [Float](repeating: 0.5, count: s * s)  // depth unknown from side view
+        let depths = [Float](repeating: 0.5, count: s * s)
         let pyramids = BlockPyramid.computeAll(
             rgb: rgb, depths: depths,
             frameIndex: depth, totalFrames: totalFrames
         )
 
-        // Run residual pipeline for each pixel
         var newFrame = frame
         for i in 0..<min(frame.count, pyramids.count) {
             let (idx, _) = residualQuantize(
@@ -309,10 +153,4 @@ class DualCubeAnimator: ObservableObject {
         }
         return newFrame
     }
-}
-
-// ── Curtain Direction ──
-
-enum CurtainDirection {
-    case left, right, up, down, none
 }

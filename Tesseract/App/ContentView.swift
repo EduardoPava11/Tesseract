@@ -10,7 +10,135 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
 
+    enum AppMode: String, CaseIterable, Identifiable {
+        case gif = "GIF"
+        case raw = "RAW"
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .gif: return "Live"
+            case .raw: return "DNG"
+            }
+        }
+        var tagline: String {
+            switch self {
+            case .gif: return "front · 64²  live palette"
+            case .raw: return "rear · 4096²  Bayer DNG"
+            }
+        }
+    }
+    @State private var appMode: AppMode? = nil
+
     var body: some View {
+        Group {
+            switch appMode {
+            case .none:
+                launchPicker
+            case .gif:
+                gifModeBody
+                    .safeAreaInset(edge: .top, spacing: 0) { backBar }
+            case .raw:
+                CaptureRAWView()
+                    .safeAreaInset(edge: .top, spacing: 0) { backBar }
+            }
+        }
+        // iOS allows one active AVCaptureSession at a time; stop the front
+        // camera whenever we leave .gif so RAW (or the picker) can own it.
+        .onChange(of: appMode) { _, newMode in
+            switch newMode {
+            case .gif: camera.start()
+            case .raw, .none: camera.stop()
+            }
+        }
+    }
+
+    // MARK: - Launch Picker
+
+    private var launchPicker: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 24) {
+                Spacer()
+                VStack(spacing: 6) {
+                    Text("TESSERACT")
+                        .font(.system(.title, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                    Text("make a GIF")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+                Spacer()
+                VStack(spacing: 12) {
+                    ForEach(AppMode.allCases) { mode in
+                        launchChoice(mode)
+                    }
+                }
+                .padding(.horizontal, 24)
+                Spacer()
+                Spacer()
+            }
+        }
+    }
+
+    private func launchChoice(_ mode: AppMode) -> some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.2)) { appMode = mode }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(mode.title)
+                        .font(.system(.title3, design: .monospaced).bold())
+                        .foregroundStyle(.white)
+                    Text(mode.tagline)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.8)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(mode.title), \(mode.tagline)")
+    }
+
+    // MARK: - Back Bar (return to picker)
+
+    private var backBar: some View {
+        HStack {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { appMode = nil }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                    Text("back")
+                }
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity)
+        .background(Color.black)
+    }
+
+    private var gifModeBody: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -469,62 +597,18 @@ struct ContentView: View {
     )
 
     private func dualExploreView(generation: Int) -> some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 4)
-
-            // ── Cube A (top point in gene space) ──
-            CubeGIFView(
-                frontFrame: dualAnimator.frameA,
-                sideFrame: dualAnimator.sideFrameA,
-                topFrame: dualAnimator.topFrameA,
-                rotationY: Double(dualAnimator.rotation.angleY),
-                rotationX: Double(dualAnimator.rotation.angleX),
-                size: 180,
-                buildImage: { camera.buildPreviewImage(indices: $0) },
-                label: "A"
-            )
-            .onTapGesture { shareCurrentGIF() }
-            .onLongPressGesture { camera.compose(order: .aIntoB) }
-
-            Spacer(minLength: 8)
-
-            // Frame sync + hints
-            VStack(spacing: 2) {
-                Text("gen \(generation)  \(dualAnimator.frameIndex + 1)/\(dualAnimator.totalFrames)")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.2))
-                Text("↑↓←→ steer · hold+drag = compose")
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.2))
-            }
-
-            Spacer(minLength: 8)
-
-            // ── Cube B (bottom point in gene space) ──
-            CubeGIFView(
-                frontFrame: dualAnimator.frameB,
-                sideFrame: dualAnimator.sideFrameB,
-                topFrame: dualAnimator.topFrameB,
-                rotationY: Double(dualAnimator.rotation.angleY),
-                rotationX: Double(dualAnimator.rotation.angleX),
-                size: 180,
-                buildImage: { camera.buildPreviewImage(indices: $0) },
-                label: "B"
-            )
-            .onTapGesture { shareCurrentGIF() }
-            .onLongPressGesture { camera.compose(order: .bIntoA) }
-
-            Spacer(minLength: 4)
-        }
+        DualGIFExploreView(
+            animator: dualAnimator,
+            generation: generation,
+            buildImage: { camera.buildPreviewImage(indices: $0) },
+            onTapA: { shareCurrentGIF() },
+            onTapB: { shareCurrentGIF() },
+            onLongPressA: { camera.compose(order: .aIntoB) },
+            onLongPressB: { camera.compose(order: .bIntoA) }
+        )
         .gesture(
             DragGesture(minimumDistance: 20)
-                .onChanged { value in
-                    // Slow drag = rotate cubes in 3D
-                    dualAnimator.rotation.angleY = Float(value.translation.width) * 0.005
-                    dualAnimator.rotation.angleX = Float(value.translation.height) * 0.005
-                }
                 .onEnded { value in
-                    // Fast flick = directional swipe (steer genes)
                     let speed = sqrt(pow(value.velocity.width, 2) + pow(value.velocity.height, 2))
                     if speed > 500 {
                         let dx = value.translation.width
@@ -535,11 +619,6 @@ struct ContentView: View {
                             camera.dualSwipe(dy < 0 ? .up : .down)
                         }
                     }
-                    // Spring back to front view
-                    withAnimation(.spring(duration: 0.3)) {
-                        dualAnimator.rotation.angleY = 0
-                        dualAnimator.rotation.angleX = 0
-                    }
                 }
         )
         .onAppear {
@@ -548,11 +627,6 @@ struct ContentView: View {
             dualAnimator.cubeB = cube
             dualAnimator.geneA = camera.geneA
             dualAnimator.geneB = camera.geneB
-            dualAnimator.newFramesA = cube.sliceAll(axis: .z)
-            dualAnimator.newFramesB = cube.sliceAll(axis: .z)
-            dualAnimator.oldFramesA = dualAnimator.newFramesA
-            dualAnimator.oldFramesB = dualAnimator.newFramesB
-            dualAnimator.totalFrames = VoxelCube.size
             dualAnimator.startPlayback()
         }
         .onDisappear { dualAnimator.stopPlayback() }
@@ -591,8 +665,9 @@ struct ContentView: View {
             Spacer()
 
             // Composite GIF (the merged result of A+B or B+A)
-            if !dualAnimator.frameA.isEmpty,
-               let image = camera.buildPreviewImage(indices: dualAnimator.frameA) {
+            let refineFrame = dualAnimator.cubeA.slice(axis: .z, depth: dualAnimator.frameIndex)
+            if !refineFrame.isEmpty,
+               let image = camera.buildPreviewImage(indices: refineFrame) {
                 Image(decorative: image, scale: 1.0)
                     .interpolation(.none)
                     .resizable()

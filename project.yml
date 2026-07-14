@@ -27,7 +27,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tesseract.app
         INFOPLIST_KEY_UILaunchScreen_Generation: true
-        INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract captures your face through the front camera to create algebraically beautiful 64×64 GIFs using a 4⁴ color tesseract."
+        INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract uses the front camera for 64×64 GIFs and the rear 48MP camera for Bayer RAW DNG bursts."
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_CFBundleDisplayName: "Tesseract"

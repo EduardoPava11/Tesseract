@@ -15,7 +15,18 @@ Tesseract.xcodeproj/
 Tesseract/Info.plist
 
 # Haskell build artifacts
+dist-newstyle/
+dist/
+.ghc.environment.*
+*.hi
+*.o
+*.dyn_hi
+*.dyn_o
 spec/**/*.hi
 spec/**/*.o
 spec/**/*.dyn_hi
 spec/**/*.dyn_o
+
+# Rust / Python (if added)
+target/
+__pycache__/

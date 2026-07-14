@@ -145,8 +145,18 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Lifecycle
 
+    private var hasConfigured = false
+
     func start() {
         guard state == .idle else { return }
+        // If we already wired inputs/outputs, just resume the session.
+        // configure() unconditionally adds input/output and would fail the
+        // canAddInput guard on the second pass, freezing the preview.
+        if hasConfigured {
+            session.startRunning()
+            state = .previewing
+            return
+        }
         Task { await configure() }
     }
 
@@ -531,6 +541,7 @@ final class CameraManager: NSObject, ObservableObject {
 
             session.commitConfiguration()
             session.startRunning()
+            hasConfigured = true
             state = .previewing
             logger.info("Camera: session running")
             // Go territory analysis runs during processing phase, not here
@@ -879,7 +890,7 @@ final class CameraManager: NSObject, ObservableObject {
                 self.sobolExplorer.reset()
                 // Initialize two genes: A = default, B = perturbed
                 self.geneA = GeneWeights.defaultWeights()
-                self.geneB = self.geneA.perturbed(scale: 0.05, seed: 42)
+                self.geneB = self.geneA.perturbed(scale: 0.20, seed: 42)
                 self.state = .dualExplore(0)  // Phase 1: dual exploration
             }
         }

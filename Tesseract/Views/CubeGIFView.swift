@@ -1,172 +1,332 @@
-// CubeGIFView.swift
+// DualGIFExploreView.swift
 // Tesseract
 //
-// A 64³ GIF rendered as a 3D cube using pure SwiftUI.
-// Front face = current GIF frame. Side/top = spatiotemporal projections.
-// rotation3DEffect gives the 3D perspective. No SceneKit, no RealityKit.
-//
-// The cube IS the GIF. Rotating it reveals how time is encoded.
+// STACKED vertical layout: GIF A on top, GIF B below.
+// Each GIF at 256×256 (64px at 4× nearest-neighbor) with
+// orthographic projection strips: top = 256×4, side = 4×256.
+// Frame scrubber, comparative stats, sparklines.
 
 import SwiftUI
 
-/// A GIF displayed as a 3D cube with front, right, and top faces.
-/// Each face is a different projection of the VoxelCube data.
-struct CubeGIFView: View {
+// ════════════════════════════════════════════════════════════════
+// § 1. SINGLE GIF FRAME (palette indices → 256×256 image)
+// ════════════════════════════════════════════════════════════════
 
-    /// Palette indices for the three visible faces
-    let frontFrame: [UInt8]
-    let sideFrame: [UInt8]
-    let topFrame: [UInt8]
-
-    /// Rotation state (from user drag gesture)
-    let rotationY: Double    // radians, horizontal drag
-    let rotationX: Double    // radians, vertical drag
-
-    /// Display size (one face side length)
+struct GIFFrameImage: View {
+    let indices: [UInt8]
     let size: CGFloat
-
-    /// Convert palette indices → displayable image
     let buildImage: ([UInt8]) -> CGImage?
 
-    /// Label shown below the cube
-    var label: String = ""
-
     var body: some View {
-        VStack(spacing: 4) {
-            ZStack {
-                // ── Front face ──
-                // Visible when facing the user (rotationY ≈ 0)
-                faceImage(frontFrame)
-                    .rotation3DEffect(
-                        .radians(rotationY),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: .center,
-                        anchorZ: -size / 2,
-                        perspective: 0.4
-                    )
-                    .opacity(frontOpacity)
-
-                // ── Right face ──
-                // Visible when rotated right (rotationY > 0)
-                faceImage(sideFrame)
-                    .rotation3DEffect(
-                        .radians(rotationY + .pi / 2),
-                        axis: (x: 0, y: 1, z: 0),
-                        anchor: .leading,
-                        anchorZ: 0,
-                        perspective: 0.4
-                    )
-                    .opacity(sideOpacity)
-
-                // ── Top face ──
-                // Visible when rotated up (rotationX < 0)
-                faceImage(topFrame)
-                    .rotation3DEffect(
-                        .radians(rotationX - .pi / 2),
-                        axis: (x: 1, y: 0, z: 0),
-                        anchor: .top,
-                        anchorZ: 0,
-                        perspective: 0.4
-                    )
-                    .opacity(topOpacity)
-
-                // ── Wireframe edges (subtle) ──
-                cubeWireframe
-            }
-            .frame(width: size, height: size)
-
-            if !label.isEmpty {
-                Text(label)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.35))
-            }
-        }
-    }
-
-    // ── Face rendering ──
-
-    @ViewBuilder
-    private func faceImage(_ indices: [UInt8]) -> some View {
         if !indices.isEmpty, let cgImage = buildImage(indices) {
             Image(decorative: cgImage, scale: 1.0)
                 .interpolation(.none)
                 .resizable()
                 .frame(width: size, height: size)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 2))
         } else {
-            RoundedRectangle(cornerRadius: 2)
+            Rectangle()
                 .fill(Color.gray.opacity(0.05))
                 .frame(width: size, height: size)
         }
     }
+}
 
-    // ── Opacity: only show faces that are actually visible ──
+// ════════════════════════════════════════════════════════════════
+// § 2. PROJECTION STRIP (256×4 top or 4×256 side)
+//
+// Shows a spatiotemporal slice with a frame indicator line.
+// Top strip: 64×64 displayed at 256pt × 4pt (X × Time)
+// Side strip: 64×64 displayed at 4pt × 256pt (Y × Time)
+// ════════════════════════════════════════════════════════════════
 
-    private var frontOpacity: Double {
-        let angle = abs(rotationY.truncatingRemainder(dividingBy: 2 * .pi))
-        // Front is visible when angle < π/2 or > 3π/2
-        if angle < .pi / 2 || angle > 3 * .pi / 2 { return 1.0 }
-        return 0.0
-    }
+struct ProjectionStrip: View {
+    let indices: [UInt8]
+    let frameIndex: Int
+    let isHorizontal: Bool   // true = top (256×4), false = side (4×256)
+    let length: CGFloat      // 256pt (matches GIF dimension)
+    let thickness: CGFloat   // 4pt
+    let buildImage: ([UInt8]) -> CGImage?
 
-    private var sideOpacity: Double {
-        let angle = rotationY.truncatingRemainder(dividingBy: 2 * .pi)
-        // Side visible when rotated significantly
-        return min(1.0, max(0, abs(angle) / 0.4 - 0.5))
-    }
-
-    private var topOpacity: Double {
-        let angle = rotationX.truncatingRemainder(dividingBy: 2 * .pi)
-        return min(1.0, max(0, abs(angle) / 0.4 - 0.5))
-    }
-
-    // ── Wireframe: subtle cube edges ──
-
-    private var cubeWireframe: some View {
+    var body: some View {
         ZStack {
-            // Front face border
-            RoundedRectangle(cornerRadius: 2)
-                .stroke(.white.opacity(0.08), lineWidth: 0.5)
-                .frame(width: size, height: size)
-                .rotation3DEffect(
-                    .radians(rotationY),
-                    axis: (x: 0, y: 1, z: 0),
-                    anchor: .center,
-                    anchorZ: -size / 2,
-                    perspective: 0.4
-                )
+            if !indices.isEmpty, let cgImage = buildImage(indices) {
+                Image(decorative: cgImage, scale: 1.0)
+                    .interpolation(.none)
+                    .resizable()
+                    .frame(
+                        width: isHorizontal ? length : thickness,
+                        height: isHorizontal ? thickness : length
+                    )
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.03))
+                    .frame(
+                        width: isHorizontal ? length : thickness,
+                        height: isHorizontal ? thickness : length
+                    )
+            }
+
+            // Frame indicator line
+            let frac = CGFloat(frameIndex) / 63.0
+            if isHorizontal {
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.white.opacity(0.6))
+                        .frame(width: 1, height: thickness)
+                        .position(x: frac * geo.size.width, y: geo.size.height / 2)
+                }
+                .frame(width: length, height: thickness)
+            } else {
+                GeometryReader { geo in
+                    Rectangle()
+                        .fill(Color.white.opacity(0.6))
+                        .frame(width: thickness, height: 1)
+                        .position(x: geo.size.width / 2, y: frac * geo.size.height)
+                }
+                .frame(width: thickness, height: length)
+            }
         }
-        .allowsHitTesting(false)
     }
 }
 
-// ── Preview ──
+// ════════════════════════════════════════════════════════════════
+// § 3. SPARKLINE
+// ════════════════════════════════════════════════════════════════
 
-#Preview {
-    ZStack {
-        Color.black.ignoresSafeArea()
-        VStack(spacing: 40) {
-            CubeGIFView(
-                frontFrame: [],
-                sideFrame: [],
-                topFrame: [],
-                rotationY: 0.3,
-                rotationX: -0.1,
-                size: 180,
-                buildImage: { _ in nil },
-                label: "A"
-            )
-            CubeGIFView(
-                frontFrame: [],
-                sideFrame: [],
-                topFrame: [],
-                rotationY: 0.3,
-                rotationX: -0.1,
-                size: 180,
-                buildImage: { _ in nil },
-                label: "B"
-            )
+struct SparklineView: View {
+    let values: [Float]
+    let color: Color
+    let height: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            if values.count > 1 {
+                let maxV = values.max() ?? 1
+                let minV = values.min() ?? 0
+                let range = max(maxV - minV, 0.001)
+                Path { path in
+                    for (i, v) in values.enumerated() {
+                        let x = geo.size.width * CGFloat(i) / CGFloat(values.count - 1)
+                        let y = geo.size.height * (1 - CGFloat((v - minV) / range))
+                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                        else { path.addLine(to: CGPoint(x: x, y: y)) }
+                    }
+                }
+                .stroke(color, lineWidth: 1)
+            }
         }
+        .frame(height: height)
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// § 4. STAT ROW (label + A value + B value)
+// ════════════════════════════════════════════════════════════════
+
+struct StatRow: View {
+    let label: String
+    let valueA: String
+    let valueB: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+                .frame(width: 56, alignment: .leading)
+            Spacer()
+            Text("A:\(valueA)")
+                .foregroundStyle(.cyan.opacity(0.6))
+            Spacer()
+            Text("B:\(valueB)")
+                .foregroundStyle(.orange.opacity(0.6))
+        }
+        .font(.system(size: 8, design: .monospaced))
+        .foregroundStyle(.white.opacity(0.4))
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// § 5. SINGLE GIF PANEL (GIF + top strip + side strip + label)
+// ════════════════════════════════════════════════════════════════
+
+struct GIFPanel: View {
+    let cube: VoxelCube
+    let frameIndex: Int
+    let label: String
+    let buildImage: ([UInt8]) -> CGImage?
+
+    private let gifSize: CGFloat = 256
+    private let stripThickness: CGFloat = 4
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Top strip: X×Time at center row (y=32)
+            HStack(spacing: 0) {
+                // Spacer for side strip alignment
+                Color.clear.frame(width: stripThickness, height: stripThickness)
+
+                ProjectionStrip(
+                    indices: cube.slice(axis: .y, depth: 32),
+                    frameIndex: frameIndex,
+                    isHorizontal: true,
+                    length: gifSize,
+                    thickness: stripThickness,
+                    buildImage: buildImage
+                )
+            }
+
+            HStack(spacing: 0) {
+                // Side strip: Y×Time at center column (x=32)
+                ProjectionStrip(
+                    indices: cube.slice(axis: .x, depth: 32),
+                    frameIndex: frameIndex,
+                    isHorizontal: false,
+                    length: gifSize,
+                    thickness: stripThickness,
+                    buildImage: buildImage
+                )
+
+                // Main GIF frame
+                GIFFrameImage(
+                    indices: cube.slice(axis: .z, depth: frameIndex),
+                    size: gifSize,
+                    buildImage: buildImage
+                )
+            }
+
+            Text(label)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+                .padding(.top, 2)
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════
+// § 6. FULL DUAL GIF EXPLORE VIEW (STACKED VERTICAL)
+// ════════════════════════════════════════════════════════════════
+
+struct DualGIFExploreView: View {
+    @ObservedObject var animator: DualCubeAnimator
+    let generation: Int
+    let buildImage: ([UInt8]) -> CGImage?
+    let onTapA: () -> Void
+    let onTapB: () -> Void
+    let onLongPressA: () -> Void
+    let onLongPressB: () -> Void
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 8) {
+
+                // ── GIF A ──
+                GIFPanel(
+                    cube: animator.cubeA,
+                    frameIndex: animator.frameIndex,
+                    label: "A",
+                    buildImage: buildImage
+                )
+                .onTapGesture(perform: onTapA)
+                .onLongPressGesture(perform: onLongPressA)
+
+                // ── GIF B ──
+                GIFPanel(
+                    cube: animator.cubeB,
+                    frameIndex: animator.frameIndex,
+                    label: "B",
+                    buildImage: buildImage
+                )
+                .onTapGesture(perform: onTapB)
+                .onLongPressGesture(perform: onLongPressB)
+
+                // ── Frame scrubber ──
+                VStack(spacing: 2) {
+                    Slider(
+                        value: Binding(
+                            get: { Double(animator.frameIndex) },
+                            set: { animator.scrub(to: Int($0)) }
+                        ),
+                        in: 0...63,
+                        step: 1,
+                        onEditingChanged: { editing in
+                            if !editing { animator.endScrub() }
+                        }
+                    )
+                    .tint(.white.opacity(0.3))
+
+                    HStack {
+                        Text("frame \(animator.frameIndex + 1)/\(VoxelCube.size)")
+                        Spacer()
+                        Text("gen \(generation)")
+                    }
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.2))
+                }
+                .padding(.horizontal, 20)
+
+                // ── Comparative stats ──
+                let f = animator.frameIndex
+                VStack(spacing: 2) {
+                    StatRow(
+                        label: "beauty",
+                        valueA: fmt(animator.statsA.beauty, at: f),
+                        valueB: fmt(animator.statsB.beauty, at: f)
+                    )
+                    StatRow(
+                        label: "entropy",
+                        valueA: fmt(animator.statsA.entropy, at: f),
+                        valueB: fmt(animator.statsB.entropy, at: f)
+                    )
+                    StatRow(
+                        label: "colors",
+                        valueA: fmtInt(animator.statsA.colorsUsed, at: f),
+                        valueB: fmtInt(animator.statsB.colorsUsed, at: f)
+                    )
+
+                    if animator.pixelDiff.indices.contains(f) {
+                        let diff = animator.pixelDiff[f]
+                        let total = VoxelCube.size * VoxelCube.size
+                        let pct = Float(diff) / Float(total) * 100
+                        Text("diff: \(diff)/\(total) (\(String(format: "%.1f", pct))%)")
+                            .font(.system(size: 8, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.3))
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                // ── Beauty sparklines ──
+                VStack(spacing: 1) {
+                    HStack(spacing: 4) {
+                        Text("A")
+                            .font(.system(size: 7, design: .monospaced))
+                            .foregroundStyle(.cyan.opacity(0.5))
+                            .frame(width: 10)
+                        SparklineView(values: animator.statsA.beauty, color: .cyan, height: 18)
+                    }
+                    HStack(spacing: 4) {
+                        Text("B")
+                            .font(.system(size: 7, design: .monospaced))
+                            .foregroundStyle(.orange.opacity(0.5))
+                            .frame(width: 10)
+                        SparklineView(values: animator.statsB.beauty, color: .orange, height: 18)
+                    }
+                }
+                .padding(.horizontal, 20)
+
+                Text("↑↓←→ steer · hold compose")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.15))
+                    .padding(.bottom, 4)
+            }
+        }
+    }
+
+    private func fmt(_ values: [Float], at i: Int) -> String {
+        guard values.indices.contains(i) else { return "-" }
+        return String(format: "%.2f", values[i])
+    }
+
+    private func fmtInt(_ values: [Int], at i: Int) -> String {
+        guard values.indices.contains(i) else { return "-" }
+        return "\(values[i])"
     }
 }
