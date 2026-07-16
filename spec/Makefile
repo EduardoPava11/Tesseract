@@ -15,12 +15,16 @@ ALGEBRA = algebra/Tesseract.hs \
 
 QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/TesseractQuantize.hs \
-               quantization/PerfectQuantize.hs
+               quantization/PerfectQuantize.hs \
+               quantization/BellPalette.hs \
+               quantization/ResolutionLadder.hs \
+               quantization/DitherRamp.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
 
 TEMPORAL = temporal/ContinuousDepthCadence.hs \
+           temporal/FaceCadence.hs \
            temporal/DepthBinomial.hs \
            temporal/TemporalBinomial.hs \
            temporal/TemporalLoop.hs
@@ -32,10 +36,13 @@ SPATIAL_EXTRA = spatial/ColorGraphs.hs \
                 spatial/SpatialTransport.hs
 
 STATISTICS = statistics/BinomialCube.hs \
-             statistics/BinomialFix.hs
+             statistics/BinomialFix.hs \
+             statistics/WassersteinPalette.hs
 
 # DeviationManifold.hs exceeds default read but compiles fine.
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
+
+NEURAL = neural/BayerResidual.hs
 
 OUTPUT = output/FrameGeometry.hs \
          output/GenIcon.hs \
@@ -46,7 +53,7 @@ OUTPUT_EXTRA = output/RealTesseract.hs \
                output/GIFAnalysis.hs \
                output/TemporalSpatialGIF.hs
 
-CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(OUTPUT)
+CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL) $(OUTPUT)
 
 # ── Targets ──────────────────────────────────────────────
 

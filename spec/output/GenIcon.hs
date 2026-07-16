@@ -307,7 +307,7 @@ main :: IO ()
 main = do
   putStrLn "Generating 1024×1024 isometric tesseract icon..."
   let size = 1024
-  withFile "/Users/danielmosquera/tesseract_icon.ppm" WriteMode $ \h -> do
+  withFile "tesseract_icon.ppm" WriteMode $ \h -> do
     hSetBinaryMode h True
     hPutStr h $ "P6\n" ++ show size ++ " " ++ show size ++ "\n255\n"
     mapM_ (\py ->

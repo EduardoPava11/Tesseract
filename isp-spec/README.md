@@ -1,5 +1,13 @@
 # tesseract-isp
 
+> **DEPRECATED (2026-07-15):** Tesseract is now a **front-camera-only** app; the
+> rear-camera Bayer-DNG track this package specifies has been removed. The Swift
+> port of this spec (64-DNG RGBT burst mode) is preserved on the
+> `archive/rear-rgbt` branch. The package is kept as a read-only reference —
+> the photon-time estimators and uncertainty carrier remain correct and may be
+> revived if a raw-count sensor path ever returns. Live specs for the app are
+> in `spec/`.
+
 Physics-grounded Haskell specification of the Tesseract iPhone app's custom ISP.
 
 Two 48MP ProRAW DNGs -> a 4D GIF along axes **(R, G, B, T)**, where `T` is a

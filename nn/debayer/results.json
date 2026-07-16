@@ -1,0 +1,95 @@
+{
+  "params": 5616,
+  "psnr": {
+    "bilinear": {
+      "all": {
+        "mean_patch_db": 47.14197606365965,
+        "pooled_db": 30.180819321173594
+      },
+      "photo": {
+        "mean_patch_db": 44.64519642576716,
+        "pooled_db": 42.460891893192226
+      },
+      "proc": {
+        "mean_patch_db": 50.887145520498386,
+        "pooled_db": 26.358365867749498
+      }
+    },
+    "mhc": {
+      "all": {
+        "mean_patch_db": 49.70922061848173,
+        "pooled_db": 28.983953279574074
+      },
+      "photo": {
+        "mean_patch_db": 49.93147862384604,
+        "pooled_db": 48.58429163175341
+      },
+      "proc": {
+        "mean_patch_db": 49.37583361043527,
+        "pooled_db": 25.033217016910974
+      }
+    },
+    "student": {
+      "all": {
+        "mean_patch_db": 50.857805182772935,
+        "pooled_db": 29.220213476549958
+      },
+      "photo": {
+        "mean_patch_db": 53.046226516682765,
+        "pooled_db": 51.93225840504581
+      },
+      "proc": {
+        "mean_patch_db": 47.57517318190819,
+        "pooled_db": 25.254790898064762
+      }
+    },
+    "student_fp16": {
+      "all": {
+        "mean_patch_db": 50.85874973591153,
+        "pooled_db": 29.220125539678605
+      },
+      "photo": {
+        "mean_patch_db": 53.04685392615662,
+        "pooled_db": 51.93273562486031
+      },
+      "proc": {
+        "mean_patch_db": 47.576593450543896,
+        "pooled_db": 25.254701139459137
+      }
+    }
+  },
+  "laws": {
+    "BR1": {
+      "max_err": 0.007113248109817505,
+      "tol": 0.01,
+      "pass": true
+    },
+    "BR2": {
+      "max_err": 0.0,
+      "tol": 0.01,
+      "pass": true
+    },
+    "BR3": {
+      "min": 0.0,
+      "max": 1.0,
+      "pass": true
+    },
+    "BR4": {
+      "max_err": 2.384185791015625e-07,
+      "tol": 0.03,
+      "pass": true
+    },
+    "BR5": {
+      "margin_db": 3.7158291191132875,
+      "tol": 1.0,
+      "pass": true
+    }
+  },
+  "parity_np_mlx": 5.960464477539063e-08,
+  "train_secs": 50.39184594154358,
+  "wall_secs": 51.92069602012634,
+  "epochs": 60,
+  "train_patches": 11640,
+  "eval_patches": 2000,
+  "held_out_photo": "Photo on 2025-03-07 at 1.27\u202fPM.jpg"
+}

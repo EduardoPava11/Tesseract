@@ -24,6 +24,20 @@ final class MetalPipeline {
     private let downsampleDepthState: MTLComputePipelineState
     private let geneForwardState: MTLComputePipelineState?  // Gene NN kernel (optional — may not exist in lib)
 
+    // DNG mode: NN debayer (DebayerNet.metal, FP16 weights) + rung box-reduce.
+    // Optional — graceful if the kernels are missing from the library.
+    private let debayerState: MTLComputePipelineState?
+    private let boxReduceState: MTLComputePipelineState?
+
+    // DNG debayer buffers, (re)allocated on demand for the active geometry.
+    // At native side 3022: mosaic 36.5 MB + RGB 109.5 MB + rung ≤ 12.6 MB.
+    // Freed via releaseDebayerResources() after each burst.
+    private var debayerMosaicBuffer: MTLBuffer?   // N² floats
+    private var debayerRGBBuffer: MTLBuffer?      // N² × 3 floats
+    private var debayerRungBuffer: MTLBuffer?     // S² × 3 floats
+    private var debayerSide = 0
+    private var debayerRungSide = 0
+
     // MARK: - Textures (64×64 working buffers)
 
     private var rgb64Texture: MTLTexture?
@@ -118,6 +132,21 @@ final class MetalPipeline {
             } else {
                 self.geneForwardState = nil
                 logger.warning("MetalPipeline: geneForward not found — GPU NN disabled, CPU fallback")
+            }
+
+            // DNG debayer kernels (optional — graceful if missing)
+            if let debayerFn = library.makeFunction(name: "debayer_f16") {
+                self.debayerState = try device.makeComputePipelineState(function: debayerFn)
+                logger.info("MetalPipeline: debayer_f16 pipeline created")
+            } else {
+                self.debayerState = nil
+                logger.warning("MetalPipeline: debayer_f16 not found — DNG debayer disabled")
+            }
+            if let boxReduceFn = library.makeFunction(name: "boxReduceRGB") {
+                self.boxReduceState = try device.makeComputePipelineState(function: boxReduceFn)
+            } else {
+                self.boxReduceState = nil
+                logger.warning("MetalPipeline: boxReduceRGB not found — DNG rung reduce disabled")
             }
 
             logger.info("MetalPipeline: all pipeline states created")
@@ -622,6 +651,98 @@ final class MetalPipeline {
         logger.info("MetalPipeline: geneForward dispatched \(s)×\(s) → \(indices.filter { $0 > 0 }.count) non-zero indices")
 
         return (indices, globals)
+    }
+
+    // MARK: - DNG Debayer Dispatch (rear DNG mode)
+
+    /// One GPU pass for the DNG streaming pipeline:
+    ///   normalized RGGB mosaic (side², [0,1] floats)
+    ///     → debayer_f16 (DebayerNet, 5,616-param residual over MHC)
+    ///     → boxReduceRGB → rung² × RGB floats.
+    ///
+    /// `side` must be even (CFA phase) and the mosaic must already be in
+    /// RGGB order — the caller shifts the crop origin per the sensor CFA.
+    /// Serial use only (the burst loop processes one frame at a time).
+    func debayerToRung(mosaic: [Float], side: Int, rung: Int) -> [Float]? {
+        guard let debayerPSO = debayerState, let reducePSO = boxReduceState else {
+            logger.error("MetalPipeline: debayerToRung called but kernels unavailable")
+            return nil
+        }
+        guard side > 0, side % 2 == 0, mosaic.count == side * side, rung > 0, rung <= side else {
+            logger.error("MetalPipeline: debayerToRung bad geometry side=\(side) rung=\(rung) count=\(mosaic.count)")
+            return nil
+        }
+
+        // (Re)allocate on geometry change.
+        if debayerSide != side || debayerMosaicBuffer == nil || debayerRGBBuffer == nil {
+            debayerMosaicBuffer = device.makeBuffer(length: side * side * 4, options: .storageModeShared)
+            debayerRGBBuffer = device.makeBuffer(length: side * side * 3 * 4, options: .storageModeShared)
+            debayerSide = side
+            logger.info("MetalPipeline: debayer buffers allocated for side \(side) (\((side * side * 16) / 1_048_576) MB)")
+        }
+        if debayerRungSide != rung || debayerRungBuffer == nil {
+            debayerRungBuffer = device.makeBuffer(length: rung * rung * 3 * 4, options: .storageModeShared)
+            debayerRungSide = rung
+        }
+        guard let inBuf = debayerMosaicBuffer, let rgbBuf = debayerRGBBuffer,
+              let rungBuf = debayerRungBuffer,
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            logger.error("MetalPipeline: debayerToRung allocation failure")
+            return nil
+        }
+
+        mosaic.withUnsafeBytes { src in
+            inBuf.contents().copyMemory(from: src.baseAddress!, byteCount: src.count)
+        }
+
+        // Pass 1: debayer (8×8 output tile per threadgroup, per kernel design).
+        guard let enc1 = commandBuffer.makeComputeCommandEncoder() else { return nil }
+        enc1.setComputePipelineState(debayerPSO)
+        enc1.setBuffer(inBuf, offset: 0, index: 0)
+        enc1.setBuffer(rgbBuf, offset: 0, index: 1)
+        var dims = SIMD2<Int32>(Int32(side), Int32(side))   // (H, W)
+        enc1.setBytes(&dims, length: MemoryLayout<SIMD2<Int32>>.size, index: 2)
+        enc1.dispatchThreadgroups(
+            MTLSize(width: (side + 7) / 8, height: (side + 7) / 8, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1)
+        )
+        enc1.endEncoding()
+
+        // Pass 2: box-reduce native RGB → rung.
+        guard let enc2 = commandBuffer.makeComputeCommandEncoder() else { return nil }
+        enc2.setComputePipelineState(reducePSO)
+        enc2.setBuffer(rgbBuf, offset: 0, index: 0)
+        enc2.setBuffer(rungBuf, offset: 0, index: 1)
+        var reduceDims = SIMD2<Int32>(Int32(side), Int32(rung))   // (N, S)
+        enc2.setBytes(&reduceDims, length: MemoryLayout<SIMD2<Int32>>.size, index: 2)
+        enc2.dispatchThreads(
+            MTLSize(width: rung, height: rung, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1)
+        )
+        enc2.endEncoding()
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        if let error = commandBuffer.error {
+            logger.error("MetalPipeline: debayerToRung GPU error: \(error.localizedDescription)")
+            lastError = error.localizedDescription
+            return nil
+        }
+
+        let count = rung * rung * 3
+        let ptr = rungBuf.contents().bindMemory(to: Float.self, capacity: count)
+        return Array(UnsafeBufferPointer(start: ptr, count: count))
+    }
+
+    /// Frees the large DNG debayer buffers (~150 MB at native 3022²).
+    /// Call after each burst; the next burst reallocates.
+    func releaseDebayerResources() {
+        debayerMosaicBuffer = nil
+        debayerRGBBuffer = nil
+        debayerRungBuffer = nil
+        debayerSide = 0
+        debayerRungSide = 0
     }
 }
 

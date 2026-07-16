@@ -9,22 +9,27 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
+    @StateObject private var faceCamera = FaceCaptureManager()
+    @StateObject private var dngCamera = DNGCaptureManager()
 
     enum AppMode: String, CaseIterable, Identifiable {
-        case gif = "GIF"
-        case raw = "RAW"
+        case live = "LIVE"
+        case face = "FACE"
+        case dng = "DNG"
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .gif: return "Live"
-            case .raw: return "DNG"
+            case .live: return "Live"
+            case .face: return "Face"
+            case .dng:  return "DNG"
             }
         }
         var tagline: String {
             switch self {
-            case .gif: return "front · 64²  live palette"
-            case .raw: return "rear · 4096²  Bayer DNG"
+            case .live: return "front · TrueDepth depth cadence"
+            case .face: return "front · ARKit anatomical cadence"
+            case .dng:  return "rear · NN debayer → rung ladder"
             }
         }
     }
@@ -35,20 +40,40 @@ struct ContentView: View {
             switch appMode {
             case .none:
                 launchPicker
-            case .gif:
+            case .live:
                 gifModeBody
                     .safeAreaInset(edge: .top, spacing: 0) { backBar }
-            case .raw:
-                CaptureRAWView()
+            case .face:
+                FaceCaptureView(camera: faceCamera)
+                    .safeAreaInset(edge: .top, spacing: 0) { backBar }
+            case .dng:
+                DNGCaptureView(manager: dngCamera)
                     .safeAreaInset(edge: .top, spacing: 0) { backBar }
             }
         }
-        // iOS allows one active AVCaptureSession at a time; stop the front
-        // camera whenever we leave .gif so RAW (or the picker) can own it.
+        // The TrueDepth camera admits ONE owner: AVCaptureSession (LIVE) and
+        // ARSession (FACE) cannot coexist. On every mode change, fully stop
+        // the other capture systems SYNCHRONOUSLY before starting the new
+        // one. The rear DNG session doesn't share TrueDepth hardware, but it
+        // holds ~100 MB of ISP buffers — same exclusivity policy applies.
         .onChange(of: appMode) { _, newMode in
             switch newMode {
-            case .gif: camera.start()
-            case .raw, .none: camera.stop()
+            case .live:
+                faceCamera.stop()   // release TrueDepth from ARKit first
+                dngCamera.teardown()
+                camera.start()
+            case .face:
+                camera.stop()       // release TrueDepth from AVFoundation first
+                dngCamera.teardown()
+                faceCamera.start()
+            case .dng:
+                camera.stop()
+                faceCamera.stop()
+                dngCamera.configure()   // rear session (DNGCaptureView also guards onAppear)
+            case .none:
+                camera.stop()
+                faceCamera.stop()
+                dngCamera.teardown()
             }
         }
     }

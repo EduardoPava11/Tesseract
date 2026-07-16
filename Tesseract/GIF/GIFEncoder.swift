@@ -19,11 +19,29 @@ struct GIFEncoder {
     // MARK: - Encode
 
     /// Encode quantized frames → GIF89a Data with preserved 4^4 palette.
-    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil) -> Data? {
-        guard !frames.isEmpty else { return nil }
+    ///
+    /// `upscale` replicates each palette index into a factor×factor block at
+    /// emit time (fat voxels, INDEX domain — never colors, no interpolation).
+    /// Default 1 preserves the existing byte-exact 64×64 output.
+    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1) -> Data? {
+        encode(
+            indexFrames: frames.map(\.paletteIndices),
+            side: QuantizedFrame.size,    // 64
+            measure: measure,
+            upscale: upscale
+        )
+    }
 
-        let width = QuantizedFrame.size   // 64
-        let height = QuantizedFrame.size  // 64
+    /// Side-parameterized variant for the DNG rung ladder (S ∈ {64, 256, 1024}):
+    /// same GIF89a stream, same tesseract GCT, arbitrary square side.
+    /// The QuantizedFrame overload above delegates here — one encoder.
+    static func encode(indexFrames: [[UInt8]], side: Int, measure: BirkhoffMeasure? = nil, upscale: Int = 1) -> Data? {
+        guard !indexFrames.isEmpty, side >= 1, upscale >= 1,
+              indexFrames.allSatisfy({ $0.count == side * side }) else { return nil }
+
+        let frames = indexFrames
+        let width = side * upscale
+        let height = side * upscale
 
         var data = Data()
         data.reserveCapacity(frames.count * 2048)
@@ -90,13 +108,51 @@ struct GIFEncoder {
             ])
 
             // LZW-compressed palette indices (minCodeSize = 8 for 256 colors)
-            data.append(lzwEncode(frame.paletteIndices, minCodeSize: 8))
+            let indices = upscale == 1
+                ? frame
+                : replicate(frame, side: side, factor: upscale)
+            #if DEBUG
+            if upscale > 1, frame == frames[0] {
+                // SixFour selfCheck contract: decimate(replicate(x)) == x
+                assert(decimate(indices, side: side, factor: upscale) == frame,
+                       "GIFEncoder: replicate/decimate round-trip failed")
+            }
+            #endif
+            data.append(lzwEncode(indices, minCodeSize: 8))
         }
 
         // ── 7. Trailer ──
         data.append(0x3B)
 
         return data
+    }
+
+    // MARK: - Index-domain replication (fat voxels)
+
+    /// Nearest-neighbor replication of palette INDICES: each source cell
+    /// becomes a factor×factor block. No color math, no interpolation.
+    static func replicate(_ cells: [UInt8], side: Int, factor: Int) -> [UInt8] {
+        let outSide = factor * side
+        var out = [UInt8](repeating: 0, count: outSide * outSide)
+        for oy in 0..<outSide {
+            let sy = oy / factor
+            for ox in 0..<outSide {
+                out[oy * outSide + ox] = cells[sy * side + ox / factor]
+            }
+        }
+        return out
+    }
+
+    /// Inverse of `replicate` (takes the top-left sample of each block).
+    static func decimate(_ cells: [UInt8], side: Int, factor: Int) -> [UInt8] {
+        let outSide = factor * side
+        var out = [UInt8](repeating: 0, count: side * side)
+        for y in 0..<side {
+            for x in 0..<side {
+                out[y * side + x] = cells[(y * factor) * outSide + x * factor]
+            }
+        }
+        return out
     }
 
     // MARK: - Comment Extension

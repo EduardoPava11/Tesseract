@@ -25,6 +25,7 @@ import Data.List (sortBy, foldl', intercalate)
 import Data.Ord (comparing, Down(..))
 import qualified Data.Map.Strict as Map
 import Data.Map.Strict (Map)
+import System.Directory (createDirectoryIfMissing)
 import System.IO (withFile, IOMode(..), hSetBinaryMode, hPutStr)
 
 -- ════════════════════════════════════════════════════════════════
@@ -407,8 +408,9 @@ main = do
 
   -- Export
   putStrLn "── Exporting PPM frames ──"
-  exportFrames "/Users/danielmosquera/beautiful_gif" frames
-  putStrLn "  Done. 64 frames at /Users/danielmosquera/beautiful_gif/"
+  createDirectoryIfMissing True "_out/beautiful_gif"
+  exportFrames "_out/beautiful_gif" frames
+  putStrLn "  Done. 64 frames at spec/_out/beautiful_gif/"
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════════"
