@@ -19,11 +19,16 @@ struct GIFEncoder {
     // MARK: - Encode
 
     /// Encode quantized frames → GIF89a Data with preserved 4^4 palette.
-    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil) -> Data? {
-        guard !frames.isEmpty else { return nil }
+    ///
+    /// `upscale` replicates each palette index into a factor×factor block at
+    /// emit time (fat voxels, INDEX domain — never colors, no interpolation).
+    /// Default 1 preserves the existing byte-exact 64×64 output.
+    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1) -> Data? {
+        guard !frames.isEmpty, upscale >= 1 else { return nil }
 
-        let width = QuantizedFrame.size   // 64
-        let height = QuantizedFrame.size  // 64
+        let side = QuantizedFrame.size    // 64
+        let width = side * upscale
+        let height = side * upscale
 
         var data = Data()
         data.reserveCapacity(frames.count * 2048)
@@ -90,13 +95,51 @@ struct GIFEncoder {
             ])
 
             // LZW-compressed palette indices (minCodeSize = 8 for 256 colors)
-            data.append(lzwEncode(frame.paletteIndices, minCodeSize: 8))
+            let indices = upscale == 1
+                ? frame.paletteIndices
+                : replicate(frame.paletteIndices, side: side, factor: upscale)
+            #if DEBUG
+            if upscale > 1, frame.index == frames[0].index {
+                // SixFour selfCheck contract: decimate(replicate(x)) == x
+                assert(decimate(indices, side: side, factor: upscale) == frame.paletteIndices,
+                       "GIFEncoder: replicate/decimate round-trip failed")
+            }
+            #endif
+            data.append(lzwEncode(indices, minCodeSize: 8))
         }
 
         // ── 7. Trailer ──
         data.append(0x3B)
 
         return data
+    }
+
+    // MARK: - Index-domain replication (fat voxels)
+
+    /// Nearest-neighbor replication of palette INDICES: each source cell
+    /// becomes a factor×factor block. No color math, no interpolation.
+    static func replicate(_ cells: [UInt8], side: Int, factor: Int) -> [UInt8] {
+        let outSide = factor * side
+        var out = [UInt8](repeating: 0, count: outSide * outSide)
+        for oy in 0..<outSide {
+            let sy = oy / factor
+            for ox in 0..<outSide {
+                out[oy * outSide + ox] = cells[sy * side + ox / factor]
+            }
+        }
+        return out
+    }
+
+    /// Inverse of `replicate` (takes the top-left sample of each block).
+    static func decimate(_ cells: [UInt8], side: Int, factor: Int) -> [UInt8] {
+        let outSide = factor * side
+        var out = [UInt8](repeating: 0, count: side * side)
+        for y in 0..<side {
+            for x in 0..<side {
+                out[y * side + x] = cells[(y * factor) * outSide + x * factor]
+            }
+        }
+        return out
     }
 
     // MARK: - Comment Extension

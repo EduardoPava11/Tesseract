@@ -13,18 +13,21 @@ struct ContentView: View {
     enum AppMode: String, CaseIterable, Identifiable {
         case gif = "GIF"
         case raw = "RAW"
+        case rgbt = "RGBT"
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .gif: return "Live"
-            case .raw: return "DNG"
+            case .gif:  return "Live"
+            case .raw:  return "DNG"
+            case .rgbt: return "RGBT Burst"
             }
         }
         var tagline: String {
             switch self {
-            case .gif: return "front · 64²  live palette"
-            case .raw: return "rear · 4096²  Bayer DNG"
+            case .gif:  return "front · 64²  live palette"
+            case .raw:  return "rear · 4096²  Bayer DNG"
+            case .rgbt: return "rear · 64³  photon-time cube"
             }
         }
     }
@@ -41,14 +44,17 @@ struct ContentView: View {
             case .raw:
                 CaptureRAWView()
                     .safeAreaInset(edge: .top, spacing: 0) { backBar }
+            case .rgbt:
+                RGBTBurstView()
+                    .safeAreaInset(edge: .top, spacing: 0) { backBar }
             }
         }
         // iOS allows one active AVCaptureSession at a time; stop the front
-        // camera whenever we leave .gif so RAW (or the picker) can own it.
+        // camera whenever we leave .gif so RAW/RGBT (or the picker) can own it.
         .onChange(of: appMode) { _, newMode in
             switch newMode {
             case .gif: camera.start()
-            case .raw, .none: camera.stop()
+            case .raw, .rgbt, .none: camera.stop()
             }
         }
     }
