@@ -377,9 +377,9 @@ final class AxiomTests: XCTestCase {
     /// Black = (32,32,32), White = (223,223,223). Exact bytes.
     func testSRGB8_blackWhiteExact() {
         let black = TesseractCoord.black.sRGB8
-        XCTAssertEqual(black, (32, 32, 32), "Black must be (32,32,32)")
+        XCTAssertTrue(black == (32, 32, 32), "Black must be (32,32,32)")
         let white = TesseractCoord.white.sRGB8
-        XCTAssertEqual(white, (223, 223, 223), "White must be (223,223,223)")
+        XCTAssertTrue(white == (223, 223, 223), "White must be (223,223,223)")
     }
 
     // ════════════════════════════════════════════════

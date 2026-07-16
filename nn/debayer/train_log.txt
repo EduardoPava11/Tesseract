@@ -1,0 +1,125 @@
+photos: 3 train, 1 held out (Photo on 2025-03-07 at 1.27 PM.jpg)
+procedural: 64 train, 16 held out
+patches: 11640 train, 2000 eval (1200 photo / 800 procedural)
+precomputing classical demosaics ...
+bilinear PSNR: {'all': {'mean_patch_db': 47.14197606365965, 'pooled_db': 30.180819321173594}, 'photo': {'mean_patch_db': 44.64519642576716, 'pooled_db': 42.460891893192226}, 'proc': {'mean_patch_db': 50.887145520498386, 'pooled_db': 26.358365867749498}}
+MHC      PSNR: {'all': {'mean_patch_db': 49.70922061848173, 'pooled_db': 28.983953279574074}, 'photo': {'mean_patch_db': 49.93147862384604, 'pooled_db': 48.58429163175341}, 'proc': {'mean_patch_db': 49.37583361043527, 'pooled_db': 25.033217016910974}}
+params: 5616
+training: 60 epochs x 90 steps, batch 128
+epoch   0  logMSE -10.8562  eval 49.71 dB/patch (28.98 pooled)  |c4| 0.3165
+epoch   5  logMSE -10.9506  eval 49.58 dB/patch (29.00 pooled)  |c4| 0.4708
+epoch  10  logMSE -11.0789  eval 50.05 dB/patch (29.01 pooled)  |c4| 0.6704
+epoch  15  logMSE -11.1876  eval 50.83 dB/patch (28.96 pooled)  |c4| 0.8632
+epoch  20  logMSE -11.2626  eval 50.93 dB/patch (28.96 pooled)  |c4| 0.9970
+epoch  25  logMSE -11.3019  eval 50.99 dB/patch (28.99 pooled)  |c4| 1.1034
+epoch  30  logMSE -11.3448  eval 51.08 dB/patch (29.05 pooled)  |c4| 1.1827
+epoch  35  logMSE -11.3786  eval 51.13 dB/patch (29.14 pooled)  |c4| 1.2555
+epoch  40  logMSE -11.4088  eval 51.10 dB/patch (29.16 pooled)  |c4| 1.3023
+epoch  45  logMSE -11.4367  eval 50.97 dB/patch (29.16 pooled)  |c4| 1.3433
+epoch  50  logMSE -11.4552  eval 50.89 dB/patch (29.19 pooled)  |c4| 1.3658
+epoch  55  logMSE -11.4757  eval 50.81 dB/patch (29.21 pooled)  |c4| 1.3805
+epoch  59  logMSE -11.4765  eval 50.86 dB/patch (29.22 pooled)  |c4| 1.3882
+student  PSNR: {'all': {'mean_patch_db': 50.857805182772935, 'pooled_db': 29.220213476549958}, 'photo': {'mean_patch_db': 53.046226516682765, 'pooled_db': 51.93225840504581}, 'proc': {'mean_patch_db': 47.57517318190819, 'pooled_db': 25.254790898064762}}
+stud16   PSNR: {'all': {'mean_patch_db': 50.85874973591153, 'pooled_db': 29.220125539678605}, 'photo': {'mean_patch_db': 53.04685392615662, 'pooled_db': 51.93273562486031}, 'proc': {'mean_patch_db': 47.576593450543896, 'pooled_db': 25.254701139459137}}
+numpy/MLX parity (max abs): 5.960e-08
+BR1 {'max_err': 0.007113248109817505, 'tol': 0.01, 'pass': True}
+BR2 {'max_err': 0.0, 'tol': 0.01, 'pass': True}
+BR3 {'min': 0.0, 'max': 1.0, 'pass': True}
+BR4 {'max_err': 2.384185791015625e-07, 'tol': 0.03, 'pass': True}
+BR5 {'margin_db': 3.7158291191132875, 'tol': 1.0, 'pass': True}
+{
+  "params": 5616,
+  "psnr": {
+    "bilinear": {
+      "all": {
+        "mean_patch_db": 47.14197606365965,
+        "pooled_db": 30.180819321173594
+      },
+      "photo": {
+        "mean_patch_db": 44.64519642576716,
+        "pooled_db": 42.460891893192226
+      },
+      "proc": {
+        "mean_patch_db": 50.887145520498386,
+        "pooled_db": 26.358365867749498
+      }
+    },
+    "mhc": {
+      "all": {
+        "mean_patch_db": 49.70922061848173,
+        "pooled_db": 28.983953279574074
+      },
+      "photo": {
+        "mean_patch_db": 49.93147862384604,
+        "pooled_db": 48.58429163175341
+      },
+      "proc": {
+        "mean_patch_db": 49.37583361043527,
+        "pooled_db": 25.033217016910974
+      }
+    },
+    "student": {
+      "all": {
+        "mean_patch_db": 50.857805182772935,
+        "pooled_db": 29.220213476549958
+      },
+      "photo": {
+        "mean_patch_db": 53.046226516682765,
+        "pooled_db": 51.93225840504581
+      },
+      "proc": {
+        "mean_patch_db": 47.57517318190819,
+        "pooled_db": 25.254790898064762
+      }
+    },
+    "student_fp16": {
+      "all": {
+        "mean_patch_db": 50.85874973591153,
+        "pooled_db": 29.220125539678605
+      },
+      "photo": {
+        "mean_patch_db": 53.04685392615662,
+        "pooled_db": 51.93273562486031
+      },
+      "proc": {
+        "mean_patch_db": 47.576593450543896,
+        "pooled_db": 25.254701139459137
+      }
+    }
+  },
+  "laws": {
+    "BR1": {
+      "max_err": 0.007113248109817505,
+      "tol": 0.01,
+      "pass": true
+    },
+    "BR2": {
+      "max_err": 0.0,
+      "tol": 0.01,
+      "pass": true
+    },
+    "BR3": {
+      "min": 0.0,
+      "max": 1.0,
+      "pass": true
+    },
+    "BR4": {
+      "max_err": 2.384185791015625e-07,
+      "tol": 0.03,
+      "pass": true
+    },
+    "BR5": {
+      "margin_db": 3.7158291191132875,
+      "tol": 1.0,
+      "pass": true
+    }
+  },
+  "parity_np_mlx": 5.960464477539063e-08,
+  "train_secs": 50.39184594154358,
+  "wall_secs": 51.92069602012634,
+  "epochs": 60,
+  "train_patches": 11640,
+  "eval_patches": 2000,
+  "held_out_photo": "Photo on 2025-03-07 at 1.27\u202fPM.jpg"
+}
+wall-clock: 51.9s (train 50.4s)

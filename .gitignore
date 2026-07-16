@@ -30,3 +30,10 @@ spec/**/*.dyn_o
 # Rust / Python (if added)
 target/
 __pycache__/
+
+# Haskell spec artifacts
+spec/_out/
+spec/tesseract_icon.ppm
+
+# NN lab build artifacts
+nn/metal-harness/build/

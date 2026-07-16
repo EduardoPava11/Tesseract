@@ -89,6 +89,10 @@ enum CameraConfig {
     static let displayScale = 4
     static var displaySize: Int { outputSize * displayScale }
     static let targetFPS = 20
+
+    // Every export is 256×256: fat voxels via index replication (256/S per axis).
+    static let exportSide = 256
+    static var exportUpscale: Int { exportSide / outputSize }
 }
 
 @MainActor
@@ -440,7 +444,7 @@ final class CameraManager: NSObject, ObservableObject {
             let beauty = overallMeasure?.beauty ?? 0
 
             // Encode GIF
-            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure) {
+            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure, upscale: CameraConfig.exportUpscale) {
                 await MainActor.run {
                     self.gifData = data
                     self.gifMeasure = overallMeasure
@@ -545,6 +549,28 @@ final class CameraManager: NSObject, ObservableObject {
             state = .previewing
             logger.info("Camera: session running")
             // Go territory analysis runs during processing phase, not here
+
+            #if DEBUG
+            // Diagnostic: does THIS front camera expose any RAW to third-party
+            // apps? Bayer formats land in availableRawPhotoPixelFormatTypes;
+            // ProRAW (linear DNG) is gated by isAppleProRAWSupported. Attach a
+            // throwaway photo output, log, detach. Answer appears once per run.
+            let probe = AVCapturePhotoOutput()
+            session.beginConfiguration()
+            if session.canAddOutput(probe) {
+                session.addOutput(probe)
+                session.commitConfiguration()
+                let raws = probe.availableRawPhotoPixelFormatTypes
+                let bayer = raws.filter { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+                logger.info("FRONT-RAW PROBE: rawFormats=\(raws.count) bayer=\(bayer.count) proRAWSupported=\(probe.isAppleProRAWSupported)")
+                session.beginConfiguration()
+                session.removeOutput(probe)
+                session.commitConfiguration()
+            } else {
+                session.commitConfiguration()
+                logger.info("FRONT-RAW PROBE: cannot attach photo output to front session")
+            }
+            #endif
 
         } catch {
             state = .error(error.localizedDescription)
@@ -878,7 +904,7 @@ final class CameraManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure)
+            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale)
 
             await MainActor.run {
                 self.processProgress = 1.0

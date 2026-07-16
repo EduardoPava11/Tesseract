@@ -11,11 +11,20 @@ deviation from a binomial null model and complexity `C` is normalized Shannon
 entropy. Everything is specified first in Haskell (axioms + QuickCheck laws +
 golden vectors), then ported to Swift/Metal.
 
-## Two capture modes
+## Two capture modes (front camera only)
 
-The app launches into a picker with two independent pipelines:
+Tesseract is a **front-camera app**. The launcher picks between two
+pipelines that differ only in where the cadence signal comes from — the
+rest of the pipeline (PerfectQuantizer, tesseract palette, GIF89a encoder)
+is shared. The old rear-camera tracks (2-DNG burst and the 64-DNG RGBT
+photon-time burst) live on the `archive/rear-rgbt` branch.
 
-### 1. Live GIF (front TrueDepth camera)
+Every export is **256×256 at exactly 20 fps** (5 cs GIF delay): the S×S
+palette-index frames are replicated (256/S)× per axis before LZW — fat
+voxels, never interpolation — so the file remains bit-faithful to the
+underlying cube (`GIFEncoder.decimate ∘ replicate = id`, asserted in DEBUG).
+
+### 1. LIVE — TrueDepth depth cadence
 
 Synchronized RGB + depth at 20 fps (`AVCaptureDataOutputSynchronizer`), a
 universal centered crop (768² RGB, 256² depth), downsampled to the cube side.
@@ -73,22 +82,30 @@ E = 16 pixels per palette entry per 64² frame. `O = √Σ(count_i − 16)²`,
 `C = H/log 256`, `M = O/C`, plus a participation-ratio manifold-dimension
 estimate in [0, 3]. The thesis: deviation from binomial *is* the image.
 
-### 2. RAW burst (rear 48 MP camera)
+### 2. FACE — ARKit anatomical cadence
 
-`RAWCaptureManager` captures two Bayer ProRAW DNGs separated by a
-user-configurable Δt (clamped ≥ 200 ms — the 48 MP ISP pipeline bails with
-err −12710 below that). `RAWBurstPackage` assembles an AirDrop-ready folder:
+Ported from HaarScope's `ARFaceCapture`. An `ARSession` running
+`ARFaceTrackingConfiguration` delivers camera frames plus the ~1220-vertex
+face mesh; **the mesh IS the depth**. Per frame
+(`spec/temporal/FaceCadence.hs`, axioms FC1–FC8):
 
-```
-a.dng           first full-sensor Bayer capture (e.g. 8064×6048)
-b.dng           second capture
-preview.jpg     embedded preview from A
-manifest.json   Δt, sensor geometry, and the advisory 4096² center crop
-                that the tesseract-isp Haskell spec reads from
-```
+- nose = vertex with max z (face-local, +z out of the face)
+- `R = max‖v − nose‖`, per-vertex signal `s = 1 − ‖v − nose‖/R ∈ [0,1]`
+  (scale-free: the same face at any distance yields the same signal)
+- vertices project through ARKit's camera into the S×S grid and triangles
+  rasterize barycentrically (closed-triangle rule, λ ≥ 0; overlaps combine
+  via order-independent max — near-nose wins at projection folds);
+  background = exactly 0
 
-The DNGs are untouched; the crop is advisory metadata. These bursts are the
-input to the `isp-spec/` pipeline below.
+The rasterized grid drops into the same pipeline slot TrueDepth depth
+occupies in LIVE mode, so `σ(s) = σ_base·(2 − s)` applies verbatim: the
+nose locks crisply to its epoch, the background diffuses across epochs.
+`FaceMeshSignal.swift` is the pure port (mirrored by
+`FaceMeshSignalTests`); `FaceCaptureManager.swift` owns the ARSession.
+
+The TrueDepth camera admits one owner: ARSession (FACE) and
+AVCaptureSession (LIVE) cannot coexist, so mode switches stop one system
+synchronously before starting the other.
 
 ## The Haskell specs
 
@@ -101,6 +118,7 @@ Self-contained `runghc` scripts, each verifying its own axioms (`make test`).
 Layers: `algebra/` (the ℝ¹⊕ℝ³ direct sum, 4⁴ lattice, 22 axioms; Hamming
 distance K ~ Binomial(4, 3/4)), `quantization/` (14-bin axes, F–S/epoch split,
 distribution-exact largest-remainder pass), `temporal/` (Gaussian cadence,
+the FaceCadence anatomical signal with its golden reference rasterizer,
 bidirectional error diffusion around the 64-frame loop), `spatial/` (19×19
 blocks analyzed as Go positions: territory, liberties, complexity; EMD between
 per-color spatial graphs), `statistics/` (the B(4096, 1/256) cube and the
@@ -108,7 +126,10 @@ deviation manifold), `neural/` (Para categorical NN vocabulary, the 3-layer
 depth net, teacher–student contract), and `deprecated/` (removed ideas with
 rationale — e.g. the KataGo black box).
 
-### `isp-spec/` — `tesseract-isp`, a physics-grounded ISP (cabal package)
+### `isp-spec/` — `tesseract-isp`, a physics-grounded ISP (cabal package) — **DEPRECATED**
+
+Rear-camera spec, kept as a read-only reference now that the app is
+front-camera only (its Swift port lives on `archive/rear-rgbt`).
 
 Two Bayer DNGs + Δt → a 4D GIF along axes **(R, G, B, T)**, where `T` is a
 per-pixel *physical time* estimated from photon statistics — not a frame index.
@@ -158,7 +179,8 @@ project.yml               XcodeGen manifest (iOS 26, Swift 6, strict concurrency
 Tesseract/
   App/                    TesseractApp, ContentView (mode picker + state machine UI)
   Camera/                 CameraManager (TrueDepth RGB+D sync), FrameBuffer,
-                          RAWCaptureManager + RAWBurstPackage (48 MP DNG bursts)
+                          FaceCaptureManager (ARKit face mesh), FaceMeshSignal
+                          (pure anatomical-signal + rasterizer, FC1-FC8)
   Model/                  TesseractCoord (index ↔ (d,a,b,c) bijection), Axes,
                           Histogram, GoBoard
   Tesseract/              PerfectQuantizer, BinomialCadence, BirkhoffMeasure,
@@ -167,11 +189,13 @@ Tesseract/
   Metal/                  Quantize.metal, Gene.metal, MetalPipeline
   GIF/                    GIFEncoder (raw-index GIF89a + LZW)
   Views/                  CubeGIFView, GIFPlayerView, PaletteSwatchView,
-                          CaptureRAWView
+                          FaceCaptureView
 TesseractTests/           Axiom/Level/BlockPyramid/GeneNN/GeneCapsule/MapElites/
-                          Entropy/Swipe tests — mirror the Haskell axioms
+                          Entropy/Swipe/FaceMeshSignal/GIFUpscale tests —
+                          mirror the Haskell axioms
 spec/                     runghc axiom scripts (see spec/README.md)
-isp-spec/                 tesseract-isp cabal package (see isp-spec/README.md)
+isp-spec/                 tesseract-isp cabal package — DEPRECATED, rear-camera
+                          reference (see isp-spec/README.md)
 ```
 
 ## Build & run
@@ -185,9 +209,10 @@ xcodegen generate
 open Tesseract.xcodeproj     # build the Tesseract scheme on an iPhone
 ```
 
-Requires a physical device for both modes (TrueDepth front camera; rear 48 MP
-Bayer RAW needs iPhone 17 Pro-class hardware). Tests: the `Tesseract` scheme
-runs `TesseractTests` on device/simulator.
+Requires a physical device for both modes (TrueDepth front camera for LIVE,
+face-tracking ARKit for FACE). Tests: the `Tesseract` scheme runs
+`TesseractTests` on device/simulator; the pure-logic suites
+(FaceMeshSignal, GIFUpscale) run headless in the simulator.
 
 **Haskell axiom specs**:
 
@@ -210,23 +235,30 @@ cabal run tesseract-isp-golden               # JSON vectors for the Swift port
 ## Status
 
 **Working**
-- Live-GIF pipeline end to end: TrueDepth capture → capture-then-compute
-  PerfectQuantizer → tesseract-palette GIF89a, with live Metal preview and
-  Birkhoff scoring.
+- LIVE pipeline end to end: TrueDepth capture → capture-then-compute
+  PerfectQuantizer → tesseract-palette GIF89a at 256×256/20 fps, with live
+  Metal preview and Birkhoff scoring.
+- FACE pipeline: ARKit face mesh → anatomical cadence signal
+  (FaceCadence.hs golden reference, FC1–FC8 all passing) → same quantizer
+  and encoder. Compile-verified + pure-logic tests; awaiting first
+  on-device run.
 - Three-phase gene interaction (Dual Explore → Compose → Refine) with GPU gene
-  dispatch and MAP-Elites. The MLX training hook exists but is conditionally
-  compiled and inactive until the MLX package is added to `project.yml`.
-- `spec/` axiom suite and the Swift unit tests that mirror it.
-- `tesseract-isp` library, law suite, golden-vector generator, and the
-  reference CLI (fixture DNGs included).
+  dispatch and MAP-Elites, LIVE mode only. The MLX training hook exists but is
+  conditionally compiled and inactive until the MLX package is added to
+  `project.yml`.
+- `spec/` axiom suite (17/17 green) and the Swift unit tests that mirror it.
 
-**In progress**
-- Rear-camera RAW burst capture (`RAWCaptureManager`, `RAWBurstPackage`,
-  `CaptureRAWView`) and its wiring into `ContentView` — the on-device front end
-  of the DNG → (R,G,B,T) track. Uncommitted.
-- The Swift/Metal port of the `isp-spec` pyramid-double / fingerprint /
-  spine+delta path (the Haskell spec and laws exist; the app still uses the
-  live 4⁴ path).
+**Archived**
+- All rear-camera work (2-DNG ProRAW burst; 64-DNG Bayer → photon-time
+  (R,G,B,T) → 256² GIF) on the `archive/rear-rgbt` branch; `isp-spec/` is
+  its deprecated Haskell reference.
+
+**Open**
+- First on-device verification of FACE mode (mirroring/orientation of the
+  ARKit capturedImage path is compile-checked only).
+- 4 pre-existing AxiomTests failures (floor-quantization anchor semantics
+  vs the dithering quantizer, AxiomTests.swift:467–554) — latent test-vs-
+  semantics question, untouched by the front-camera pivot.
 - `ColorDouble` instance choice (KMeans vs PCA vs Coproduct) is deliberately
   open pending Birkhoff-score benchmarks, as is the spine/delta size
   allocation (currently 192 + 64).

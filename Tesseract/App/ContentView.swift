@@ -9,22 +9,24 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
+    @StateObject private var faceCamera = FaceCaptureManager()
 
+    // Front-camera only: LIVE (TrueDepth depth) and FACE (ARKit mesh).
     enum AppMode: String, CaseIterable, Identifiable {
-        case gif = "GIF"
-        case raw = "RAW"
+        case live = "LIVE"
+        case face = "FACE"
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .gif: return "Live"
-            case .raw: return "DNG"
+            case .live: return "Live"
+            case .face: return "Face"
             }
         }
         var tagline: String {
             switch self {
-            case .gif: return "front · 64²  live palette"
-            case .raw: return "rear · 4096²  Bayer DNG"
+            case .live: return "front · TrueDepth depth cadence"
+            case .face: return "front · ARKit anatomical cadence"
             }
         }
     }
@@ -35,20 +37,28 @@ struct ContentView: View {
             switch appMode {
             case .none:
                 launchPicker
-            case .gif:
+            case .live:
                 gifModeBody
                     .safeAreaInset(edge: .top, spacing: 0) { backBar }
-            case .raw:
-                CaptureRAWView()
+            case .face:
+                FaceCaptureView(camera: faceCamera)
                     .safeAreaInset(edge: .top, spacing: 0) { backBar }
             }
         }
-        // iOS allows one active AVCaptureSession at a time; stop the front
-        // camera whenever we leave .gif so RAW (or the picker) can own it.
+        // The TrueDepth camera admits ONE owner: AVCaptureSession (LIVE) and
+        // ARSession (FACE) cannot coexist. On every mode change, fully stop
+        // the other capture system SYNCHRONOUSLY before starting the new one.
         .onChange(of: appMode) { _, newMode in
             switch newMode {
-            case .gif: camera.start()
-            case .raw, .none: camera.stop()
+            case .live:
+                faceCamera.stop()   // release TrueDepth from ARKit first
+                camera.start()
+            case .face:
+                camera.stop()       // release TrueDepth from AVFoundation first
+                faceCamera.start()
+            case .none:
+                camera.stop()
+                faceCamera.stop()
             }
         }
     }
