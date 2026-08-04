@@ -5,10 +5,8 @@
 # Governed directories (migrated to the lattice):
 #   Tesseract/App, Tesseract/Views/States, Tesseract/UI,
 #   Tesseract/Views/PaletteSwatchView.swift
-# Not yet governed (migration TODO — extend GOVERNED as they convert):
-#   Tesseract/Views/EliteMapView.swift
-#   (GIFPlayerView is a primitive; CubeGIFView + FaceCaptureView
-#    deleted in the S3 pass)
+# (GIFPlayerView is a primitive; CubeGIFView + FaceCaptureView were
+#  deleted in the S3 pass — every surviving view is governed.)
 #
 # Invariants:
 #   LINT-PLACEMENT      .position(/.offset( only with // LINT-ALLOW-POSITION
@@ -26,7 +24,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI Tesseract/Views/PaletteSwatchView.swift"
+GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI Tesseract/Views/PaletteSwatchView.swift Tesseract/Views/EliteMapView.swift"
 FAIL=0
 
 # Files converted to the cell vocabulary: raw drawing vocab is banned
@@ -47,6 +45,7 @@ Tesseract/Views/States/RefiningStateView.swift
 Tesseract/Views/States/FacePreviewStateView.swift
 Tesseract/Views/States/BirkhoffGauge.swift
 Tesseract/Views/PaletteSwatchView.swift
+Tesseract/Views/EliteMapView.swift
 "
 
 note() { echo "  ✗ $1"; FAIL=1; }

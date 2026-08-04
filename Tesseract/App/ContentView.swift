@@ -67,7 +67,8 @@ struct ContentView: View {
             EliteMapView(
                 map: camera.eliteMap,
                 version: camera.eliteVersion,
-                onClose: { showEliteMap = false }
+                onClose: { showEliteMap = false },
+                clock: clock
             )
         }
         // Launch → LIVE preview immediately.

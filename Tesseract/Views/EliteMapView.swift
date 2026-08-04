@@ -1,10 +1,14 @@
 // EliteMapView.swift
 // Tesseract
 //
-// The MAP-Elites gallery: a 3×3 grid over (temporal rhythm × color spread),
-// each cell holding the most beautiful organism found at that descriptor.
-// Cells show a static first frame; selecting a cell plays its GIF with
-// Share / Keep actions. Empty cells = unexplored aesthetic regions.
+// The MAP-Elites gallery, placed on GridLayout.eliteMapScene (its own
+// fullScreenCover canvas). A 3×3 grid over (temporal rhythm × color
+// spread): each 20-cell claim is a bracket-faced control around a
+// 16-atom first-frame thumbnail — selected = inverted brackets, empty
+// = the disabled checker face. Only the selected cell animates
+// (GIFPlayerView); per-cell beauty lives in the accessibility label
+// and the detail metrics (badges over thumbnails would obscure
+// content pixels, which the bracket law forbids).
 
 import SwiftUI
 import ImageIO
@@ -13,49 +17,45 @@ struct EliteMapView: View {
     let map: EliteMap
     let version: Int          // bumped by CameraManager on placement → re-render
     let onClose: () -> Void
+    let clock: SurfaceClock
 
     @State private var selectedIndex: Int? = nil   // row * 3 + col
 
     private enum SaveState { case idle, saving, saved, failed }
     @State private var saveState: SaveState = .idle
 
-    private let cellSize: CGFloat = 92
-    private let labelWidth: CGFloat = 52
-
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                header
-                    .padding(.top, 16)
+            GeometryReader { geo in
+                ZStack(alignment: .topLeading) {
+                    header.place(GridLayout.eliteHeader)
+                    colLabels.place(GridLayout.eliteColLabels)
+                    rowLabel(0).place(GridLayout.eliteRowLabel0)
+                    rowLabel(1).place(GridLayout.eliteRowLabel1)
+                    rowLabel(2).place(GridLayout.eliteRowLabel2)
 
-                Spacer()
+                    ForEach(0..<9, id: \.self) { i in
+                        cellView(index: i).place(GridLayout.eliteCells[i])
+                    }
 
-                grid
+                    if let cell = selectedCell {
+                        detailPlayer(cell).place(GridLayout.eliteDetail)
+                        detailMetrics(cell).place(GridLayout.eliteMetrics)
+                        shareButton(cell).place(GridLayout.eliteShare)
+                        keepButton(cell).place(GridLayout.eliteKeep)
+                    } else {
+                        CellText("tap a cell", rows: TypeRows.label,
+                                 ink: Color(srgb8: Ink.ledGhost))
+                            .place(GridLayout.eliteDetail)
+                    }
 
-                Spacer()
-
-                if let cell = selectedCell {
-                    detail(cell)
-                } else {
-                    Text("tap a cell")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.2))
-                        .frame(height: 260)
+                    closeButton.place(GridLayout.eliteClose)
                 }
-
-                Spacer()
-
-                Button(action: onClose) {
-                    Text("close")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 10)
-                }
-                .padding(.bottom, 24)
+                .gridCentered(in: geo.size)
             }
+            .ignoresSafeArea()
         }
     }
 
@@ -64,93 +64,61 @@ struct EliteMapView: View {
         return map.cells[i / 3][i % 3]
     }
 
-    // MARK: - Header
+    // MARK: - Header + axis labels
 
     private var header: some View {
-        VStack(spacing: 4) {
-            Text("ELITE MAP")
-                .font(.system(.title3, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.6))
-            Text("\(map.coverage)/9 explored · rhythm × spread")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.3))
+        VStack(spacing: Lattice.pt(2)) {
+            CellText("ELITE MAP", rows: TypeRows.body)
+            CellText("\(map.coverage)/9 explored · rhythm × spread",
+                     rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
         }
     }
 
-    // MARK: - 3×3 Grid
-
-    private var grid: some View {
-        VStack(spacing: 4) {
-            // Column labels (spread: mono → vivid)
-            HStack(spacing: 4) {
-                Color.clear.frame(width: labelWidth, height: 10)
-                ForEach(0..<3, id: \.self) { col in
-                    Text(EliteMap.colLabels[col])
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.3))
-                        .frame(width: cellSize)
-                }
-            }
-
-            ForEach(0..<3, id: \.self) { row in
-                HStack(spacing: 4) {
-                    // Row label (rhythm: static → dynamic)
-                    Text(EliteMap.rowLabels[row])
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.3))
-                        .frame(width: labelWidth, alignment: .trailing)
-
-                    ForEach(0..<3, id: \.self) { col in
-                        cellView(row: row, col: col)
-                    }
-                }
+    private var colLabels: some View {
+        HStack(spacing: Lattice.gif(2)) {
+            ForEach(0..<3, id: \.self) { col in
+                CellText(EliteMap.colLabels[col], rows: TypeRows.micro,
+                         ink: Color(srgb8: Ink.ledGhost))
+                    .frame(width: Lattice.gif(20))
             }
         }
     }
 
-    private func cellView(row: Int, col: Int) -> some View {
-        let index = row * 3 + col
+    private func rowLabel(_ row: Int) -> some View {
+        CellText(EliteMap.rowLabels[row], rows: TypeRows.micro,
+                 ink: Color(srgb8: Ink.ledGhost))
+    }
+
+    // MARK: - Gallery cells (20-cell bracket face, 16-atom thumbnail)
+
+    private func cellView(index: Int) -> some View {
+        let row = index / 3, col = index % 3
         let cell = map.cells[row][col]
         let isSelected = selectedIndex == index
+        // idle brackets invite; selected = inverted; empty = checker.
+        let state = cell == nil ? 3 : (isSelected ? 1 : 0)
 
         return Button {
             guard cell != nil else { return }
             selectedIndex = index
             saveState = .idle
         } label: {
-            ZStack {
-                if let cell {
-                    GIFFirstFrameView(data: cell.gifData)
-                        .frame(width: cellSize, height: cellSize)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-
-                    // Beauty badge
-                    VStack {
-                        Spacer()
-                        HStack {
-                            Spacer()
-                            Text(String(format: "%.0f", cell.beauty))
-                                .font(.system(size: 8, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.7))
-                                .padding(.horizontal, 4)
-                                .padding(.vertical, 1)
-                                .background(Color.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 2))
-                                .padding(3)
-                        }
+            ZStack(alignment: .topLeading) {
+                ControlBrackets(side: 16, state: state,
+                                tick: clock.tick, reduceMotion: clock.reduceMotion)
+                Group {
+                    if let cell {
+                        GIFFirstFrameView(data: cell.gifData)
+                    } else {
+                        Color(srgb8: CellChecker.dark)
                     }
-                } else {
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.03))
-                        .frame(width: cellSize, height: cellSize)
                 }
+                .frame(width: Lattice.gif(16), height: Lattice.gif(16))
+                .padding(.top, Lattice.gif(2))
+                .padding(.leading, Lattice.gif(2))
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(
-                        isSelected ? Color.white.opacity(0.7) : Color.white.opacity(0.1),
-                        lineWidth: isSelected ? 1.5 : 0.5
-                    )
-            )
+            .frame(width: Lattice.gif(20), height: Lattice.gif(20))
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
@@ -159,55 +127,71 @@ struct EliteMapView: View {
         )
     }
 
-    // MARK: - Selected Detail
+    // MARK: - Selected detail
 
-    private func detail(_ cell: EliteCell) -> some View {
-        VStack(spacing: 10) {
-            GIFPlayerView(data: cell.gifData)
-                .frame(width: 176, height: 176)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .id(selectedIndex)   // force re-decode on selection change
-
-            HStack(spacing: 16) {
-                detailMetric("M", String(format: "%.0f", cell.beauty))
-                detailMetric("rhythm", String(format: "%.2f", cell.descriptor.rhythm))
-                detailMetric("spread", String(format: "%.2f", cell.descriptor.spread))
-            }
-
-            HStack(spacing: 12) {
-                Button {
-                    GIFSaver.presentShareSheet(cell.gifData)
-                } label: {
-                    Label("Share", systemImage: "square.and.arrow.up")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 9)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-
-                Button {
-                    saveState = .saving
-                    let data = cell.gifData
-                    Task {
-                        let ok = await GIFSaver.saveToPhotos(data)
-                        saveState = ok ? .saved : .failed
-                    }
-                } label: {
-                    Label(saveLabel, systemImage: saveIcon)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white.opacity(saveState == .saved ? 0.6 : 1))
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 9)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .disabled(saveState == .saving || saveState == .saved)
-            }
-        }
-        .frame(height: 260)
+    private func detailPlayer(_ cell: EliteCell) -> some View {
+        GIFPlayerView(data: cell.gifData)
+            .frame(width: Lattice.gif(44), height: Lattice.gif(44))
+            .pixelFrame()
+            .id(selectedIndex)   // force re-decode on selection change
     }
 
-    private var saveIcon: String {
+    private func detailMetrics(_ cell: EliteCell) -> some View {
+        HStack(spacing: Lattice.gif(4)) {
+            metric("M", String(format: "%.0f", cell.beauty))
+            metric("rhythm", String(format: "%.2f", cell.descriptor.rhythm))
+            metric("spread", String(format: "%.2f", cell.descriptor.spread))
+        }
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: Lattice.pt(1)) {
+            CellText(value, rows: TypeRows.label)
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
+        }
+    }
+
+    private func shareButton(_ cell: EliteCell) -> some View {
+        Button {
+            GIFSaver.presentShareSheet(cell.gifData)
+        } label: {
+            CellFrameButton(icon: .share(), title: "SHARE", tick: 1,
+                            cols: GridLayout.eliteShare.w, rows: GridLayout.eliteShare.h)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Share GIF")
+    }
+
+    private func keepButton(_ cell: EliteCell) -> some View {
+        Button {
+            saveState = .saving
+            let data = cell.gifData
+            Task {
+                let ok = await GIFSaver.saveToPhotos(data)
+                saveState = ok ? .saved : .failed
+            }
+        } label: {
+            CellFrameButton(symbol: saveSymbol, title: saveLabel,
+                            state: saveState == .saving ? 2 : 0, tick: 1,
+                            cols: GridLayout.eliteKeep.w, rows: GridLayout.eliteKeep.h,
+                            ink: saveState == .saved ? Ink.accept : Ink.ink)
+        }
+        .buttonStyle(.plain)
+        .disabled(saveState == .saving || saveState == .saved)
+        .accessibilityLabel(saveLabel)
+    }
+
+    private var closeButton: some View {
+        Button(action: onClose) {
+            CellFrameButton(title: "CLOSE", tick: 1,
+                            cols: GridLayout.eliteClose.w, rows: GridLayout.eliteClose.h,
+                            ink: Ink.ledGhost)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close elite map")
+    }
+
+    private var saveSymbol: String {
         switch saveState {
         case .idle: return "square.and.arrow.down"
         case .saving: return "ellipsis"
@@ -218,21 +202,10 @@ struct EliteMapView: View {
 
     private var saveLabel: String {
         switch saveState {
-        case .idle: return "Keep"
-        case .saving: return "Saving"
-        case .saved: return "Kept"
-        case .failed: return "Retry"
-        }
-    }
-
-    private func detailMetric(_ label: String, _ value: String) -> some View {
-        VStack(spacing: 1) {
-            Text(value)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.25))
+        case .idle: return "KEEP"
+        case .saving: return "…"
+        case .saved: return "KEPT"
+        case .failed: return "RETRY"
         }
     }
 }
@@ -253,7 +226,7 @@ struct GIFFirstFrameView: View {
                 .resizable()
                 .aspectRatio(1, contentMode: .fit)
         } else {
-            Rectangle().fill(Color.gray.opacity(0.1))
+            Color(srgb8: CellChecker.dark)
         }
     }
 }
