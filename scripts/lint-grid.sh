@@ -14,6 +14,12 @@
 #                       lattice files (sole owner of cell↔point math)
 #   LINT-SINGLE-PITCH   numeric literals in .frame/.padding/spacing/
 #                       minLength must go through Lattice.gif/pt (0 allowed)
+#   LINT-GOLDEN-MECHANICS  the control-face algebra exists in BOTH forms
+#                       (spec/ui/CellMechanics.hs + UI/Cells/CellMechanics.swift)
+#
+# Primitive allowlist: the cell-vocabulary files (UI/Cells/Cell*.swift,
+# PixelGrid, SurfaceClock, Ink) plus GIFPlayerView are the ONLY files
+# allowed raw drawing vocabulary — future LINT-DRAW-VOCAB exempts them.
 
 set -u
 cd "$(dirname "$0")/.."
@@ -22,6 +28,15 @@ GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI"
 FAIL=0
 
 note() { echo "  ✗ $1"; FAIL=1; }
+
+# The closed drawing-vocabulary layer.
+is_primitive() {
+  case "$1" in
+    */UI/Cells/Cell*.swift|*/UI/Cells/PixelGrid.swift|*/UI/Cells/SurfaceClock.swift|*/UI/Cells/Ink.swift|*/Views/GIFPlayerView.swift)
+      return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 # ── LINT-PLACEMENT ──────────────────────────────────────────────
 while IFS= read -r line; do
@@ -54,6 +69,11 @@ while IFS= read -r line; do
   note "LINT-SINGLE-PITCH: raw number in layout (use Lattice.gif/pt):"
   echo "      $line"
 done < <(grep -rn "\.frame(\|\.padding(\|spacing:\|minLength:" $GOVERNED --include="*.swift" | grep "[0-9]" || true)
+
+# ── LINT-GOLDEN-MECHANICS ───────────────────────────────────────
+[ -f "spec/ui/CellMechanics.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/CellMechanics.hs missing"
+[ -f "Tesseract/UI/Cells/CellMechanics.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Cells/CellMechanics.swift missing"
+grep -q "ui/CellMechanics.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: spec not registered in spec/Makefile"
 
 if [ $FAIL -eq 0 ]; then
   echo "  ✓ grid lint clean ($(echo $GOVERNED | wc -w | tr -d ' ') governed dirs)"

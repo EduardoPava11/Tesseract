@@ -14,6 +14,7 @@ struct TesseractApp: App {
         // atom identity, tiling, touch floor, scene disjointness.
         TesseractLattice.selfCheck()
         GridLayout.selfCheck()
+        CellMechanics.selfCheck()
         #endif
     }
 

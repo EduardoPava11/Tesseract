@@ -47,6 +47,8 @@ STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
 NEURAL = neural/BayerResidual.hs
 
+UI = ui/CellMechanics.hs
+
 # GenIcon.hs takes ~2m and renders the app icon — run via `make icon`.
 OUTPUT = output/FrameGeometry.hs \
          output/BreakInvariants.hs
@@ -56,7 +58,7 @@ OUTPUT_EXTRA = output/RealTesseract.hs \
                output/GIFAnalysis.hs \
                output/TemporalSpatialGIF.hs
 
-CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL) $(OUTPUT)
+CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL) $(UI) $(OUTPUT)
 
 # ── Targets ──────────────────────────────────────────────
 
