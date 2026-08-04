@@ -44,6 +44,7 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     @Published var state: FaceCaptureState = .idle
     @Published var previewImage: CGImage?       // quantized S×S preview
+    @Published var previewMeasure: BirkhoffMeasure?  // of the preview indices
     @Published var faceDetected: Bool = false
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
@@ -131,9 +132,11 @@ final class FaceCaptureManager: NSObject, ObservableObject {
             rgb: rgb, depths: signalGrid, frameIndex: frameIdx
         )
         let img = Self.buildPreviewImage(indices: previewIndices, size: outSize)
+        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
         Task { @MainActor in
             self.previewImage = img
+            self.previewMeasure = measure
             self.faceDetected = hasFace
         }
 

@@ -44,7 +44,7 @@ struct ContentView: View {
                         case .live:
                             liveBody
                         case .face:
-                            FaceCaptureView(camera: faceCamera)
+                            faceBody
                         }
                     }
                     .frame(width: Lattice.gridWidthPt, height: Lattice.gridHeightPt)
@@ -94,12 +94,20 @@ struct ContentView: View {
 
     // MARK: - Mode Bar (LIVE | FACE)
 
-    /// Switching mid-capture would destroy an in-flight recording.
+    /// Switching mid-capture would destroy an in-flight recording —
+    /// guarded in BOTH modes (the FACE side was previously unguarded).
     private var modeSwitchAllowed: Bool {
-        guard appMode == .live else { return true }
-        switch camera.state {
-        case .recording, .processing, .composing: return false
-        default: return true
+        switch appMode {
+        case .live:
+            switch camera.state {
+            case .recording, .processing, .composing: return false
+            default: return true
+            }
+        case .face:
+            switch faceCamera.state {
+            case .recording, .processing: return false
+            default: return true
+            }
         }
     }
 
@@ -190,7 +198,7 @@ struct ContentView: View {
                         onShare: { GIFSaver.presentShareSheet(gifData) }
                     )
                 } else {
-                    resultPlaceholder
+                    resultPlaceholder(onAgain: { camera.state = .previewing })
                 }
 
             case .error(let msg):
@@ -206,16 +214,68 @@ struct ContentView: View {
         }
     }
 
-    private var resultPlaceholder: some View {
+    private func resultPlaceholder(onAgain: @escaping () -> Void) -> some View {
         VStack(spacing: Lattice.gif(4)) {
             CellText("GIF ready", rows: TypeRows.body)
-            Button { camera.state = .previewing } label: {
+            Button(action: onAgain) {
                 CellFrameButton(icon: .retake(), title: "AGAIN", tick: 1,
                                 cols: GridLayout.resultRetake.w,
                                 rows: GridLayout.resultRetake.h)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Retake")
+        }
+    }
+
+    // MARK: - FACE: same shared state views, mapped from FaceCaptureState
+    //
+    // Lifecycle stays with .onChange(of: appMode) — the SOLE owner of the
+    // AVCaptureSession ↔ ARSession handoff (TrueDepth admits one owner).
+    // FACE .done → Again returns to .previewing (the ARSession never
+    // paused during processing); error Retry does .idle then start().
+
+    private var faceBody: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            switch faceCamera.state {
+            case .idle:
+                IdleStateView()
+
+            case .previewing:
+                FacePreviewStateView(camera: faceCamera, clock: clock)
+
+            case .recording(let frame):
+                RecordingStateView(previewImage: faceCamera.previewImage,
+                                   frame: frame,
+                                   total: CameraConfig.totalFrames)
+
+            case .processing:
+                ProcessingStateView(progress: faceCamera.processProgress,
+                                    phase: faceCamera.processPhase,
+                                    boards: nil)
+
+            case .done:
+                if let gifData = faceCamera.gifData, let measure = faceCamera.gifMeasure {
+                    ResultStateView(
+                        gifData: gifData,
+                        measure: measure,
+                        onAgain: { faceCamera.state = .previewing },
+                        onShare: { GIFSaver.presentShareSheet(gifData) }
+                    )
+                } else {
+                    resultPlaceholder(onAgain: { faceCamera.state = .previewing })
+                }
+
+            case .error(let msg):
+                ErrorStateView(
+                    message: msg,
+                    onRetry: {
+                        faceCamera.state = .idle
+                        faceCamera.start()
+                    }
+                )
+            }
         }
     }
 

@@ -16,7 +16,7 @@ struct LivePreviewStateView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            birkhoffGauge.place(GridLayout.gauge)
+            BirkhoffGauge(measure: camera.previewMeasure).place(GridLayout.gauge)
             quantizedPreview.place(GridLayout.preview)
             channelPreviews.place(GridLayout.channels)
             captureInfoLine.place(GridLayout.captureInfo)
@@ -46,45 +46,6 @@ struct LivePreviewStateView: View {
             }
         }
         .pixelFrame()
-    }
-
-    // MARK: - Birkhoff Beauty Gauge (M = O / C, the spec quantity)
-
-    private var birkhoffGauge: some View {
-        VStack(spacing: Lattice.pt(2)) {
-            if let m = camera.previewMeasure {
-                HStack(spacing: Lattice.gif(2)) {
-                    CellText("M", rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
-                    beautyMeter(normalized: min(1, Double(m.beauty) / 600))
-                    CellText(String(format: "%.0f", m.beauty), rows: TypeRows.label)
-                }
-                HStack(spacing: Lattice.gif(4)) {
-                    metricLabel("O", String(format: "%.0f", m.order))
-                    metricLabel("C", String(format: "%.2f", m.complexity))
-                    metricLabel("dim", String(format: "%.1f", m.manifoldDim))
-                    metricLabel("col", "\(m.colorsUsed)")
-                }
-            } else {
-                CellText("M = O / C", rows: TypeRows.label,
-                         ink: Color(srgb8: Ink.ledGhost))
-            }
-        }
-    }
-
-    // 30-atom lit-cells meter — the alpha gradient bar, now opaque ink.
-    private func beautyMeter(normalized: Double) -> some View {
-        let lit = max(0, min(30, Int((normalized * 30).rounded())))
-        return CellSprite(cols: 30, rows: 1, cellPt: Lattice.gifPx) { c, _ in
-            c < lit ? Ink.ink : Ink.ledGhost
-        }
-        .accessibilityHidden(true)
-    }
-
-    private func metricLabel(_ label: String, _ value: String) -> some View {
-        VStack(spacing: Lattice.pt(1)) {
-            CellText(value, rows: TypeRows.label)
-            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
-        }
     }
 
     // MARK: - R, G, B, D Channel Previews (4 × 12 cells + 3 × 2-cell gutters = 54)
