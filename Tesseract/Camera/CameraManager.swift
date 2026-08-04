@@ -273,6 +273,7 @@ final class CameraManager: NSObject, ObservableObject {
 
         // Immediately transition to refining
         state = .refining(compositeAlpha)
+        recomputeGIF()  // gifData must show the composite, not the teacher
     }
 
     /// Compose two genes: base + α × (other - base)
@@ -308,16 +309,19 @@ final class CameraManager: NSObject, ObservableObject {
         recomputeGIF()  // Gap 4 fix: GIF updates when α changes
     }
 
-    /// TAP in any phase = export the current GIF
-    func tapExport() {
-        // Export is available at any phase — doesn't end the session in Phase 1
-        // In Phase 3: TAP exports, trains on final choice, and ends
+    /// TAP in refining = export the CURRENT composite: re-encode at the
+    /// gene/α on screen, then hand the fresh Data to the caller. The gene
+    /// is captured BEFORE the state flips to .done — the old flow read
+    /// `gifData` written once at initial processing, silently discarding
+    /// all steering (audit P0 #3).
+    func exportCurrent(_ completion: @escaping @MainActor (Data) -> Void) {
+        let gene: GeneWeights = if case .refining = state { compositeGene } else { geneA }
         if case .refining = state {
             // Gap 3: Train the NN on the user's final choice
             trainOnFinalChoice()
             state = .done
         }
-        // In Phase 1: TAP exports but stays in dualExplore (handled by the view)
+        recomputeGIF(gene: gene, completion: completion)
     }
 
     // MARK: - Gap 3: Training from User Preferences
@@ -439,10 +443,14 @@ final class CameraManager: NSObject, ObservableObject {
     /// The gene's forward pass produces palette indices directly.
     /// Each swipe produces a DIFFERENT GIF from the SAME capture.
     private func recomputeGIF() {
-        let capturedFrames = frameBuffer.exportCapturedFrames()
-        guard !capturedFrames.isEmpty else { return }
         // Phase 3 recomputes with the α-blended composite; Phase 1 with gene A.
         let gene: GeneWeights = if case .refining = state { compositeGene } else { geneA }
+        recomputeGIF(gene: gene)
+    }
+
+    private func recomputeGIF(gene: GeneWeights, completion: (@MainActor (Data) -> Void)? = nil) {
+        let capturedFrames = frameBuffer.exportCapturedFrames()
+        guard !capturedFrames.isEmpty else { return }
 
         Task.detached(priority: .userInitiated) {
             var quantizedFrames: [QuantizedFrame] = []
@@ -505,6 +513,7 @@ final class CameraManager: NSObject, ObservableObject {
                     self.gifMeasure = overallMeasure
                     self.placeOrganism(gene: gene, beauty: beauty, descriptor: descriptor,
                                        gifData: data, entropy: entropy)
+                    completion?(data)
                 }
             }
         }
@@ -872,10 +881,9 @@ final class CameraManager: NSObject, ObservableObject {
                     // 90° CCW to match RGB rotation
                     let srcX = dCropX + y * dStep + dHalf
                     let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
-                    guard srcX < dW && srcY < dH else { values.append(0.5); continue }
+                    guard srcX < dW && srcY < dH else { values.append(DepthSignal.fill); continue }
                     let raw = ptr[srcY * stride + srcX]
-                    let f = Float(Float16(bitPattern: raw))
-                    values.append(f.isFinite && f > 0 ? f : 0.5)
+                    values.append(DepthSignal.signalOrFill(meters: Float(Float16(bitPattern: raw))))
                 }
             }
         } else {
@@ -887,18 +895,16 @@ final class CameraManager: NSObject, ObservableObject {
                     // 90° CCW
                     let srcX = dCropX + y * dStep + dHalf
                     let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
-                    guard srcX < dW && srcY < dH else { values.append(0.5); continue }
-                    let f = ptr[srcY * stride + srcX]
-                    values.append(f.isFinite && f > 0 ? f : 0.5)
+                    guard srcX < dW && srcY < dH else { values.append(DepthSignal.fill); continue }
+                    values.append(DepthSignal.signalOrFill(meters: ptr[srcY * stride + srcX]))
                 }
             }
         }
 
-        // Normalize to [0, 1]: 1=near, 0=far
-        let valid = values.filter { $0 > 0 && $0 < 100 }
-        guard let minD = valid.min(), let maxD = valid.max(), maxD > minD else { return values }
-        let range = maxD - minD
-        return values.map { 1.0 - max(0, min(1, ($0 - minD) / range)) }
+        // Fixed meters→signal map (spec/temporal/DepthSignal.hs), NOT
+        // per-frame min/max normalization: the signal must be a pure
+        // function of meters or σ flickers across the 64-frame capture.
+        return values
     }
 
     // MARK: - GIF Encoding

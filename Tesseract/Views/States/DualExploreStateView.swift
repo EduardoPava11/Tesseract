@@ -11,15 +11,22 @@ struct DualExploreStateView: View {
     @ObservedObject var camera: CameraManager
     @ObservedObject var animator: DualCubeAnimator
     let generation: Int
-    let onShare: () -> Void
+
+    /// Tap shares the tapped PANEL's export-grade GIF (refreshed by every
+    /// NN pass); camera.gifData covers only the pre-first-reprocess window.
+    private func share(_ export: Data?) {
+        if let data = export ?? camera.gifData {
+            GIFSaver.presentShareSheet(data)
+        }
+    }
 
     var body: some View {
         DualGIFExploreView(
             animator: animator,
             generation: generation,
             buildImage: { camera.buildPreviewImage(indices: $0) },
-            onTapA: onShare,
-            onTapB: onShare,
+            onTapA: { share(animator.exportA) },
+            onTapB: { share(animator.exportB) },
             onLongPressA: { camera.compose(order: .aIntoB) },
             onLongPressB: { camera.compose(order: .bIntoA) }
         )

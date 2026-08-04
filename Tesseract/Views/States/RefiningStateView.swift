@@ -61,10 +61,9 @@ struct RefiningStateView: View {
         .simultaneousGesture(
             TapGesture()
                 .onEnded {
-                    camera.tapExport()
-                    if let gifData = camera.gifData {
-                        onExport(gifData)
-                    }
+                    // Re-encodes at the on-screen gene/α, THEN shares —
+                    // the old path shared the pre-steering gifData.
+                    camera.exportCurrent { onExport($0) }
                 }
         )
     }

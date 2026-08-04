@@ -145,8 +145,7 @@ struct ContentView: View {
                 DualExploreStateView(
                     camera: camera,
                     animator: dualAnimator,
-                    generation: gen,
-                    onShare: { shareCurrentGIF() }
+                    generation: gen
                 )
 
             case .composing:
@@ -159,7 +158,7 @@ struct ContentView: View {
                     camera: camera,
                     animator: dualAnimator,
                     alpha: alpha,
-                    onExport: { shareGIF($0) }
+                    onExport: { GIFSaver.presentShareSheet($0) }
                 )
 
             case .done:
@@ -168,7 +167,7 @@ struct ContentView: View {
                         gifData: gifData,
                         measure: measure,
                         onAgain: { camera.state = .previewing },
-                        onShare: { shareGIF(gifData) }
+                        onShare: { GIFSaver.presentShareSheet(gifData) }
                     )
                 } else {
                     resultPlaceholder
@@ -217,29 +216,8 @@ struct ContentView: View {
         .accessibilityLabel("Elite map, \(camera.eliteMap.coverage) of 9 cells explored")
     }
 
-    // MARK: - Share
-
-    private func shareGIF(_ data: Data) {
-        guard let url = GIFEncoder.saveToTempFile(data) else { return }
-
-        // Share just the GIF file — no text overlay
-        let controller = UIActivityViewController(
-            activityItems: [url],
-            applicationActivities: nil
-        )
-        // iPad popover anchor
-        controller.popoverPresentationController?.sourceView = UIView()
-
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let root = scene.keyWindow?.rootViewController else { return }
-        root.present(controller, animated: true)
-    }
-
-    private func shareCurrentGIF() {
-        if let gifData = camera.gifData {
-            shareGIF(gifData)
-        }
-    }
+    // Share path: GIFSaver.presentShareSheet is the ONE implementation
+    // (walks to the topmost presenter — covers the elite-map cover too).
 }
 
 #Preview {

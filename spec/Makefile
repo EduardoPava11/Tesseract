@@ -26,6 +26,7 @@ QUANTIZATION = quantization/TesseractAxes.hs \
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
 
 TEMPORAL = temporal/ContinuousDepthCadence.hs \
+           temporal/DepthSignal.hs \
            temporal/FaceCadence.hs \
            temporal/DepthBinomial.hs \
            temporal/TemporalBinomial.hs \

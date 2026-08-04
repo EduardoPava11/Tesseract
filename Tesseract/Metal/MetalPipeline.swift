@@ -258,6 +258,13 @@ final class MetalPipeline {
 
     /// Process a camera frame: downsample + quantize → palette indices.
     /// Returns nil on failure with error logged.
+    ///
+    /// ⚠️ DORMANT PATH — CameraManager uses downsampleFrame + CPU
+    /// PerfectQuantizer instead. Quantize.metal reads depth64Texture and
+    /// expects the [0,1] 1=near SIGNAL, but the downsample kernel writes
+    /// raw TrueDepth METERS: reviving this path requires applying
+    /// spec/temporal/DepthSignal.hs in the kernel (the CPU-side fix in
+    /// readbackDepth does not cover it).
     func processFrame(
         rgbTexture: MTLTexture,
         depthTexture: MTLTexture?,
@@ -467,8 +474,18 @@ final class MetalPipeline {
         if commandBuffer.error != nil { return nil }
 
         // ── Read back both textures ──
+        // No depth texture this frame → neutral fill. Reading depth64Texture
+        // here would resurrect the PREVIOUS frame's depth (stale contents).
 
-        guard let rgbData = readbackRGB(), let depthData = readbackDepth() else { return nil }
+        guard let rgbData = readbackRGB() else { return nil }
+        let depthData: [Float]
+        if depthTexture != nil {
+            guard let d = readbackDepth() else { return nil }
+            depthData = d
+        } else {
+            depthData = [Float](repeating: DepthSignal.fill,
+                                count: CameraConfig.outputSize * CameraConfig.outputSize)
+        }
 
         if logThis {
             logger.debug("MetalPipeline: downsample \(rgbTexture.width)×\(rgbTexture.height) → 64×64, depth=\(depthTexture != nil)")
@@ -520,9 +537,10 @@ final class MetalPipeline {
                                      size: MTLSize(width: size, height: size, depth: 1)),
                      mipmapLevel: 0)
 
+        // Texture holds raw TrueDepth METERS; every CPU consumer speaks
+        // the [0,1] 1=near signal contract (spec/temporal/DepthSignal.hs).
         return (0..<pixelCount).map { i in
-            let f = Float(Float16(bitPattern: rawData[i * 4]))
-            return f.isFinite && f > 0 ? f : 0.5
+            DepthSignal.signalOrFill(meters: Float(Float16(bitPattern: rawData[i * 4])))
         }
     }
 

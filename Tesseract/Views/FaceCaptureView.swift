@@ -34,7 +34,7 @@ struct FaceCaptureView: View {
                         gifData: gifData,
                         measure: measure,
                         onAgain: { camera.state = .previewing },
-                        onShare: { shareGIF(gifData) }
+                        onShare: { GIFSaver.presentShareSheet(gifData) }
                     )
                 } else {
                     resultPlaceholder
@@ -249,19 +249,4 @@ struct FaceCaptureView: View {
         }
     }
 
-    // MARK: - Share
-
-    private func shareGIF(_ data: Data) {
-        guard let url = GIFEncoder.saveToTempFile(data) else { return }
-
-        let controller = UIActivityViewController(
-            activityItems: [url],
-            applicationActivities: nil
-        )
-        controller.popoverPresentationController?.sourceView = UIView()
-
-        guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-              let root = scene.keyWindow?.rootViewController else { return }
-        root.present(controller, animated: true)
-    }
 }

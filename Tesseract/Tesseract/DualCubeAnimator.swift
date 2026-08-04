@@ -32,6 +32,14 @@ class DualCubeAnimator: ObservableObject {
 
     @Published var cubeVersion: Int = 0
 
+    // ── Export-grade GIFs (256², refreshed by every NN pass) ──
+    // Panel taps share THESE — they always match the cubes on screen.
+    // nil until the first reprocess lands; callers fall back to
+    // camera.gifData (the teacher encode) for that window.
+
+    @Published var exportA: Data?
+    @Published var exportB: Data?
+
     // ── Cubes + Genes ──
 
     var cubeA: VoxelCube
@@ -128,9 +136,11 @@ class DualCubeAnimator: ObservableObject {
                 self.pixelDiff = diff
                 self.cubeVersion += 1
                 if let o = organismA {
+                    self.exportA = o.gifData
                     self.onOrganism?(gA, o.beauty, o.descriptor, o.gifData, o.entropy)
                 }
                 if let o = organismB {
+                    self.exportB = o.gifData
                     self.onOrganism?(gB, o.beauty, o.descriptor, o.gifData, o.entropy)
                 }
                 logger.info("DualCubeAnimator: NN done. avgBeauty A=\(sA.avgBeauty) B=\(sB.avgBeauty) totalDiff=\(diffCount)/\(totalPixels)")
