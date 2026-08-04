@@ -18,16 +18,28 @@ import simd
 struct BinomialCadence {
 
     // MARK: - Scale-aware constants
+    // Pure in K (Block.hs style) so the scale laws stay testable at every
+    // cube size even though the app pins CameraConfig.mode to 64³.
 
-    /// σ_base = (K - 1) / 8, where K = CameraConfig.totalFrames
+    /// σ_base(K) = (K - 1) / 8
+    static func sigmaBase(frameCount k: Int) -> Float {
+        Float(k - 1) / 8.0
+    }
+
+    /// σ_base for the active capture config
     static var sigmaBase: Float {
-        Float(CameraConfig.totalFrames - 1) / 8.0
+        sigmaBase(frameCount: CameraConfig.totalFrames)
     }
 
     /// 4 epoch centers = (2d + 1) × σ_base for d ∈ {0,1,2,3}
-    static var centers: SIMD4<Float> {
-        let sb = sigmaBase
+    static func centers(frameCount k: Int) -> SIMD4<Float> {
+        let sb = sigmaBase(frameCount: k)
         return SIMD4(1 * sb, 3 * sb, 5 * sb, 7 * sb)
+    }
+
+    /// Centers for the active capture config
+    static var centers: SIMD4<Float> {
+        centers(frameCount: CameraConfig.totalFrames)
     }
 
     /// Crossover points (midpoints between adjacent epoch centers)
@@ -44,15 +56,23 @@ struct BinomialCadence {
 
     /// σ(depth) = σ_base × (2 - depth)
     /// depth=1 (near): σ = σ_base → sharp. depth=0 (far): σ = 2×σ_base → flat.
+    static func sigmaForDepth(_ depth: Float, frameCount k: Int) -> Float {
+        sigmaBase(frameCount: k) * (2.0 - depth)
+    }
+
     static func sigmaForDepth(_ depth: Float) -> Float {
-        sigmaBase * (2.0 - depth)
+        sigmaForDepth(depth, frameCount: CameraConfig.totalFrames)
     }
 
     // MARK: - P(epoch | frame, depth)
 
-    /// Continuous depth → epoch probabilities. No zones.
+    /// Continuous depth → epoch probabilities. No zones. Pure in K.
+    static func epochProbabilities(frame z: Int, depth: Float, frameCount k: Int) -> SIMD4<Float> {
+        gaussianProbs(frame: z, sigma: sigmaForDepth(depth, frameCount: k), frameCount: k)
+    }
+
     static func epochProbabilities(frame z: Int, depth: Float) -> SIMD4<Float> {
-        gaussianProbs(frame: z, sigma: sigmaForDepth(depth))
+        epochProbabilities(frame: z, depth: depth, frameCount: CameraConfig.totalFrames)
     }
 
     /// No-depth version (preview mode, uses base σ)
@@ -63,9 +83,13 @@ struct BinomialCadence {
     /// Gaussian probability computation — accepts sigma directly.
     /// Used by PerfectQuantizer for per-group depth-averaged sigma.
     static func gaussianProbs(frame z: Int, sigma s: Float) -> SIMD4<Float> {
+        gaussianProbs(frame: z, sigma: s, frameCount: CameraConfig.totalFrames)
+    }
+
+    static func gaussianProbs(frame z: Int, sigma s: Float, frameCount k: Int) -> SIMD4<Float> {
         let zf = Float(z)
         let s2 = 2.0 * s * s
-        let c = centers
+        let c = centers(frameCount: k)
         let raw = SIMD4<Float>(
             exp(-(zf - c[0]) * (zf - c[0]) / s2),
             exp(-(zf - c[1]) * (zf - c[1]) / s2),

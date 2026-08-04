@@ -2,7 +2,7 @@
 // Tesseract
 //
 // FACE mode UI: live quantized preview of the ARKit anatomical cadence.
-// idle → previewing → recording (n/64) → processing → done (GIFResultView).
+// idle → previewing → recording (n/64) → processing → done (ResultStateView).
 // Full ARSession teardown in onDisappear — the TrueDepth camera must be
 // free before the LIVE mode's AVCaptureSession starts.
 
@@ -30,7 +30,7 @@ struct FaceCaptureView: View {
 
             case .done:
                 if let gifData = camera.gifData, let measure = camera.gifMeasure {
-                    GIFResultView(
+                    ResultStateView(
                         gifData: gifData,
                         measure: measure,
                         onAgain: { camera.state = .previewing },

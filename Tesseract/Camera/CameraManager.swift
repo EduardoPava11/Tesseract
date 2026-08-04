@@ -78,8 +78,13 @@ enum CameraConfig {
     static let scaleFactor = 3
     static let paletteSize = 256  // 4⁴, always
 
-    // Active mode (Training 64³ or Inference 128³)
-    nonisolated(unsafe) static var mode: CubeMode = .training
+    // Pinned to 64³. The 128³ runtime switch was UI-only: MetalPipeline
+    // allocates its textures once at 64 with no reallocation path, so
+    // flipping to .inference dispatched 128-sized grids into 64-sized
+    // textures and killed the app on device (2026-08-03). The two-cube
+    // algebra (Block.hs, LevelTests) stays verified; revisit 128³ only
+    // with a full pipeline reallocation design.
+    static let mode: CubeMode = .training
     static var outputSize: Int { mode.spatialSide }
     static var totalFrames: Int { mode.frameCount }
     static var rgbStep: Int { rgbCrop / outputSize }
@@ -121,6 +126,22 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var compositeGene: GeneWeights = .defaultWeights()
     @Published var compositeAlpha: Float = 0.5
     @Published var generation: Int = 0
+
+    // MARK: - MAP-Elites Archive (3×3 rhythm × spread)
+    // Accumulates the best organism per behavioral cell across the whole
+    // app session — the in-app gallery/history. EliteMap is a plain class,
+    // so a version counter drives SwiftUI updates (cubeVersion pattern).
+    let eliteMap = EliteMap()
+    @Published var eliteVersion: Int = 0
+
+    /// Place an organism into the MAP-Elites archive (main-actor only).
+    func placeOrganism(gene: GeneWeights, beauty: Float, descriptor: Descriptor,
+                       gifData: Data, entropy: EntropyFeedback) {
+        if eliteMap.place(gene: gene, beauty: beauty, descriptor: descriptor,
+                          gifData: gifData, entropy: entropy) {
+            eliteVersion += 1
+        }
+    }
     private var previousGeneA: GeneWeights = .defaultWeights()
     private var previousGeneB: GeneWeights = .defaultWeights()
     private var baseGene: GeneWeights = .defaultWeights()   // for composition
@@ -129,11 +150,15 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Capture
 
-    private let session = AVCaptureSession()
+    // Session objects live on sessionQueue after init (Apple TrueDepthStreamer
+    // pattern): startRunning() blocks for hundreds of ms and must never run
+    // on the main actor.
+    nonisolated(unsafe) private let session = AVCaptureSession()
     nonisolated(unsafe) private let videoOutput = AVCaptureVideoDataOutput()
     nonisolated(unsafe) private let depthOutput = AVCaptureDepthDataOutput()
-    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
-    private let processingQueue = DispatchQueue(label: "com.tesseract.camera", qos: .userInteractive)
+    nonisolated(unsafe) private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
+    nonisolated private let sessionQueue = DispatchQueue(label: "com.tesseract.session", qos: .userInitiated)
+    nonisolated private let processingQueue = DispatchQueue(label: "com.tesseract.camera", qos: .userInteractive)
 
     // MARK: - Processing
 
@@ -144,24 +169,51 @@ final class CameraManager: NSObject, ObservableObject {
 
     override init() {
         super.init()
-        self._metalPipeline = MetalPipeline()
+        // Build the Metal pipeline on the frame queue, not the main thread:
+        // the queue is serial and is also the synchronizer's delegate queue,
+        // so the pipeline is guaranteed ready before the first frame callback.
+        processingQueue.async { [weak self] in
+            self?._metalPipeline = MetalPipeline()
+        }
     }
 
     // MARK: - Lifecycle
 
     private var hasConfigured = false
 
+    /// Error message for camera-permission denial. The error state view keys
+    /// off this exact string to offer an "Open Settings" action.
+    static let cameraDeniedMessage = "camera access denied"
+
     func start() {
         guard state == .idle else { return }
         // If we already wired inputs/outputs, just resume the session.
-        // configure() unconditionally adds input/output and would fail the
+        // configure unconditionally adds input/output and would fail the
         // canAddInput guard on the second pass, freezing the preview.
         if hasConfigured {
-            session.startRunning()
-            state = .previewing
+            sessionQueue.async { [weak self] in
+                guard let self else { return }
+                self.session.startRunning()
+                Task { @MainActor in self.state = .previewing }
+            }
             return
         }
-        Task { await configure() }
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            sessionQueue.async { [weak self] in self?.configureAndStart() }
+        case .notDetermined:
+            Task { [weak self] in
+                let granted = await AVCaptureDevice.requestAccess(for: .video)
+                guard let self else { return }
+                if granted {
+                    self.sessionQueue.async { [weak self] in self?.configureAndStart() }
+                } else {
+                    self.state = .error(Self.cameraDeniedMessage)
+                }
+            }
+        default:
+            state = .error(Self.cameraDeniedMessage)
+        }
     }
 
     func startRecording() {
@@ -389,7 +441,8 @@ final class CameraManager: NSObject, ObservableObject {
     private func recomputeGIF() {
         let capturedFrames = frameBuffer.exportCapturedFrames()
         guard !capturedFrames.isEmpty else { return }
-        let gene = geneA  // Phase 1: use gene A for recompute
+        // Phase 3 recomputes with the α-blended composite; Phase 1 with gene A.
+        let gene: GeneWeights = if case .refining = state { compositeGene } else { geneA }
 
         Task.detached(priority: .userInitiated) {
             var quantizedFrames: [QuantizedFrame] = []
@@ -448,20 +501,47 @@ final class CameraManager: NSObject, ObservableObject {
                 await MainActor.run {
                     self.gifData = data
                     self.gifMeasure = overallMeasure
+                    self.placeOrganism(gene: gene, beauty: beauty, descriptor: descriptor,
+                                       gifData: data, entropy: entropy)
                 }
             }
         }
     }
 
     func stop() {
-        session.stopRunning()
+        // Synchronous: the TrueDepth hardware admits one owner, and ARKit
+        // (FACE mode) may start the instant this returns. sessionQueue is
+        // serial and never blocks on the main actor, so sync is deadlock-free.
+        sessionQueue.sync { session.stopRunning() }
         state = .idle
     }
 
     // MARK: - Session Configuration (Apple TrueDepthStreamer pattern)
 
-    private func configure() async {
+    /// Runs on sessionQueue. Configure, then start; report state to the actor.
+    nonisolated private func configureAndStart() {
+        if let failure = configureSession() {
+            Task { @MainActor in self.state = .error(failure) }
+            return
+        }
+        session.startRunning()
+        Task { @MainActor in
+            self.hasConfigured = true
+            self.state = .previewing
+        }
+        logger.info("Camera: session running")
+
+        #if DEBUG
+        runFrontRAWProbe()
+        #endif
+    }
+
+    /// Runs on sessionQueue. Returns an error message, or nil on success.
+    /// beginConfiguration/commitConfiguration are balanced on EVERY path
+    /// (an early return without commit would poison all later attempts).
+    nonisolated private func configureSession() -> String? {
         session.beginConfiguration()
+        defer { session.commitConfiguration() }
 
         // .photo preset: full 4:3 sensor FOV, supports depth output
         session.sessionPreset = .photo
@@ -469,14 +549,13 @@ final class CameraManager: NSObject, ObservableObject {
         guard let device = AVCaptureDevice.default(
             .builtInTrueDepthCamera, for: .video, position: .front
         ) else {
-            state = .error("No TrueDepth camera")
-            return
+            return "No TrueDepth camera"
         }
 
         do {
             let input = try AVCaptureDeviceInput(device: device)
             guard session.canAddInput(input) else {
-                state = .error("Cannot add camera input"); return
+                return "Cannot add camera input"
             }
             session.addInput(input)
 
@@ -492,13 +571,13 @@ final class CameraManager: NSObject, ObservableObject {
             ]
             videoOutput.alwaysDiscardsLateVideoFrames = true
             guard session.canAddOutput(videoOutput) else {
-                state = .error("Cannot add video output"); return
+                return "Cannot add video output"
             }
             session.addOutput(videoOutput)
 
             // Depth output
             guard session.canAddOutput(depthOutput) else {
-                state = .error("Cannot add depth output"); return
+                return "Cannot add depth output"
             }
             session.addOutput(depthOutput)
             depthOutput.isFilteringEnabled = true
@@ -542,41 +621,39 @@ final class CameraManager: NSObject, ObservableObject {
             )
             outputSynchronizer?.setDelegate(self, queue: processingQueue)
             logger.info("Camera: synchronizer active")
-
-            session.commitConfiguration()
-            session.startRunning()
-            hasConfigured = true
-            state = .previewing
-            logger.info("Camera: session running")
             // Go territory analysis runs during processing phase, not here
 
-            #if DEBUG
-            // Diagnostic: does THIS front camera expose any RAW to third-party
-            // apps? Bayer formats land in availableRawPhotoPixelFormatTypes;
-            // ProRAW (linear DNG) is gated by isAppleProRAWSupported. Attach a
-            // throwaway photo output, log, detach. Answer appears once per run.
-            let probe = AVCapturePhotoOutput()
-            session.beginConfiguration()
-            if session.canAddOutput(probe) {
-                session.addOutput(probe)
-                session.commitConfiguration()
-                let raws = probe.availableRawPhotoPixelFormatTypes
-                let bayer = raws.filter { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
-                logger.info("FRONT-RAW PROBE: rawFormats=\(raws.count) bayer=\(bayer.count) proRAWSupported=\(probe.isAppleProRAWSupported)")
-                session.beginConfiguration()
-                session.removeOutput(probe)
-                session.commitConfiguration()
-            } else {
-                session.commitConfiguration()
-                logger.info("FRONT-RAW PROBE: cannot attach photo output to front session")
-            }
-            #endif
-
         } catch {
-            state = .error(error.localizedDescription)
             logger.error("Camera: \(error.localizedDescription)")
+            return error.localizedDescription
+        }
+        return nil
+    }
+
+    #if DEBUG
+    /// Diagnostic (runs on sessionQueue, after the session is live): does
+    /// THIS front camera expose any RAW to third-party apps? Bayer formats
+    /// land in availableRawPhotoPixelFormatTypes; ProRAW (linear DNG) is
+    /// gated by isAppleProRAWSupported. Attach a throwaway photo output,
+    /// log, detach. Answer appears once per run.
+    nonisolated private func runFrontRAWProbe() {
+        let probe = AVCapturePhotoOutput()
+        session.beginConfiguration()
+        if session.canAddOutput(probe) {
+            session.addOutput(probe)
+            session.commitConfiguration()
+            let raws = probe.availableRawPhotoPixelFormatTypes
+            let bayer = raws.filter { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }
+            logger.info("FRONT-RAW PROBE: rawFormats=\(raws.count) bayer=\(bayer.count) proRAWSupported=\(probe.isAppleProRAWSupported)")
+            session.beginConfiguration()
+            session.removeOutput(probe)
+            session.commitConfiguration()
+        } else {
+            session.commitConfiguration()
+            logger.info("FRONT-RAW PROBE: cannot attach photo output to front session")
         }
     }
+    #endif
 
     // MARK: - Frame Processing
 
@@ -906,6 +983,11 @@ final class CameraManager: NSObject, ObservableObject {
 
             let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale)
 
+            // Teacher organism (PerfectQuantizer output) → MAP-Elites archive
+            let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
+            let entropy = EntropyMeasure.compute(paletteIndices: allIndices)
+            let descriptor = Descriptor.from(entropy)
+
             await MainActor.run {
                 self.processProgress = 1.0
                 self.processPhase = "Swipe to explore"
@@ -917,6 +999,10 @@ final class CameraManager: NSObject, ObservableObject {
                 // Initialize two genes: A = default, B = perturbed
                 self.geneA = GeneWeights.defaultWeights()
                 self.geneB = self.geneA.perturbed(scale: 0.20, seed: 42)
+                if let data = gifData {
+                    self.placeOrganism(gene: self.geneA, beauty: measure?.beauty ?? 0,
+                                       descriptor: descriptor, gifData: data, entropy: entropy)
+                }
                 self.state = .dualExplore(0)  // Phase 1: dual exploration
             }
         }

@@ -11,18 +11,8 @@ import XCTest
 
 final class GIFOutputContractTests: XCTestCase {
 
-    private var savedMode: CubeMode!
-
-    override func setUp() {
-        super.setUp()
-        savedMode = CameraConfig.mode
-        CameraConfig.mode = .training   // 64² × 64 frames, the default capture
-    }
-
-    override func tearDown() {
-        CameraConfig.mode = savedMode
-        super.tearDown()
-    }
+    // CameraConfig.mode is pinned to .training (64² × 64 frames, the default
+    // capture) — no per-test save/restore needed.
 
     private func makeFrame(index: Int) -> QuantizedFrame {
         // Deterministic non-trivial content: every palette index appears.

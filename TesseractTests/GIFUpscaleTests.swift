@@ -9,18 +9,8 @@ import XCTest
 
 final class GIFUpscaleTests: XCTestCase {
 
-    private var savedMode: CubeMode!
-
-    override func setUp() {
-        super.setUp()
-        savedMode = CameraConfig.mode
-        CameraConfig.mode = .training   // 64² frames
-    }
-
-    override func tearDown() {
-        CameraConfig.mode = savedMode
-        super.tearDown()
-    }
+    // CameraConfig.mode is pinned to .training (64² frames) — no per-test
+    // save/restore needed.
 
     // ── replicate / decimate ──
 

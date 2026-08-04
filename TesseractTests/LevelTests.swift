@@ -35,30 +35,25 @@ final class LevelTests: XCTestCase {
     }
 
     // ── σ_base scales with K ──
+    // BinomialCadence is pure in K, so both cube sizes stay verified even
+    // though CameraConfig.mode is pinned to .training.
 
     func testSigmaBase_scalesWithK() {
-        // Save current level, test each, restore
-        let saved = CameraConfig.mode
-
         for level in CubeMode.allCases {
-            CameraConfig.mode = level
             let expected = Float(level.frameCount - 1) / 8.0
-            XCTAssertEqual(BinomialCadence.sigmaBase, expected, accuracy: 1e-6,
+            XCTAssertEqual(BinomialCadence.sigmaBase(frameCount: level.frameCount),
+                           expected, accuracy: 1e-6,
                            "\(level): σ_base should be (K-1)/8 = \(expected)")
         }
-
-        CameraConfig.mode = saved
     }
 
     // ── Epoch centers scale proportionally ──
 
     func testEpochCenters_scaleWithK() {
-        let saved = CameraConfig.mode
-
         for level in CubeMode.allCases {
-            CameraConfig.mode = level
-            let sb = BinomialCadence.sigmaBase
-            let centers = BinomialCadence.centers
+            let k = level.frameCount
+            let sb = BinomialCadence.sigmaBase(frameCount: k)
+            let centers = BinomialCadence.centers(frameCount: k)
 
             // Centers should be at (2d+1) × σ_base
             XCTAssertEqual(centers[0], 1 * sb, accuracy: 1e-6)
@@ -67,31 +62,24 @@ final class LevelTests: XCTestCase {
             XCTAssertEqual(centers[3], 7 * sb, accuracy: 1e-6)
 
             // Last center should be < K (within the frame range)
-            XCTAssertLessThan(centers[3], Float(level.frameCount),
+            XCTAssertLessThan(centers[3], Float(k),
                               "\(level): last epoch center must be < K")
         }
-
-        CameraConfig.mode = saved
     }
 
     // ── Epoch probabilities sum to 1 at all levels ──
 
     func testEpochProbs_sumToOne() {
-        let saved = CameraConfig.mode
-
         for level in CubeMode.allCases {
-            CameraConfig.mode = level
             let k = level.frameCount
             for z in [0, k/4, k/2, k-1] {
                 for depth: Float in [0.0, 0.5, 1.0] {
-                    let probs = BinomialCadence.epochProbabilities(frame: z, depth: depth)
+                    let probs = BinomialCadence.epochProbabilities(frame: z, depth: depth, frameCount: k)
                     let sum = probs[0] + probs[1] + probs[2] + probs[3]
                     XCTAssertEqual(sum, 1.0, accuracy: 1e-5,
                                    "\(level) z=\(z) d=\(depth): probs must sum to 1, got \(sum)")
                 }
             }
         }
-
-        CameraConfig.mode = saved
     }
 }
