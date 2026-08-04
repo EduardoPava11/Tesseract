@@ -163,7 +163,8 @@ struct ContentView: View {
                 DualExploreStateView(
                     camera: camera,
                     animator: dualAnimator,
-                    generation: gen
+                    generation: gen,
+                    clock: clock
                 )
 
             case .composing:
@@ -176,6 +177,7 @@ struct ContentView: View {
                     camera: camera,
                     animator: dualAnimator,
                     alpha: alpha,
+                    clock: clock,
                     onExport: { GIFSaver.presentShareSheet($0) }
                 )
 

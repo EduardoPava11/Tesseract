@@ -3,10 +3,11 @@
 # Ported from SixFour's lint discipline, trimmed to Tesseract's scope.
 #
 # Governed directories (migrated to the lattice):
-#   Tesseract/App, Tesseract/Views/States, Tesseract/UI
+#   Tesseract/App, Tesseract/Views/States, Tesseract/UI,
+#   Tesseract/Views/PaletteSwatchView.swift
 # Not yet governed (migration TODO — extend GOVERNED as they convert):
-#   Tesseract/Views/{FaceCaptureView,EliteMapView,CubeGIFView,
-#                    GIFPlayerView,PaletteSwatchView}.swift
+#   Tesseract/Views/{FaceCaptureView,EliteMapView}.swift
+#   (GIFPlayerView is a primitive; CubeGIFView deleted in the S3 pass)
 #
 # Invariants:
 #   LINT-PLACEMENT      .position(/.offset( only with // LINT-ALLOW-POSITION
@@ -39,6 +40,9 @@ Tesseract/Views/States/ProcessingStateView.swift
 Tesseract/Views/States/ErrorStateView.swift
 Tesseract/Views/States/ResultStateView.swift
 Tesseract/Views/States/LivePreviewStateView.swift
+Tesseract/Views/States/DualExploreStateView.swift
+Tesseract/Views/States/DualExplorePanels.swift
+Tesseract/Views/States/RefiningStateView.swift
 Tesseract/Views/PaletteSwatchView.swift
 "
 
