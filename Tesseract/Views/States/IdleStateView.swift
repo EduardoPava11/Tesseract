@@ -8,7 +8,7 @@ import SwiftUI
 
 struct IdleStateView: View {
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Lattice.gif(4)) {
             Text("TESSERACT")
                 .font(.system(.title, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.6))
@@ -17,7 +17,7 @@ struct IdleStateView: View {
                 .foregroundStyle(.white.opacity(0.3))
             ProgressView()
                 .tint(.white)
-                .padding(.top, 8)
+                .padding(.top, Lattice.gif(2))
             Text("initializing camera...")
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.2))

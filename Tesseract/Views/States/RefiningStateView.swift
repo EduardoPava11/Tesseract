@@ -13,7 +13,7 @@ struct RefiningStateView: View {
     let onExport: (Data) -> Void
 
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Lattice.gif(4)) {
             Spacer()
 
             // Composite GIF (the merged result of A+B or B+A)
@@ -23,7 +23,7 @@ struct RefiningStateView: View {
                 Image(decorative: image, scale: 1.0)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 256, height: 256)
+                    .frame(width: Lattice.gif(64), height: Lattice.gif(64))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -33,7 +33,7 @@ struct RefiningStateView: View {
                 .foregroundStyle(.white.opacity(0.5))
 
             // Gesture hints
-            HStack(spacing: 24) {
+            HStack(spacing: Lattice.gif(6)) {
                 Label("↺ base", systemImage: "arrow.counterclockwise")
                     .font(.system(size: 10))
                     .foregroundStyle(.white.opacity(0.4))

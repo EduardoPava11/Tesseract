@@ -28,15 +28,41 @@ struct ContentView: View {
     @State private var showEliteMap = false
 
     var body: some View {
-        Group {
-            switch appMode {
-            case .live:
-                liveBody
-            case .face:
-                FaceCaptureView(camera: faceCamera)
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            // THE GRID CANVAS: the exact 100×218 atom grid (400×872 pt)
+            // centered in the live screen. Everything inside is either a
+            // placed GridRegion or an atom-derived stack.
+            GeometryReader { geo in
+                ZStack(alignment: .topLeading) {
+                    Group {
+                        switch appMode {
+                        case .live:
+                            liveBody
+                        case .face:
+                            FaceCaptureView(camera: faceCamera)
+                        }
+                    }
+                    .frame(width: Lattice.gridWidthPt, height: Lattice.gridHeightPt)
+
+                    modeBar.place(GridLayout.modeBar)
+
+                    if appMode == .live && showsMapButton {
+                        eliteMapButton.place(GridLayout.eliteButton)
+                    }
+                }
+                .gridCentered(in: geo.size)
             }
+            .ignoresSafeArea()
         }
-        .safeAreaInset(edge: .top, spacing: 0) { modeBar }
+        .fullScreenCover(isPresented: $showEliteMap) {
+            EliteMapView(
+                map: camera.eliteMap,
+                version: camera.eliteVersion,
+                onClose: { showEliteMap = false }
+            )
+        }
         // Launch → LIVE preview immediately.
         .onAppear { camera.start() }
         // The TrueDepth camera admits ONE owner: AVCaptureSession (LIVE) and
@@ -71,7 +97,7 @@ struct ContentView: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.35))
             Spacer()
-            HStack(spacing: 4) {
+            HStack(spacing: Lattice.gif(1)) {
                 ForEach(AppMode.allCases) { mode in
                     Button {
                         guard mode != appMode else { return }
@@ -80,8 +106,8 @@ struct ContentView: View {
                         Text(mode.rawValue)
                             .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(.white.opacity(mode == appMode ? 0.9 : 0.35))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
+                            .padding(.horizontal, Lattice.pt(5))
+                            .padding(.vertical, Lattice.pt(3))
                             .background(
                                 Capsule().fill(Color.white.opacity(mode == appMode ? 0.12 : 0))
                             )
@@ -93,10 +119,7 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .frame(maxWidth: .infinity)
-        .background(Color.black)
+        .padding(.horizontal, Lattice.gif(3))
     }
 
     // MARK: - LIVE: one view per CameraState
@@ -158,20 +181,10 @@ struct ContentView: View {
                 })
             }
         }
-        .overlay(alignment: .topTrailing) {
-            if showsMapButton { eliteMapButton }
-        }
-        .fullScreenCover(isPresented: $showEliteMap) {
-            EliteMapView(
-                map: camera.eliteMap,
-                version: camera.eliteVersion,
-                onClose: { showEliteMap = false }
-            )
-        }
     }
 
     private var resultPlaceholder: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: Lattice.gif(4)) {
             Text("GIF ready")
                 .font(.system(.headline, design: .monospaced))
             Button("Again") { camera.state = .previewing }
@@ -190,18 +203,16 @@ struct ContentView: View {
 
     private var eliteMapButton: some View {
         Button { showEliteMap = true } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: Lattice.gif(1)) {
                 Image(systemName: "square.grid.3x3")
                     .font(.system(size: 10))
                 Text("\(camera.eliteMap.coverage)/9")
                     .font(.system(size: 10, design: .monospaced))
             }
             .foregroundStyle(.white.opacity(camera.eliteMap.coverage > 0 ? 0.6 : 0.25))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, Lattice.pt(5))
+            .padding(.vertical, Lattice.pt(3))
             .background(Color.white.opacity(0.06), in: Capsule())
-            .padding(.trailing, 12)
-            .padding(.top, 8)
         }
         .accessibilityLabel("Elite map, \(camera.eliteMap.coverage) of 9 cells explored")
     }

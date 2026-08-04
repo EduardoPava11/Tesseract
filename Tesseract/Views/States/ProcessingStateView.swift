@@ -10,7 +10,7 @@ struct ProcessingStateView: View {
     @ObservedObject var camera: CameraManager
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Lattice.gif(5)) {
             Spacer()
 
             Text("TESSERACT")
@@ -19,28 +19,28 @@ struct ProcessingStateView: View {
 
             // Go board visualization (3 boards: R/G, G/B, B/R)
             if let boards = camera.processBoards {
-                HStack(spacing: 8) {
+                HStack(spacing: Lattice.gif(2)) {
                     goBoardView(board: boards.rg, label: "R/G", tintA: .red, tintB: .green)
                     goBoardView(board: boards.gb, label: "G/B", tintA: .green, tintB: .blue)
                     goBoardView(board: boards.br, label: "B/R", tintA: .blue, tintB: .red)
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Lattice.gif(4))
             } else {
                 // Placeholder before first frame analyzed
-                HStack(spacing: 8) {
+                HStack(spacing: Lattice.gif(2)) {
                     ForEach(0..<3, id: \.self) { _ in
                         RoundedRectangle(cornerRadius: 4)
                             .fill(.white.opacity(0.05))
-                            .frame(width: 100, height: 100)
+                            .frame(width: Lattice.gif(25), height: Lattice.gif(25))
                     }
                 }
             }
 
             // Progress bar
-            VStack(spacing: 6) {
+            VStack(spacing: Lattice.pt(3)) {
                 ProgressView(value: Double(camera.processProgress))
                     .tint(.white)
-                    .padding(.horizontal, 48)
+                    .padding(.horizontal, Lattice.gif(12))
 
                 Text(String(format: "%.0f%%", camera.processProgress * 100))
                     .font(.system(.title2, design: .monospaced))
@@ -51,7 +51,7 @@ struct ProcessingStateView: View {
                     .foregroundStyle(.white.opacity(0.3))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                    .padding(.horizontal, Lattice.gif(8))
             }
 
             Spacer()
@@ -61,7 +61,7 @@ struct ProcessingStateView: View {
     // MARK: - Go Board Visualization
 
     private func goBoardView(board: GoBoard, label: String, tintA: Color, tintB: Color) -> some View {
-        VStack(spacing: 2) {
+        VStack(spacing: Lattice.pt(1)) {
             // 19×19 grid rendered as pixels
             Canvas { context, size in
                 let cellSize = size.width / CGFloat(GoBoard.size)
@@ -82,7 +82,7 @@ struct ProcessingStateView: View {
                     }
                 }
             }
-            .frame(width: 100, height: 100)
+            .frame(width: Lattice.gif(25), height: Lattice.gif(25))
             .clipShape(RoundedRectangle(cornerRadius: 4))
             .overlay(
                 RoundedRectangle(cornerRadius: 4)

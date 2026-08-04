@@ -11,14 +11,14 @@ struct RecordingStateView: View {
 
     var body: some View {
         let total = CameraConfig.totalFrames
-        VStack(spacing: 16) {
+        VStack(spacing: Lattice.gif(4)) {
             Spacer()
 
             if let cgImage = camera.previewImage {
                 Image(decorative: cgImage, scale: 1.0)
                     .interpolation(.none)
                     .resizable()
-                    .frame(width: 256, height: 256)
+                    .frame(width: Lattice.gif(64), height: Lattice.gif(64))
                     .clipShape(RoundedRectangle(cornerRadius: 4))
             }
 
@@ -28,7 +28,7 @@ struct RecordingStateView: View {
 
             ProgressView(value: Double(frame) / Double(total))
                 .tint(.white)
-                .padding(.horizontal, 48)
+                .padding(.horizontal, Lattice.gif(12))
 
             Text(String(format: "%.1fs", Double(frame) / 20.0))
                 .font(.system(.caption, design: .monospaced))

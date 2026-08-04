@@ -8,6 +8,15 @@ import SwiftUI
 
 @main
 struct TesseractApp: App {
+    init() {
+        #if DEBUG
+        // The grid constitution re-asserts itself on every launch:
+        // atom identity, tiling, touch floor, scene disjointness.
+        TesseractLattice.selfCheck()
+        GridLayout.selfCheck()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

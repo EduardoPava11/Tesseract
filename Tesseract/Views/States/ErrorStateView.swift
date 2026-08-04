@@ -12,7 +12,7 @@ struct ErrorStateView: View {
     let onRetry: () -> Void
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: Lattice.gif(3)) {
             Text("error")
                 .font(.system(.headline, design: .monospaced))
                 .foregroundStyle(.red.opacity(0.7))
@@ -20,8 +20,8 @@ struct ErrorStateView: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
-            HStack(spacing: 12) {
+                .padding(.horizontal, Lattice.gif(8))
+            HStack(spacing: Lattice.gif(3)) {
                 Button("Retry", action: onRetry)
                     .buttonStyle(.bordered)
                 if message == CameraManager.cameraDeniedMessage {

@@ -13,6 +13,8 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "6.0"
+    # Lint build phase greps the source tree — sandboxing would block it.
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
     # Daniel Mosquera personal team — the cached wildcard profile (9WANULVN2G.*)
     # on this machine signs device builds offline; no Xcode account needed.
     DEVELOPMENT_TEAM: 9WANULVN2G
@@ -26,6 +28,10 @@ targets:
     platform: iOS
     sources:
       - path: Tesseract
+    preBuildScripts:
+      - name: "GRID constitution lint"
+        script: bash "${PROJECT_DIR}/scripts/lint-grid.sh"
+        basedOnDependencyAnalysis: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.tesseract.app

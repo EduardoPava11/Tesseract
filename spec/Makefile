@@ -18,7 +18,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/PerfectQuantize.hs \
                quantization/BellPalette.hs \
                quantization/ResolutionLadder.hs \
-               quantization/DitherRamp.hs
+               quantization/DitherRamp.hs \
+               quantization/Centers.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -44,8 +45,8 @@ STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
 NEURAL = neural/BayerResidual.hs
 
+# GenIcon.hs takes ~2m and renders the app icon — run via `make icon`.
 OUTPUT = output/FrameGeometry.hs \
-         output/GenIcon.hs \
          output/BreakInvariants.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
@@ -59,19 +60,29 @@ CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL)
 
 .PHONY: test test-algebra test-quantization test-temporal test-spatial test-statistics test-output test-one list
 
+# TRUTHFUL harness: a file fails on nonzero exit OR any "✗" it prints.
+# (Most spec mains predate exitFailure; grepping their own failure marks
+# closes the exit-code blindness. "⊘" marks superseded checks — allowed.)
 test:
 	@echo "════ Tesseract Spec Suite ════"
 	@pass=0; fail=0; \
 	for f in $(CORE); do \
 		printf "  %-45s" "$$f"; \
-		if $(RUNGHC) $(FLAGS) $$f > /dev/null 2>&1; then \
+		out=$$($(RUNGHC) $(FLAGS) $$f 2>&1); rc=$$?; \
+		if [ $$rc -eq 0 ] && ! printf '%s' "$$out" | grep -q "✗"; then \
 			echo "✓"; pass=$$((pass+1)); \
 		else \
 			echo "✗"; fail=$$((fail+1)); \
+			printf '%s\n' "$$out" | grep "✗" | head -4 | sed 's/^/      /'; \
 		fi; \
 	done; \
 	echo ""; \
-	echo "  $$pass passed, $$fail failed out of $$(( pass + fail ))"
+	echo "  $$pass passed, $$fail failed out of $$(( pass + fail ))"; \
+	[ $$fail -eq 0 ]
+
+icon:
+	@echo "════ GenIcon (slow, ~2m) ════"
+	@$(RUNGHC) $(FLAGS) output/GenIcon.hs
 
 test-verbose:
 	@for f in $(CORE); do \

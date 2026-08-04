@@ -164,7 +164,7 @@ demonstrateFlaw1 pal = do
             ++ " │ sRGB dist = " ++ showF d
     ) farthest
   putStrLn ""
-  putStrLn "  ✗ VERDICT: blockY*16+blockX is a SPATIAL hash, not a color quantizer."
+  putStrLn "  ⊘ VERDICT (rejected design): blockY*16+blockX is a SPATIAL hash, not a color quantizer."
   putStrLn "    The palette exists but the generator never queries it."
   putStrLn ""
 
@@ -209,7 +209,7 @@ demonstrateFlaw2 = do
             ++ " → receives 16 from overflow (semantically meaningless)"
     ) (take 5 missing)
   putStrLn ""
-  putStrLn "  ✗ VERDICT: The 256×16 invariant is satisfied but the graphs"
+  putStrLn "  ⊘ VERDICT (rejected design): The 256×16 invariant is satisfied but the graphs"
   putStrLn "    contain pixels that have NO relationship to their color."
   putStrLn ""
 
@@ -249,7 +249,7 @@ demonstrateFlaw3 = do
   putStrLn $ "  Greedy overestimates by: " ++ showF (greedyCost - optimalCost)
           ++ " (" ++ showF (100 * (greedyCost - optimalCost) / optimalCost) ++ "%)"
   putStrLn ""
-  putStrLn "  ✗ VERDICT: Greedy can be 141% worse on adversarial inputs."
+  putStrLn "  ⊘ VERDICT (rejected design): Greedy can be 141% worse on adversarial inputs."
   putStrLn "    For n=16, exact Hungarian is O(16³)=4096 ops — trivial."
   putStrLn "    The 'hungarianSolve' in the original is also just greedy"
   putStrLn "    on a reduced matrix, not a real augmenting-path solver."
@@ -275,7 +275,7 @@ demonstrateFlaw4 pal = do
   putStrLn "  purely because their spatial scatter happens to be"
   putStrLn "  at opposite ends of the ranking."
   putStrLn ""
-  putStrLn "  ✗ VERDICT: The pairing has no color-space grounding."
+  putStrLn "  ⊘ VERDICT (rejected design): The pairing has no color-space grounding."
   putStrLn "    An sRGB-aware pairing would match similar colors"
   putStrLn "    and THEN compare their spatial graphs."
   putStrLn ""

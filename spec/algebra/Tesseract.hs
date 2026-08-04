@@ -204,20 +204,29 @@ quantize4D frameIdx (SRGBColor r g b) =
 --   The temporal epoch is INVISIBLE — it's encoded in which
 --   frames the color appears, not in its displayed hue.
 --   4 palette entries share each sRGB value (one per epoch).
+--
+--   Reconstruction is at CELL CENTERS (level + 0.5) / 4, matching the
+--   Swift port (TesseractCoord.sRGB, Axes.swift TessLevel.center) and
+--   the floor-quantizer geometry: cells [k/4, (k+1)/4) have equal
+--   width, and the midpoint is the centroid — the MSE-optimal
+--   reconstruction for the fixed floor partition (see
+--   quantization/Centers.hs axioms CN1-CN6). The former endpoint
+--   scheme n/3 violated the centroid condition and implied unequal
+--   Voronoi cells (statistics/BinomialFix.hs documents the bug class).
 tessToSRGB :: TessCoord -> SRGBColor
 tessToSRGB (TessCoord _d a b c) =
-  SRGBColor (fromIntegral a / 3.0)
-            (fromIntegral b / 3.0)
-            (fromIntegral c / 3.0)
+  SRGBColor ((fromIntegral a + 0.5) / 4.0)
+            ((fromIntegral b + 0.5) / 4.0)
+            ((fromIntegral c + 0.5) / 4.0)
 
 -- | Tinted projection: slightly shift by epoch for debug visualization
 tessToSRGBTinted :: TessCoord -> SRGBColor
 tessToSRGBTinted (TessCoord d a b c) =
   let factor = 1.0 + 0.08 * (fromIntegral d - 1.5)
       cl x = max 0 (min 1 x)
-  in SRGBColor (cl (fromIntegral a / 3.0 * factor))
-               (cl (fromIntegral b / 3.0 * factor))
-               (cl (fromIntegral c / 3.0 * factor))
+  in SRGBColor (cl ((fromIntegral a + 0.5) / 4.0 * factor))
+               (cl ((fromIntegral b + 0.5) / 4.0 * factor))
+               (cl ((fromIntegral c + 0.5) / 4.0 * factor))
 
 -- ════════════════════════════════════════════════════════════════
 -- § 8. DIRECT SUM AXIOMS A1-A7
