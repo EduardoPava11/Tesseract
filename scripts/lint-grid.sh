@@ -24,7 +24,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI Tesseract/Views/PaletteSwatchView.swift Tesseract/Views/EliteMapView.swift"
+GOVERNED="Tesseract/App Tesseract/Views Tesseract/UI"
 FAIL=0
 
 # Files converted to the cell vocabulary: raw drawing vocab is banned
