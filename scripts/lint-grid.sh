@@ -70,6 +70,15 @@ while IFS= read -r line; do
   echo "      $line"
 done < <(grep -rn "\.frame(\|\.padding(\|spacing:\|minLength:" $GOVERNED --include="*.swift" | grep "[0-9]" || true)
 
+# ── LINT-CONTROL-FACE ───────────────────────────────────────────
+# Every interactive region declared in GridLayout must name a face
+# (frame|brackets) in CellMechanics.controlFaces (lawControlFaceTotal).
+while IFS= read -r name; do
+  grep -q "\"$name\": \"" Tesseract/UI/Cells/CellMechanics.swift \
+    || note "LINT-CONTROL-FACE: interactive region '$name' has no entry in CellMechanics.controlFaces"
+done < <(grep "interactive: true" Tesseract/UI/Lattice/GridLayout.swift \
+         | sed -n 's/.*GridRegion("\([^"]*\)".*/\1/p' | sort -u)
+
 # ── LINT-GOLDEN-MECHANICS ───────────────────────────────────────
 [ -f "spec/ui/CellMechanics.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/CellMechanics.hs missing"
 [ -f "Tesseract/UI/Cells/CellMechanics.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Cells/CellMechanics.swift missing"

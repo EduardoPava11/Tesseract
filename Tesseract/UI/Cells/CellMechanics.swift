@@ -48,9 +48,39 @@ enum CellMechanics {
     }
 
     /// The closed region-name → face-kind table. Every `interactive: true`
-    /// region in `GridLayout` MUST appear here (LINT-CONTROL-FACE mirrors
-    /// this; populated with the scene data in the layout-as-data phase).
-    static let controlFaces: [String: String] = [:]
+    /// region in `GridLayout` MUST appear here (LINT-CONTROL-FACE + the
+    /// GridLayout.selfCheck lawControlFaceTotal mirror). "brackets" ONLY
+    /// where the control's content is an image (never obscure a content
+    /// pixel); everything solid wears "frame".
+    static let controlFaces: [String: String] = [
+        // Chrome
+        "modeBar": "frame",        // DEPRECATED with the pre-split bar
+        "modeLive": "frame",
+        "modeFace": "frame",
+        "eliteButton": "frame",
+        // Capture / face preview (record's frame IS the CellButton ring)
+        "record": "frame",
+        // Dual explore
+        "panelA": "brackets",
+        "panelB": "brackets",
+        "scrubber": "frame",
+        // Refining
+        "refineGif": "brackets",
+        // Result
+        "resultShare": "frame",
+        "resultKeep": "frame",
+        "resultRetake": "frame",
+        // Error
+        "errRetry": "frame",
+        "errSettings": "frame",
+        // Elite map
+        "eliteCell0": "brackets", "eliteCell1": "brackets", "eliteCell2": "brackets",
+        "eliteCell3": "brackets", "eliteCell4": "brackets", "eliteCell5": "brackets",
+        "eliteCell6": "brackets", "eliteCell7": "brackets", "eliteCell8": "brackets",
+        "eliteShare": "frame",
+        "eliteKeep": "frame",
+        "eliteClose": "frame",
+    ]
 
     /// DEBUG init-time law check (run alongside the lattice selfChecks).
     static func selfCheck() {
