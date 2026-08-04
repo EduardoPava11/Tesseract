@@ -1,97 +1,65 @@
 // ProcessingStateView.swift
 // Tesseract
 //
-// CameraState.processing — progress bar + live Go board visualization
-// (3 boards: R/G, G/B, B/R territory).
+// Processing — progress + live Go board visualization, region-placed
+// (GridLayout.processingScene). Data-driven so LIVE and FACE share it;
+// FACE passes boards: nil and the boards region renders empty.
 
 import SwiftUI
+import simd
 
 struct ProcessingStateView: View {
-    @ObservedObject var camera: CameraManager
+    let progress: Float
+    let phase: String
+    let boards: GoBoards?
 
     var body: some View {
-        VStack(spacing: Lattice.gif(5)) {
-            Spacer()
-
-            Text("TESSERACT")
-                .font(.system(.title3, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-
-            // Go board visualization (3 boards: R/G, G/B, B/R)
-            if let boards = camera.processBoards {
-                HStack(spacing: Lattice.gif(2)) {
-                    goBoardView(board: boards.rg, label: "R/G", tintA: .red, tintB: .green)
-                    goBoardView(board: boards.gb, label: "G/B", tintA: .green, tintB: .blue)
-                    goBoardView(board: boards.br, label: "B/R", tintA: .blue, tintB: .red)
-                }
-                .padding(.horizontal, Lattice.gif(4))
-            } else {
-                // Placeholder before first frame analyzed
-                HStack(spacing: Lattice.gif(2)) {
-                    ForEach(0..<3, id: \.self) { _ in
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(.white.opacity(0.05))
-                            .frame(width: Lattice.gif(25), height: Lattice.gif(25))
-                    }
-                }
-            }
-
-            // Progress bar
-            VStack(spacing: Lattice.pt(3)) {
-                ProgressView(value: Double(camera.processProgress))
-                    .tint(.white)
-                    .padding(.horizontal, Lattice.gif(12))
-
-                Text(String(format: "%.0f%%", camera.processProgress * 100))
-                    .font(.system(.title2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.6))
-
-                Text(camera.processPhase)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, Lattice.gif(8))
-            }
-
-            Spacer()
+        ZStack(alignment: .topLeading) {
+            CellText("TESSERACT", rows: TypeRows.body,
+                     ink: Color(srgb8: Ink.ledGhost))
+                .place(GridLayout.procTitle)
+            boardsRow.place(GridLayout.procBoards)
+            progressBar.place(GridLayout.procBar)
+            CellText(String(format: "%.0f%%", progress * 100), rows: TypeRows.counter)
+                .place(GridLayout.procPct)
+            CellText(phase, rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
+                .place(GridLayout.procPhase)
         }
     }
 
-    // MARK: - Go Board Visualization
+    // 3 boards of 19 atoms + labels; empty (FACE) leaves the region blank.
+    @ViewBuilder private var boardsRow: some View {
+        if let boards {
+            HStack(spacing: Lattice.gif(2)) {
+                goBoard(boards.rg, label: "R/G", tintA: Ink.chanR, tintB: Ink.chanG)
+                goBoard(boards.gb, label: "G/B", tintA: Ink.chanG, tintB: Ink.chanB)
+                goBoard(boards.br, label: "B/R", tintA: Ink.chanB, tintB: Ink.chanR)
+            }
+        }
+    }
 
-    private func goBoardView(board: GoBoard, label: String, tintA: Color, tintB: Color) -> some View {
+    // One Go cell = one atom (19 cells = 19 atoms = 76pt), opaque inks.
+    private func goBoard(_ board: GoBoard, label: String,
+                         tintA: SIMD3<UInt8>, tintB: SIMD3<UInt8>) -> some View {
         VStack(spacing: Lattice.pt(1)) {
-            // 19×19 grid rendered as pixels
-            Canvas { context, size in
-                let cellSize = size.width / CGFloat(GoBoard.size)
-                for y in 0..<GoBoard.size {
-                    for x in 0..<GoBoard.size {
-                        let stone = board[x, y]
-                        let color: Color = switch stone {
-                        case .black: tintA.opacity(0.8)
-                        case .white: tintB.opacity(0.8)
-                        case .empty: .gray.opacity(0.15)
-                        }
-                        let rect = CGRect(
-                            x: CGFloat(x) * cellSize,
-                            y: CGFloat(y) * cellSize,
-                            width: cellSize, height: cellSize
-                        )
-                        context.fill(Path(rect), with: .color(color))
-                    }
+            CellSprite(cols: GoBoard.size, rows: GoBoard.size, cellPt: Lattice.gifPx) { x, y in
+                switch board[x, y] {
+                case .black: tintA
+                case .white: tintB
+                case .empty: CellChecker.dark
                 }
             }
-            .frame(width: Lattice.gif(25), height: Lattice.gif(25))
-            .clipShape(RoundedRectangle(cornerRadius: 4))
-            .overlay(
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(.white.opacity(0.15), lineWidth: 0.5)
-            )
-
-            Text(label)
-                .font(.system(size: 9, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.4))
+            .pixelFrame()
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
         }
+        .accessibilityHidden(true)
+    }
+
+    private var progressBar: some View {
+        let lit = max(0, min(64, Int((Double(progress) * 64).rounded())))
+        return CellSprite(cols: 64, rows: 2, cellPt: Lattice.gifPx) { c, _ in
+            c < lit ? Ink.ink : Ink.ledGhost
+        }
+        .accessibilityLabel("Processing \(Int(progress * 100)) percent")
     }
 }

@@ -1,8 +1,9 @@
 // ResultStateView.swift
 // Tesseract
 //
-// CameraState.done — the exported GIF at full focus with its Birkhoff
-// measure, plus Share / Keep / Retake.
+// Done — the exported GIF at full focus with its Birkhoff measure,
+// plus Share / Keep / Retake. Region-placed (GridLayout.resultScene);
+// shared by LIVE and FACE.
 
 import SwiftUI
 
@@ -16,67 +17,63 @@ struct ResultStateView: View {
     @State private var keepState: KeepState = .idle
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-
-            // The GIF — full focus, 256×256 nearest-neighbor
+        ZStack(alignment: .topLeading) {
             GIFPlayerView(data: gifData)
-                .frame(width: Lattice.gif(64), height: Lattice.gif(64))
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-                .shadow(color: .white.opacity(0.05), radius: 20)
+                .frame(width: Lattice.gif(TesseractLattice.previewCells),
+                       height: Lattice.gif(TesseractLattice.previewCells))
+                .pixelFrame()
+                .place(GridLayout.resultGif)
 
-            // Birkhoff measure of the exported GIF
-            HStack(spacing: Lattice.gif(4)) {
-                resultMetric("M", String(format: "%.0f", measure.beauty))
-                resultMetric("O", String(format: "%.0f", measure.order))
-                resultMetric("C", String(format: "%.2f", measure.complexity))
-                resultMetric("dim", String(format: "%.1f", measure.manifoldDim))
-                resultMetric("col", "\(measure.colorsUsed)")
+            metricsRow.place(GridLayout.resultMetrics)
+
+            Button(action: onShare) {
+                CellFrameButton(icon: .share(), title: "SHARE", tick: 1,
+                                cols: GridLayout.resultShare.w, rows: GridLayout.resultShare.h)
             }
-            .padding(.top, Lattice.gif(4))
+            .buttonStyle(.plain)
+            .accessibilityLabel("Share GIF")
+            .place(GridLayout.resultShare)
 
-            Spacer()
-
-            // Share + Keep — the two actions that matter
-            HStack(spacing: Lattice.gif(3)) {
-                Button(action: onShare) {
-                    HStack(spacing: Lattice.gif(2)) {
-                        Image(systemName: "square.and.arrow.up")
-                        Text("Share")
-                    }
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, Lattice.gif(7))
-                    .padding(.vertical, Lattice.pt(7))
-                    .background(.ultraThinMaterial, in: Capsule())
-                }
-
-                Button(action: keep) {
-                    HStack(spacing: Lattice.gif(2)) {
-                        Image(systemName: keepIcon)
-                        Text(keepLabel)
-                    }
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.white.opacity(keepState == .saved ? 0.6 : 1))
-                    .padding(.horizontal, Lattice.gif(7))
-                    .padding(.vertical, Lattice.pt(7))
-                    .background(.ultraThinMaterial, in: Capsule())
-                }
-                .disabled(keepState == .saving || keepState == .saved)
+            Button(action: keep) {
+                CellFrameButton(symbol: keepSymbol, title: keepLabel,
+                                state: keepState == .saving ? 2 : 0, tick: 1,
+                                cols: GridLayout.resultKeep.w, rows: GridLayout.resultKeep.h,
+                                ink: keepState == .saved ? Ink.accept : Ink.ink)
             }
-            .padding(.bottom, Lattice.gif(4))
+            .buttonStyle(.plain)
+            .disabled(keepState == .saving || keepState == .saved)
+            .accessibilityLabel(keepLabel)
+            .place(GridLayout.resultKeep)
 
-            // Retake — subtle
             Button(action: onAgain) {
-                Text("Retake")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                CellFrameButton(icon: .retake(), title: "AGAIN", tick: 1,
+                                cols: GridLayout.resultRetake.w, rows: GridLayout.resultRetake.h,
+                                ink: Ink.ledGhost)
             }
-            .padding(.bottom, Lattice.gif(12))
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retake")
+            .place(GridLayout.resultRetake)
         }
     }
 
-    private var keepIcon: String {
+    private var metricsRow: some View {
+        HStack(spacing: Lattice.gif(4)) {
+            metric("M", String(format: "%.0f", measure.beauty))
+            metric("O", String(format: "%.0f", measure.order))
+            metric("C", String(format: "%.2f", measure.complexity))
+            metric("dim", String(format: "%.1f", measure.manifoldDim))
+            metric("col", "\(measure.colorsUsed)")
+        }
+    }
+
+    private func metric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: Lattice.pt(1)) {
+            CellText(value, rows: TypeRows.label)
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
+        }
+    }
+
+    private var keepSymbol: String {
         switch keepState {
         case .idle: return "square.and.arrow.down"
         case .saving: return "ellipsis"
@@ -87,10 +84,10 @@ struct ResultStateView: View {
 
     private var keepLabel: String {
         switch keepState {
-        case .idle: return "Keep"
-        case .saving: return "Saving"
-        case .saved: return "Kept"
-        case .failed: return "Retry"
+        case .idle: return "KEEP"
+        case .saving: return "…"
+        case .saved: return "KEPT"
+        case .failed: return "RETRY"
         }
     }
 
@@ -100,17 +97,6 @@ struct ResultStateView: View {
         Task {
             let ok = await GIFSaver.saveToPhotos(data)
             keepState = ok ? .saved : .failed
-        }
-    }
-
-    private func resultMetric(_ label: String, _ value: String) -> some View {
-        VStack(spacing: Lattice.pt(1)) {
-            Text(value)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.25))
         }
     }
 }

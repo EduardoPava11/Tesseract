@@ -24,8 +24,23 @@
 set -u
 cd "$(dirname "$0")/.."
 
-GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI"
+GOVERNED="Tesseract/App Tesseract/Views/States Tesseract/UI Tesseract/Views/PaletteSwatchView.swift"
 FAIL=0
+
+# Files converted to the cell vocabulary: raw drawing vocab is banned
+# (opacity, materials, shapes, strokes, shadows, bare Text, spinners).
+# Grows as views convert; primitives (is_primitive) are exempt.
+GOVERNED_VOCAB="
+Tesseract/App/ContentView.swift
+Tesseract/App/TesseractApp.swift
+Tesseract/Views/States/IdleStateView.swift
+Tesseract/Views/States/RecordingStateView.swift
+Tesseract/Views/States/ProcessingStateView.swift
+Tesseract/Views/States/ErrorStateView.swift
+Tesseract/Views/States/ResultStateView.swift
+Tesseract/Views/States/LivePreviewStateView.swift
+Tesseract/Views/PaletteSwatchView.swift
+"
 
 note() { echo "  ✗ $1"; FAIL=1; }
 
@@ -69,6 +84,21 @@ while IFS= read -r line; do
   note "LINT-SINGLE-PITCH: raw number in layout (use Lattice.gif/pt):"
   echo "      $line"
 done < <(grep -rn "\.frame(\|\.padding(\|spacing:\|minLength:" $GOVERNED --include="*.swift" | grep "[0-9]" || true)
+
+# ── LINT-DRAW-VOCAB ─────────────────────────────────────────────
+# Converted views draw ONLY through the cell vocabulary: no alpha, no
+# glass, no AA shapes, no bare Text, no stock spinners. `.opacity(0)`
+# (pure passthrough) is allowed.
+for f in $GOVERNED_VOCAB; do
+  [ -f "$f" ] || continue
+  while IFS= read -r line; do
+    code=$(echo "${line#*:}" | sed 's|//.*||')
+    echo "$code" | grep -q "\.opacity(0)" && continue
+    echo "$code" | grep -q "\.opacity(\|ultraThinMaterial\|glassEffect\|RoundedRectangle\|Circle()\|\.stroke(\|\.shadow(\|ProgressView\|[^l]Text(" || continue
+    note "LINT-DRAW-VOCAB: raw drawing vocab in converted view (use Cell*):"
+    echo "      $f:$line"
+  done < <(grep -n "\.opacity(\|ultraThinMaterial\|glassEffect\|RoundedRectangle\|Circle()\|\.stroke(\|\.shadow(\|ProgressView\|Text(" "$f" || true)
+done
 
 # ── LINT-CONTROL-FACE ───────────────────────────────────────────
 # Every interactive region declared in GridLayout must name a face

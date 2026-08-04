@@ -106,6 +106,38 @@ struct CellActionButton: View {
     }
 }
 
+/// A frame-faced action control: `ControlFrame` + icon and/or label,
+/// sized to a GridRegion footprint. The caller wraps it in a `Button`
+/// (hit rect == the region rect via `.contentShape`).
+struct CellFrameButton: View {
+    var icon: CellIcon? = nil
+    var symbol: String? = nil
+    var title: String? = nil
+    /// Ordinal into `CellMechanics.controlStates`.
+    var state: Int = 0
+    let tick: Int
+    var reduceMotion: Bool = false
+    let cols: Int
+    let rows: Int
+    /// Content ink; the frame draws its own treatment ink.
+    var ink: SIMD3<UInt8> = Ink.ink
+
+    var body: some View {
+        ZStack {
+            ControlFrame(cols: cols, rows: rows, state: state,
+                         tick: tick, reduceMotion: reduceMotion)
+            HStack(spacing: Lattice.pt(2)) {
+                if let icon { icon }
+                if let symbol { CellSymbol(systemName: symbol, ink: Color(srgb8: ink)) }
+                if let title { CellText(title, rows: TypeRows.label, ink: Color(srgb8: ink)) }
+            }
+        }
+        .frame(width: Lattice.gif(cols), height: Lattice.gif(rows))
+        .contentShape(Rectangle())
+        .accessibilityHidden(true)   // the wrapping Button carries the label
+    }
+}
+
 /// A cell **slider** — flat `ledGhost` baseline track with a single lit
 /// knob cell; drag maps x → value quantised to `step`. Keeps
 /// `accessibilityAdjustableAction` so VoiceOver can nudge it.
@@ -118,6 +150,8 @@ struct CellSlider: View {
     var cols: Int = 56
     var heightCells: Int = TesseractLattice.touchFloorCells
     var cell: CGFloat = Lattice.pt(1)
+    /// Called when the drag ends (scrub-release semantics).
+    var onEnded: (() -> Void)? = nil
     private let rows = 6
 
     private var span: Double { max(range.upperBound - range.lowerBound, 0.0001) }
@@ -133,10 +167,12 @@ struct CellSlider: View {
         .frame(width: cell * CGFloat(cols), height: cell * CGFloat(rows))
         .frame(minHeight: Lattice.gif(heightCells))
         .contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance: 0).onChanged { v in
-            let f = max(0, min(1, v.location.x / (cell * CGFloat(cols))))
-            set(range.lowerBound + f * span)
-        })
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                let f = max(0, min(1, v.location.x / (cell * CGFloat(cols))))
+                set(range.lowerBound + f * span)
+            }
+            .onEnded { _ in onEnded?() })
         .accessibilityElement()
         .accessibilityValue(Text("\(Int(value))"))
         .accessibilityAdjustableAction { dir in

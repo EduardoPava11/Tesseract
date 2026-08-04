@@ -17,6 +17,9 @@ struct ContentView: View {
     @StateObject private var dualAnimator = DualCubeAnimator(
         cubeA: VoxelCube(), cubeB: VoxelCube()
     )
+    /// THE one 20Hz chrome clock — drives every BEAT and heartbeat.
+    @State private var clock = SurfaceClock()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     // Front-camera only: LIVE (TrueDepth depth) and FACE (ARKit mesh).
     enum AppMode: String, CaseIterable, Identifiable {
@@ -46,7 +49,11 @@ struct ContentView: View {
                     }
                     .frame(width: Lattice.gridWidthPt, height: Lattice.gridHeightPt)
 
-                    modeBar.place(GridLayout.modeBar)
+                    CellText("TESSERACT", rows: TypeRows.label,
+                             ink: Color(srgb8: Ink.ledGhost))
+                        .place(GridLayout.wordmark)
+                    modePill(.live).place(GridLayout.modeLive)
+                    modePill(.face).place(GridLayout.modeFace)
 
                     if appMode == .live && showsMapButton {
                         eliteMapButton.place(GridLayout.eliteButton)
@@ -64,7 +71,12 @@ struct ContentView: View {
             )
         }
         // Launch → LIVE preview immediately.
-        .onAppear { camera.start() }
+        .onAppear {
+            clock.reduceMotion = reduceMotion
+            clock.start()
+            camera.start()
+        }
+        .onChange(of: reduceMotion) { _, rm in clock.reduceMotion = rm }
         // The TrueDepth camera admits ONE owner: AVCaptureSession (LIVE) and
         // ARSession (FACE) cannot coexist. On every mode change, fully stop
         // the other capture system SYNCHRONOUSLY before starting the new one.
@@ -91,35 +103,37 @@ struct ContentView: View {
         }
     }
 
-    private var modeBar: some View {
-        HStack {
-            Text("TESSERACT")
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.35))
-            Spacer()
-            HStack(spacing: Lattice.gif(1)) {
-                ForEach(AppMode.allCases) { mode in
-                    Button {
-                        guard mode != appMode else { return }
-                        withAnimation(.easeInOut(duration: 0.15)) { appMode = mode }
-                    } label: {
-                        Text(mode.rawValue)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.white.opacity(mode == appMode ? 0.9 : 0.35))
-                            .padding(.horizontal, Lattice.pt(5))
-                            .padding(.vertical, Lattice.pt(3))
-                            .background(
-                                Capsule().fill(Color.white.opacity(mode == appMode ? 0.12 : 0))
-                            )
+    /// A mode pill on its own 20×11-cell claim. Selected = accent ring +
+    /// lit label; unselected = ControlFrame (ghost, BEAT invitation);
+    /// disabled mid-capture = checker face.
+    private func modePill(_ mode: AppMode) -> some View {
+        let selected = mode == appMode
+        let region = mode == .live ? GridLayout.modeLive : GridLayout.modeFace
+        return Button {
+            guard mode != appMode, modeSwitchAllowed else { return }
+            appMode = mode
+        } label: {
+            ZStack {
+                if selected {
+                    CellSprite(cols: region.w, rows: region.h, cellPt: Lattice.gifPx) { c, r in
+                        (c == 0 || c == region.w - 1 || r == 0 || r == region.h - 1)
+                            ? Ink.accent : nil
                     }
-                    .buttonStyle(.plain)
-                    .disabled(!modeSwitchAllowed)
-                    .accessibilityLabel("\(mode.rawValue) mode")
-                    .accessibilityAddTraits(mode == appMode ? .isSelected : [])
+                } else {
+                    ControlFrame(cols: region.w, rows: region.h,
+                                 state: modeSwitchAllowed ? 0 : 3,
+                                 tick: clock.tick, reduceMotion: clock.reduceMotion)
                 }
+                CellText(mode.rawValue, rows: TypeRows.label,
+                         ink: Color(srgb8: selected ? Ink.ink : Ink.ledGhost))
             }
+            .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, Lattice.gif(3))
+        .buttonStyle(.plain)
+        .disabled(!modeSwitchAllowed)
+        .accessibilityLabel("\(mode.rawValue) mode")
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     // MARK: - LIVE: one view per CameraState
@@ -133,13 +147,17 @@ struct ContentView: View {
                 IdleStateView()
 
             case .previewing:
-                LivePreviewStateView(camera: camera)
+                LivePreviewStateView(camera: camera, clock: clock)
 
             case .recording(let frame):
-                RecordingStateView(camera: camera, frame: frame)
+                RecordingStateView(previewImage: camera.previewImage,
+                                   frame: frame,
+                                   total: CameraConfig.totalFrames)
 
             case .processing:
-                ProcessingStateView(camera: camera)
+                ProcessingStateView(progress: camera.processProgress,
+                                    phase: camera.processPhase,
+                                    boards: camera.processBoards)
 
             case .dualExplore(let gen):
                 DualExploreStateView(
@@ -150,8 +168,8 @@ struct ContentView: View {
 
             case .composing:
                 // Flash state — immediately transitions to refining
-                ProgressView("Composing...")
-                    .foregroundStyle(.white)
+                CellText("COMPOSING…", rows: TypeRows.label,
+                         ink: Color(srgb8: Ink.ledGhost))
 
             case .refining(let alpha):
                 RefiningStateView(
@@ -174,20 +192,28 @@ struct ContentView: View {
                 }
 
             case .error(let msg):
-                ErrorStateView(message: msg, onRetry: {
-                    camera.state = .idle
-                    camera.start()
-                })
+                ErrorStateView(
+                    message: msg,
+                    onRetry: {
+                        camera.state = .idle
+                        camera.start()
+                    },
+                    showsSettings: msg == CameraManager.cameraDeniedMessage
+                )
             }
         }
     }
 
     private var resultPlaceholder: some View {
         VStack(spacing: Lattice.gif(4)) {
-            Text("GIF ready")
-                .font(.system(.headline, design: .monospaced))
-            Button("Again") { camera.state = .previewing }
-                .buttonStyle(.borderedProminent)
+            CellText("GIF ready", rows: TypeRows.body)
+            Button { camera.state = .previewing } label: {
+                CellFrameButton(icon: .retake(), title: "AGAIN", tick: 1,
+                                cols: GridLayout.resultRetake.w,
+                                rows: GridLayout.resultRetake.h)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Retake")
         }
     }
 
@@ -201,18 +227,22 @@ struct ContentView: View {
     }
 
     private var eliteMapButton: some View {
-        Button { showEliteMap = true } label: {
-            HStack(spacing: Lattice.gif(1)) {
-                Image(systemName: "square.grid.3x3")
-                    .font(.system(size: 10))
-                Text("\(camera.eliteMap.coverage)/9")
-                    .font(.system(size: 10, design: .monospaced))
+        let ink = camera.eliteMap.coverage > 0 ? Ink.ink : Ink.ledGhost
+        return Button { showEliteMap = true } label: {
+            ZStack {
+                ControlFrame(cols: GridLayout.eliteButton.w, rows: GridLayout.eliteButton.h,
+                             state: 0, tick: clock.tick, reduceMotion: clock.reduceMotion)
+                HStack(spacing: Lattice.pt(2)) {
+                    CellIcon.grid3x3(ink: ink)
+                    CellText("\(camera.eliteMap.coverage)/9", rows: TypeRows.label,
+                             ink: Color(srgb8: ink))
+                }
             }
-            .foregroundStyle(.white.opacity(camera.eliteMap.coverage > 0 ? 0.6 : 0.25))
-            .padding(.horizontal, Lattice.pt(5))
-            .padding(.vertical, Lattice.pt(3))
-            .background(Color.white.opacity(0.06), in: Capsule())
+            .frame(width: Lattice.gif(GridLayout.eliteButton.w),
+                   height: Lattice.gif(GridLayout.eliteButton.h))
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityLabel("Elite map, \(camera.eliteMap.coverage) of 9 cells explored")
     }
 

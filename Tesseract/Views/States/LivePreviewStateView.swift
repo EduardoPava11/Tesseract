@@ -4,12 +4,15 @@
 // CameraState.previewing — the main surface. Every widget occupies a
 // proven GridRegion (GridLayout.captureScene) placed on the 100×218
 // atom grid; the preview widget is EXACTLY the GIF (64 cells = 64
-// pixels at 1 atom each). No hand positioning, no raw numbers.
+// pixels at 1 atom each). No hand positioning, no raw numbers, no
+// alpha — all chrome is opaque ink (CellMechanics).
 
 import SwiftUI
+import simd
 
 struct LivePreviewStateView: View {
     @ObservedObject var camera: CameraManager
+    let clock: SurfaceClock
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -25,7 +28,7 @@ struct LivePreviewStateView: View {
     // MARK: - Quantized Preview (64 cells = the 64×64 GIF at 1 atom/px)
 
     private var quantizedPreview: some View {
-        ZStack {
+        Group {
             if let cgImage = camera.previewImage {
                 Image(decorative: cgImage, scale: 1.0)
                     .interpolation(.none)  // nearest neighbor — pixel-perfect
@@ -33,68 +36,28 @@ struct LivePreviewStateView: View {
                     .frame(width: Lattice.gif(TesseractLattice.previewCells),
                            height: Lattice.gif(TesseractLattice.previewCells))
             } else {
-                Rectangle()
-                    .fill(Color.gray.opacity(0.1))
-                    .overlay(
-                        Text("64 × 64")
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.2))
-                    )
-            }
-            epochGridOverlay
-        }
-        .border(Color.white.opacity(0.15), width: 1)
-    }
-
-    // 4×4 epoch grid: one line every 16 cells (the epoch stride).
-    private var epochGridOverlay: some View {
-        Canvas { context, size in
-            let lineColor = Color.white.opacity(0.06)
-            let step = Lattice.gif(TesseractLattice.previewCells / 4)
-            for i in 1..<4 {
-                let x = step * CGFloat(i)
-                var v = Path()
-                v.move(to: CGPoint(x: x, y: 0))
-                v.addLine(to: CGPoint(x: x, y: size.height))
-                context.stroke(v, with: .color(lineColor), lineWidth: 0.5)
-                var h = Path()
-                h.move(to: CGPoint(x: 0, y: x))
-                h.addLine(to: CGPoint(x: size.width, y: x))
-                context.stroke(h, with: .color(lineColor), lineWidth: 0.5)
+                ZStack {
+                    Color(srgb8: CellChecker.dark)
+                    CellText("64 × 64", rows: TypeRows.label,
+                             ink: Color(srgb8: Ink.ledGhost))
+                }
+                .frame(width: Lattice.gif(TesseractLattice.previewCells),
+                       height: Lattice.gif(TesseractLattice.previewCells))
             }
         }
-        .allowsHitTesting(false)
+        .pixelFrame()
     }
 
-    // MARK: - Birkhoff Beauty Gauge
+    // MARK: - Birkhoff Beauty Gauge (M = O / C, the spec quantity)
 
     private var birkhoffGauge: some View {
         VStack(spacing: Lattice.pt(2)) {
             if let m = camera.previewMeasure {
-                HStack(spacing: Lattice.gif(3)) {
-                    Text("M")
-                        .font(.system(.caption2, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-
-                    GeometryReader { geo in
-                        let width = geo.size.width
-                        let normalized = min(1, m.beauty / 600)  // scale to [0,1]
-                        Rectangle()
-                            .fill(.white.opacity(0.08))
-                            .overlay(alignment: .leading) {
-                                Rectangle()
-                                    .fill(.white.opacity(0.3 + Double(normalized) * 0.5))
-                                    .frame(width: width * CGFloat(normalized))
-                            }
-                    }
-                    .frame(height: Lattice.pt(2))
-
-                    Text(String(format: "%.0f", m.beauty))
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .frame(width: Lattice.gif(11), alignment: .trailing)
+                HStack(spacing: Lattice.gif(2)) {
+                    CellText("M", rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
+                    beautyMeter(normalized: min(1, Double(m.beauty) / 600))
+                    CellText(String(format: "%.0f", m.beauty), rows: TypeRows.label)
                 }
-
                 HStack(spacing: Lattice.gif(4)) {
                     metricLabel("O", String(format: "%.0f", m.order))
                     metricLabel("C", String(format: "%.2f", m.complexity))
@@ -102,21 +65,25 @@ struct LivePreviewStateView: View {
                     metricLabel("col", "\(m.colorsUsed)")
                 }
             } else {
-                Text("M = O / C")
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.2))
+                CellText("M = O / C", rows: TypeRows.label,
+                         ink: Color(srgb8: Ink.ledGhost))
             }
         }
     }
 
+    // 30-atom lit-cells meter — the alpha gradient bar, now opaque ink.
+    private func beautyMeter(normalized: Double) -> some View {
+        let lit = max(0, min(30, Int((normalized * 30).rounded())))
+        return CellSprite(cols: 30, rows: 1, cellPt: Lattice.gifPx) { c, _ in
+            c < lit ? Ink.ink : Ink.ledGhost
+        }
+        .accessibilityHidden(true)
+    }
+
     private func metricLabel(_ label: String, _ value: String) -> some View {
         VStack(spacing: Lattice.pt(1)) {
-            Text(value)
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.5))
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.25))
+            CellText(value, rows: TypeRows.label)
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
         }
     }
 
@@ -124,14 +91,14 @@ struct LivePreviewStateView: View {
 
     private var channelPreviews: some View {
         HStack(spacing: Lattice.gif(2)) {
-            channelThumb(image: camera.previewR, label: "R", tint: .red)
-            channelThumb(image: camera.previewG, label: "G", tint: .green)
-            channelThumb(image: camera.previewB, label: "B", tint: .blue)
-            channelThumb(image: camera.previewD, label: "D", tint: .white)
+            channelThumb(image: camera.previewR, label: "R", tint: Ink.chanR)
+            channelThumb(image: camera.previewG, label: "G", tint: Ink.chanG)
+            channelThumb(image: camera.previewB, label: "B", tint: Ink.chanB)
+            channelThumb(image: camera.previewD, label: "D", tint: Ink.chanD)
         }
     }
 
-    private func channelThumb(image: CGImage?, label: String, tint: Color) -> some View {
+    private func channelThumb(image: CGImage?, label: String, tint: SIMD3<UInt8>) -> some View {
         VStack(spacing: Lattice.pt(1)) {
             Group {
                 if let img = image {
@@ -139,16 +106,14 @@ struct LivePreviewStateView: View {
                         .interpolation(.none)
                         .resizable()
                 } else {
-                    Rectangle().fill(.gray.opacity(0.1))
+                    Color(srgb8: CellChecker.dark)
                 }
             }
             .frame(width: Lattice.gif(TesseractLattice.channelCells),
                    height: Lattice.gif(TesseractLattice.channelCells))
-            .border(tint.opacity(0.4), width: 1)
+            .border(Color(srgb8: tint), width: 1)
 
-            Text(label)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(tint.opacity(0.6))
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: tint))
         }
     }
 
@@ -157,34 +122,26 @@ struct LivePreviewStateView: View {
     private var captureInfoLine: some View {
         let mode = CameraConfig.mode
         let step = CameraConfig.rgbCrop / mode.spatialSide
-        return Text("\(mode.frameCount) frames  \(String(format: "%.1f", Double(mode.frameCount) / 20.0))s  \(step * step) px/blk")
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.5))
+        return CellText(
+            "\(mode.frameCount) frames  \(String(format: "%.1f", Double(mode.frameCount) / Double(CameraConfig.targetFPS)))s  \(step * step) px/blk",
+            rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost)
+        )
     }
 
-    // MARK: - Record Button (18-cell footprint, 14-cell disc)
+    // MARK: - Record Button (18-cell footprint, 14-cell disc, BEAT ring)
 
+    // The ring band is the control's FACE: ghost between beats, lit ink
+    // for 1 tick in 4 (CellMechanics BEAT) — suppressed under
+    // reduce-motion by evaluating at tick 1 (provably beat-free).
     private var recordButton: some View {
-        Button(action: { camera.startRecording() }) {
-            ZStack {
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: Lattice.gif(TesseractLattice.recordCells),
-                           height: Lattice.gif(TesseractLattice.recordCells))
-                Circle()
-                    .fill(.white.opacity(0.85))
-                    .frame(width: Lattice.gif(TesseractLattice.recordDiscCells),
-                           height: Lattice.gif(TesseractLattice.recordDiscCells))
-                // Tesseract glyph: nested squares, one atom apart
-                RoundedRectangle(cornerRadius: 3)
-                    .stroke(.black.opacity(0.2), lineWidth: 1)
-                    .frame(width: Lattice.gif(5), height: Lattice.gif(5))
-                RoundedRectangle(cornerRadius: 2)
-                    .stroke(.black.opacity(0.15), lineWidth: 1)
-                    .frame(width: Lattice.gif(3), height: Lattice.gif(3))
-                    .offset(x: Lattice.pt(2), y: -Lattice.pt(2)) // LINT-ALLOW-POSITION (glyph, not layout)
-            }
+        let treatment = CellMechanics.faceTreatment(
+            state: 0, tick: clock.reduceMotion ? 1 : clock.tick)
+        return Button(action: { camera.startRecording() }) {
+            CellButton(state: .idle,
+                       ringInk: treatment == 1 ? Ink.ink : Ink.ledGhost)
         }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
         .accessibilityLabel("Record 64 frames")
     }
 }

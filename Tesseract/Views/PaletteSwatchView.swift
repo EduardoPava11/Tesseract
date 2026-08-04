@@ -2,8 +2,8 @@
 // Tesseract
 //
 // 16×16 palette swatch: all 256 tesseract colors laid out on a grid.
-// Each pixel = one palette entry. The GIF's DNA.
-// Displayed at 4× scale = 64×64pt.
+// Each pixel = one palette entry, displayed at the atom pitch
+// (16 cells = 64pt). The GIF's DNA.
 
 import SwiftUI
 
@@ -17,12 +17,9 @@ struct PaletteSwatchView: View {
             Image(decorative: img, scale: 1.0)
                 .interpolation(.none)  // pixel-perfect
                 .resizable()
-                .frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 2))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 2)
-                        .stroke(.white.opacity(0.1), lineWidth: 0.5)
-                )
+                .frame(width: Lattice.gif(TesseractLattice.paletteCells),
+                       height: Lattice.gif(TesseractLattice.paletteCells))
+                .pixelFrame()
         }
     }
 
