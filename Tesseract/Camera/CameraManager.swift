@@ -496,8 +496,10 @@ final class CameraManager: NSObject, ObservableObject {
             let descriptor = Descriptor.from(entropy)
             let beauty = overallMeasure?.beauty ?? 0
 
-            // Encode GIF
-            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure, upscale: CameraConfig.exportUpscale) {
+            // Encode GIF (pass 2 refined — see docs/REFINE-PASSES.md)
+            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
+            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure, upscale: CameraConfig.exportUpscale,
+                                            refined: refined) {
                 await MainActor.run {
                     self.gifData = data
                     self.gifMeasure = overallMeasure
@@ -981,7 +983,12 @@ final class CameraManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale)
+            // Pass 2: face-weighted centroid refinement (depth = face mass).
+            // Indices untouched; reconstruction chases the capture's colors
+            // where the face is, stays canonical in the background (WL3).
+            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
+            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale,
+                                            refined: refined)
 
             // Teacher organism (PerfectQuantizer output) → MAP-Elites archive
             let allIndices = quantizedFrames.flatMap { $0.paletteIndices }

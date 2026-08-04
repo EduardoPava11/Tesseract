@@ -338,8 +338,13 @@ final class FaceCaptureManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
+            // Pass 2: the anatomical signal rides the depth slot, so face
+            // mass = mesh weight here. Frames without rawRGB reduce to the
+            // canonical identity — safe either way.
+            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
             let gifData = GIFEncoder.encode(
-                frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale
+                frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale,
+                refined: refined
             )
 
             await MainActor.run {

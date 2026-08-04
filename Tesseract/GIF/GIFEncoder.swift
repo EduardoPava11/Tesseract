@@ -23,19 +23,26 @@ struct GIFEncoder {
     /// `upscale` replicates each palette index into a factor×factor block at
     /// emit time (fat voxels, INDEX domain — never colors, no interpolation).
     /// Default 1 preserves the existing byte-exact 64×64 output.
-    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1) -> Data? {
+    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1,
+                       refined: RefinedPalette? = nil) -> Data? {
         encode(
             indexFrames: frames.map(\.paletteIndices),
             side: QuantizedFrame.size,    // 64
             measure: measure,
-            upscale: upscale
+            upscale: upscale,
+            refined: refined
         )
     }
 
     /// Side-parameterized variant for the DNG rung ladder (S ∈ {64, 256, 1024}):
     /// same GIF89a stream, same tesseract GCT, arbitrary square side.
     /// The QuantizedFrame overload above delegates here — one encoder.
-    static func encode(indexFrames: [[UInt8]], side: Int, measure: BirkhoffMeasure? = nil, upscale: Int = 1) -> Data? {
+    ///
+    /// `refined` (pass 2, CentroidRefiner) substitutes a per-capture
+    /// color table whose entries are cell-clamped — indices unchanged,
+    /// reconstruction refined. nil = the canonical tesseract table.
+    static func encode(indexFrames: [[UInt8]], side: Int, measure: BirkhoffMeasure? = nil, upscale: Int = 1,
+                       refined: RefinedPalette? = nil) -> Data? {
         guard !indexFrames.isEmpty, side >= 1, upscale >= 1,
               indexFrames.allSatisfy({ $0.count == side * side }) else { return nil }
 
@@ -64,9 +71,10 @@ struct GIFEncoder {
         ])
 
         // ── 3. Global Color Table (256 × 3 = 768 bytes) ──
-        //   This IS the tesseract palette. Written exactly once.
-        //   Index i → TesseractCoord(index: i).sRGB8
-        data.append(TesseractPalette.gifColorTable)
+        //   Canonical: index i → TesseractCoord(index: i).sRGB8.
+        //   Refined (pass 2): per-capture centroids, every entry inside
+        //   its lattice cell (WL1) so re-quantization is unchanged.
+        data.append(refined?.gifColorTable ?? TesseractPalette.gifColorTable)
 
         // ── 4. NETSCAPE2.0 Loop Extension (infinite) ──
         data.append(contentsOf: [
@@ -83,6 +91,13 @@ struct GIFEncoder {
         if let m = measure {
             let comment = "Tesseract 4^4 | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | R1+R3=R4 sigma=\(String(format: "%.3f", BinomialCadence.sigmaBase))"
             writeCommentExtension(comment, to: &data)
+        }
+
+        // ── 5b. Comment Extension (pass-2 push/pull trace provenance) ──
+        //   Derived from the palette itself — table and trace cannot
+        //   disagree, and the schedule rides along (RefinedPalette).
+        if let refined {
+            writeCommentExtension(refined.traceComment, to: &data)
         }
 
         // ── 6. Frames ──

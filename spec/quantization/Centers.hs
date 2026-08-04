@@ -51,27 +51,38 @@ import System.Exit (exitFailure, exitSuccess)
 -- § 1. THE QUANTIZER, EXACTLY
 -- ════════════════════════════════════════════════════════════════
 
-levels :: [Integer]
-levels = [0, 1, 2, 3]
+-- | The four quantization levels AS A TYPE — house style
+--   (TesseractAxes.hs newtypes every channel). Enum/Bounded make
+--   "all levels" total and the encoder's clamp exhaustive by
+--   construction; an out-of-range level is unrepresentable.
+data Level = L0 | L1 | L2 | L3
+  deriving (Eq, Ord, Enum, Bounded, Show)
+
+levels :: [Level]
+levels = [minBound .. maxBound]
+
+-- | Numeric value of a level.
+lv :: Level -> Rational
+lv = fromIntegral . fromEnum
 
 delta :: Rational
 delta = 1 % 4                                   -- cell width Δ
 
--- | Encoder: floor cell of x ∈ [0,1), clamped.
-encode :: Rational -> Integer
-encode x = min 3 (floor (4 * x))
+-- | Encoder: floor cell of x ∈ [0,1), clamped into the Level type.
+encode :: Rational -> Level
+encode x = toEnum (fromInteger (min 3 (max 0 (floor (4 * x)))))
 
 -- | Decoder: cell CENTER (the app's choice).
-center :: Integer -> Rational
-center k = (fromInteger k + 1 % 2) / 4
+center :: Level -> Rational
+center k = (lv k + 1 % 2) / 4
 
 -- | Legacy decoder: endpoints k/3 (the Tesseract64 scheme, rejected).
-endpoint :: Integer -> Rational
-endpoint k = fromInteger k % 3
+endpoint :: Level -> Rational
+endpoint k = lv k / 3
 
 -- | Cell k = [lo, hi) under the floor partition.
-cell :: Integer -> (Rational, Rational)
-cell k = (fromInteger k % 4, (fromInteger k + 1) % 4)
+cell :: Level -> (Rational, Rational)
+cell k = (lv k / 4, (lv k + 1) / 4)
 
 -- ════════════════════════════════════════════════════════════════
 -- § 2. EXACT MOMENT INTEGRALS (closed form, Rational)
@@ -83,7 +94,7 @@ sqErr a b r = ((b - r)^(3 :: Int) - (a - r)^(3 :: Int)) / 3
 
 -- | Per-cell MSE of a decoder d on cell k (uniform density, unnormalized:
 --   this is the ∫ over the cell; divide by Δ for the conditional mean).
-cellMSE :: (Integer -> Rational) -> Integer -> Rational
+cellMSE :: (Level -> Rational) -> Level -> Rational
 cellMSE d k = let (a, b) = cell k in sqErr a b (d k)
 
 -- ════════════════════════════════════════════════════════════════
@@ -105,9 +116,9 @@ axiom_CN2 = [encode (center k) | k <- levels] == levels
 axiom_CN3 :: Bool
 axiom_CN3 =
   all (\k -> let (a, b) = cell k in b - a == delta) levels
-  && fst (cell 0) == 0
-  && snd (cell 3) == 1
-  && and [snd (cell k) == fst (cell (k + 1)) | k <- [0 .. 2]]
+  && fst (cell L0) == 0
+  && snd (cell L3) == 1
+  && and [snd (cell k) == fst (cell (succ k)) | k <- [L0 .. L2]]
   && delta ^ (4 :: Int) == 1 % 256
 
 -- CN4: centroid condition. Exactly, per cell:
@@ -141,9 +152,9 @@ axiom_CN5 =
 --      {1/6, 1/3, 1/3, 1/6}, violating CN3's equal measure.
 axiom_CN6 :: Bool
 axiom_CN6 =
-  let mid d k = (d k + d (k + 1)) / 2
-      centerBounds   = [mid center k   | k <- [0 .. 2]]
-      endpointBounds = [mid endpoint k | k <- [0 .. 2]]
+  let mid d k = (d k + d (succ k)) / 2
+      centerBounds   = [mid center k   | k <- [L0 .. L2]]
+      endpointBounds = [mid endpoint k | k <- [L0 .. L2]]
       endpointWidths =
         zipWith (-) (endpointBounds ++ [1]) (0 : endpointBounds)
   in centerBounds == [1 % 4, 2 % 4, 3 % 4]
