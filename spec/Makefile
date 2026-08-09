@@ -21,7 +21,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/DitherRamp.hs \
                quantization/Centers.hs \
                quantization/CentroidRefine.hs \
-               quantization/DyadPalette.hs
+               quantization/DyadPalette.hs \
+               quantization/PairPermutations.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs

@@ -381,6 +381,50 @@ jumping 180° at the silhouette, the band can DITHER between primary
 and partner as t grows — passing through gray exactly as physical
 paint would, "bleeding" in the literal color sense.
 
+## 9d. ★REFOCUS (Daniel, 2026-08-09): the model = permutations of
+## the binomial pairs — beauty and pixelation only
+
+> "We now focus on the model. GIF89a permutations of the binomial
+> color pairs. Go back to beauty and pixelation."
+
+This supersedes §3's free-δ formulation of Model A. The new domain is
+proven in `spec/quantization/PairPermutations.hs` (PP1–PP7, suite
+29/29):
+
+- A pair's 4×4 tile has a CLASS (coverage k — sizes are exactly the
+  binomial coefficients C(16,k), Σ = 2¹⁶) and an ARRANGEMENT (a
+  permutation within the class).
+- **Decoupling theorem (PP4):** the tile's optically mixed color is
+  k/16 — a function of the class only. Permutations move texture,
+  never color.
+- **Lawfulness theorem (PP3):** no permutation can leave its class,
+  so the DY6 tile-count law survives ANY model choice. XP1 holds
+  structurally; XP2's near-tie anxiety disappears entirely — the
+  permutation model perturbs no distances, ever.
+- Bayer is the dispersion canonical (its k=8 tile IS the perfect
+  checkerboard, adjacency 0 — PP5); D4 symmetry order is the beauty
+  score (a class function, PP6); the σ-flip maps class k → 16−k with
+  texture preserved (PP7) — the involution at tile level.
+
+**PERM-A, the refocused model:** a per-tile arrangement selector.
+- Input: the local field patch + the class k (FORCED by the pull law
+  — the model never chooses k) + neighbor-tile context.
+- Output: an arrangement from a small per-class codebook (the D4
+  orbit of the Bayer canonical + max-order clustered representatives
+  + a few learned entries) — a classification over ≤ a few dozen
+  discrete, pre-verified-lawful options.
+- Losses: pure beauty and pixelation — dispersion spectra, D4 order
+  targets, tile-boundary continuity, temporal arrangement churn on
+  the ring. NO color loss exists because no color freedom exists.
+- ANE: a tiny classifier (argmax over codebook logits) — exact
+  integer output, no fp16 distance parity to renegotiate.
+- Corpus: unchanged — GIF89a statistical variance (§5); the field's
+  pull map dictates the class field, the model dresses it.
+
+Model B and the critic are unchanged. The δ-perturbation design of
+§3 is retained in this document as the historical alternative, not
+the plan of record.
+
 ## 10. Open questions for Daniel
 
 1. "256 deltas": the panel unanimously reads this as the palette-entry
