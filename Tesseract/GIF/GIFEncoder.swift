@@ -24,13 +24,16 @@ struct GIFEncoder {
     /// emit time (fat voxels, INDEX domain — never colors, no interpolation).
     /// Default 1 preserves the existing byte-exact 64×64 output.
     static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1,
-                       refined: RefinedPalette? = nil) -> Data? {
+                       refined: RefinedPalette? = nil, perFrameTables: [Data]? = nil,
+                       trace: String? = nil) -> Data? {
         encode(
             indexFrames: frames.map(\.paletteIndices),
             side: QuantizedFrame.size,    // 64
             measure: measure,
             upscale: upscale,
-            refined: refined
+            refined: refined,
+            perFrameTables: perFrameTables,
+            trace: trace
         )
     }
 
@@ -41,10 +44,23 @@ struct GIFEncoder {
     /// `refined` (pass 2, CentroidRefiner) substitutes a per-capture
     /// color table whose entries are cell-clamped — indices unchanged,
     /// reconstruction refined. nil = the canonical tesseract table.
+    ///
+    /// `perFrameTables` (DYAD-256 mode) emits one 768-byte Local Color
+    /// Table per frame; the first table doubles as the GCT so naive
+    /// decoders still resolve frame 0. nil = single global table only.
+    ///
+    /// `trace` (provenance) is written verbatim as one more comment
+    /// extension after the measure/refined comments. nil adds no bytes:
+    /// every existing stream is unchanged.
     static func encode(indexFrames: [[UInt8]], side: Int, measure: BirkhoffMeasure? = nil, upscale: Int = 1,
-                       refined: RefinedPalette? = nil) -> Data? {
+                       refined: RefinedPalette? = nil, perFrameTables: [Data]? = nil,
+                       trace: String? = nil) -> Data? {
         guard !indexFrames.isEmpty, side >= 1, upscale >= 1,
               indexFrames.allSatisfy({ $0.count == side * side }) else { return nil }
+        if let tables = perFrameTables {
+            guard tables.count == indexFrames.count,
+                  tables.allSatisfy({ $0.count == 768 }) else { return nil }
+        }
 
         let frames = indexFrames
         let width = side * upscale
@@ -74,7 +90,7 @@ struct GIFEncoder {
         //   Canonical: index i → TesseractCoord(index: i).sRGB8.
         //   Refined (pass 2): per-capture centroids, every entry inside
         //   its lattice cell (WL1) so re-quantization is unchanged.
-        data.append(refined?.gifColorTable ?? TesseractPalette.gifColorTable)
+        data.append(perFrameTables?.first ?? refined?.gifColorTable ?? TesseractPalette.gifColorTable)
 
         // ── 4. NETSCAPE2.0 Loop Extension (infinite) ──
         data.append(contentsOf: [
@@ -100,9 +116,16 @@ struct GIFEncoder {
             writeCommentExtension(refined.traceComment, to: &data)
         }
 
+        // ── 5c. Comment Extension (caller-supplied trace) ──
+        //   e.g. the DYAD HARMONY line (Ou & Luo pair score). Written
+        //   verbatim; nil = absent, byte streams unchanged.
+        if let trace {
+            writeCommentExtension(trace, to: &data)
+        }
+
         // ── 6. Frames ──
         let delay = frameDelayCentiseconds
-        for frame in frames {
+        for (frameIndex, frame) in frames.enumerated() {
             // Graphics Control Extension (8 bytes)
             data.append(contentsOf: [
                 0x21, 0xF9, 0x04,                           // GCE introducer
@@ -112,15 +135,21 @@ struct GIFEncoder {
                 0x00                                         // block terminator
             ])
 
-            // Image Descriptor (10 bytes, no local color table)
+            // Image Descriptor (10 bytes). Packed byte 0x87 = LCT present,
+            // 2^(7+1) = 256 entries; 0x00 = no LCT (global table only).
             data.append(contentsOf: [
                 0x2C,                                        // image separator
                 0x00, 0x00,                                  // left = 0
                 0x00, 0x00,                                  // top = 0
                 UInt8(width & 0xFF), UInt8((width >> 8) & 0xFF),
                 UInt8(height & 0xFF), UInt8((height >> 8) & 0xFF),
-                0x00                                         // packed: no LCT, not interlaced
+                perFrameTables == nil ? 0x00 : 0x87
             ])
+
+            // Local Color Table (768 bytes) — this frame's DYAD table.
+            if let tables = perFrameTables {
+                data.append(tables[frameIndex])
+            }
 
             // LZW-compressed palette indices (minCodeSize = 8 for 256 colors)
             let indices = upscale == 1

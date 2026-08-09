@@ -11,16 +11,34 @@ import SwiftUI
 struct FacePreviewStateView: View {
     @ObservedObject var camera: FaceCaptureManager
     let clock: SurfaceClock
+    let onSettings: () -> Void
 
+    // SIMPLICITY DECREE (2026-08-09): preview + shutter + settings,
+    // nothing else (richer widgets survive below, unplaced).
     var body: some View {
         ZStack(alignment: .topLeading) {
-            BirkhoffGauge(measure: camera.previewMeasure).place(GridLayout.gauge)
             quantizedPreview.place(GridLayout.preview)
-            faceDot.place(GridLayout.faceDot)
-            captureInfoLine.place(GridLayout.captureInfo)
-            PaletteSwatchView().place(GridLayout.palette)
             recordButton.place(GridLayout.record)
+            settingsButton.place(GridLayout.settingsButton)
         }
+    }
+
+    private var settingsButton: some View {
+        Button(action: onSettings) {
+            ZStack {
+                ControlFrame(cols: GridLayout.settingsButton.w,
+                             rows: GridLayout.settingsButton.h,
+                             state: 0, tick: clock.tick,
+                             reduceMotion: clock.reduceMotion)
+                CellText("SET", rows: TypeRows.label,
+                         ink: Color(srgb8: Ink.ledGhost))
+            }
+            .frame(width: Lattice.gif(GridLayout.settingsButton.w),
+                   height: Lattice.gif(GridLayout.settingsButton.h))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
     }
 
     private var quantizedPreview: some View {

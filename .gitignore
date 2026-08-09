@@ -4,7 +4,7 @@ DerivedData/
 *.xcuserdata
 xcuserdata/
 *.xcworkspace
-!Tesseract.xcodeproj
+*.xcresult
 
 # macOS
 .DS_Store
@@ -37,3 +37,7 @@ spec/tesseract_icon.ppm
 
 # NN lab build artifacts
 nn/metal-harness/build/
+# Corpora are PROGRAMS (data.py + seed regenerates byte-identically);
+# emitted corpora never enter the repo. (nn/debayer/*.npz stays TRACKED
+# by design — weights + golden vectors are the parity chain.)
+nn/dither/*.npz

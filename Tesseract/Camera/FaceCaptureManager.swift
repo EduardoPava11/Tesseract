@@ -341,14 +341,11 @@ final class FaceCaptureManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            // Pass 2: the anatomical signal rides the depth slot, so face
-            // mass = mesh weight here. Frames without rawRGB reduce to the
-            // canonical identity — safe either way.
-            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
-            let gifData = GIFEncoder.encode(
-                frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale,
-                refined: refined
-            )
+            // Encode through the 64³ machine: persisted method setting,
+            // eligibility fallback. The anatomical signal rides the
+            // depth slot, so DYAD's face mass = mesh weight here too.
+            let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
+                                             settings: ExportSettings.load())
 
             await MainActor.run {
                 self.processProgress = 1.0

@@ -23,8 +23,18 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (currently 22/22).
+- `spec/` — runghc axiom suite: `cd spec && make test` (27 files green
+  as of 2026-08-09; the tally must stay at zero failures).
   New mechanisms get a spec with axioms BEFORE the Swift port.
+- The app is a 64³ GIF MACHINE (spec/output/ExportMethods.hs): every
+  export is 64 frames of 64×64 indices; METHODS (tesseract | refined |
+  dyad) differ only in how indices/tables are made, selected by the
+  persisted ExportSettings and resolved by eligibility. DYAD-256
+  (spec/quantization/DyadPalette.hs): paired per-frame palettes,
+  T[255−i] = comp(T[i]) in OKLab, face → primaries, background →
+  σ-mirror pair-dither bleeding to 255. Assignment runs on the ANE
+  (Tesseract/ML/DyadAssign.mlpackage, authored in nn/dyad-assign/,
+  exact CPU fallback; placement laws XP1/XP2).
 - `isp-spec/` — DEPRECATED rear-camera cabal ISP spec, read-only reference.
 - `nn/` — Mac-side lab: MLX-trained 5,616-param residual debayer
   (`nn/debayer/`, +3.72 dB over bilinear) and its Metal parity harness
@@ -33,9 +43,23 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
 ## Export contract
 
 Every GIF is 256×256 px (palette-index replication, never interpolation;
-`decimate ∘ replicate = id`), 256-entry global color table, exactly 5 cs
-frame delay = 20 fps. Byte-level contract locked by
-`TesseractTests/GIFOutputContractTests`.
+`decimate ∘ replicate = id`), exactly 5 cs frame delay = 20 fps.
+Table scheme by method: dyad = 64 per-frame Local Color Tables (packed
+byte 0x87, GCT = frame 0's table); tesseract/refined = one 256-entry
+global table (0x00). Byte-level contracts locked by
+`TesseractTests/GIFOutputContractTests` (lattice) and
+`DyadGIFContractTests` (per-frame LCTs + involution in every table).
+DYAD exports carry a "DYAD HARMONY" provenance comment (Ou & Luo pair
+score over all frames).
+
+## UI (SIMPLICITY DECREE, 2026-08-09)
+
+Launch = loading screen until the first preview frame, then ONE
+surface: preview + record + SET. All choices live in the settings
+cover (CAMERA live/face, LOOK dyad/refine/tess, BLEED, MIRROR — all
+persisted via ExportSettings). No mode chrome, no menus. The A/B
+dual-explore step and the elite-map entry are deprecated (modules
+compiled but unreachable).
 
 ## Build
 

@@ -504,10 +504,12 @@ final class CameraManager: NSObject, ObservableObject {
             let descriptor = Descriptor.from(entropy)
             let beauty = overallMeasure?.beauty ?? 0
 
-            // Encode GIF (pass 2 refined — see docs/REFINE-PASSES.md)
-            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
-            if let data = GIFEncoder.encode(frames: quantizedFrames, measure: overallMeasure, upscale: CameraConfig.exportUpscale,
-                                            refined: refined) {
+            // Encode through the 64³ machine: the persisted method
+            // setting resolves by eligibility (dyad → refined →
+            // tesseract; spec/output/ExportMethods.hs).
+            let encoded = GIFMachine.makeGIF(frames: quantizedFrames, measure: overallMeasure,
+                                             settings: ExportSettings.load())
+            if let data = encoded {
                 await MainActor.run {
                     self.gifData = data
                     self.gifMeasure = overallMeasure
@@ -989,12 +991,10 @@ final class CameraManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            // Pass 2: face-weighted centroid refinement (depth = face mass).
-            // Indices untouched; reconstruction chases the capture's colors
-            // where the face is, stays canonical in the background (WL3).
-            let refined = CentroidRefiner.refineAuto(frames: quantizedFrames)
-            let gifData = GIFEncoder.encode(frames: quantizedFrames, measure: measure, upscale: CameraConfig.exportUpscale,
-                                            refined: refined)
+            // Encode through the 64³ machine: persisted method setting,
+            // eligibility fallback (spec/output/ExportMethods.hs).
+            let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
+                                             settings: ExportSettings.load())
 
             // Teacher organism (PerfectQuantizer output) → MAP-Elites archive
             let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
@@ -1003,7 +1003,7 @@ final class CameraManager: NSObject, ObservableObject {
 
             await MainActor.run {
                 self.processProgress = 1.0
-                self.processPhase = "Swipe to explore"
+                self.processPhase = ""
                 self.processBoards = nil
                 self.gifData = gifData
                 self.gifMeasure = measure
@@ -1016,7 +1016,10 @@ final class CameraManager: NSObject, ObservableObject {
                     self.placeOrganism(gene: self.geneA, beauty: measure?.beauty ?? 0,
                                        descriptor: descriptor, gifData: data, entropy: entropy)
                 }
-                self.state = .dualExplore(0)  // Phase 1: dual exploration
+                // Simplicity decree (2026-08-09): capture → result, no
+                // A/B step. dualExplore/composing/refining stay compiled
+                // but the flow never enters them.
+                self.state = .done
             }
         }
     }

@@ -28,8 +28,12 @@ struct ContentView: View {
         var id: String { rawValue }
     }
     @State private var appMode: AppMode = .live
-    @State private var showEliteMap = false
+    @State private var showSettings = false
 
+    // SIMPLICITY DECREE (2026-08-09): launch shows the loading screen
+    // until the first preview frame exists, then ONE surface — preview,
+    // shutter, settings. No chrome, no mode pills, no gallery button.
+    // Mode selection lives inside the settings cover.
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
@@ -48,27 +52,17 @@ struct ContentView: View {
                         }
                     }
                     .frame(width: Lattice.gridWidthPt, height: Lattice.gridHeightPt)
-
-                    CellText("TESSERACT", rows: TypeRows.label,
-                             ink: Color(srgb8: Ink.ledGhost))
-                        .place(GridLayout.wordmark)
-                    modePill(.live).place(GridLayout.modeLive)
-                    modePill(.face).place(GridLayout.modeFace)
-
-                    if appMode == .live && showsMapButton {
-                        eliteMapButton.place(GridLayout.eliteButton)
-                    }
                 }
                 .gridCentered(in: geo.size)
             }
             .ignoresSafeArea()
         }
-        .fullScreenCover(isPresented: $showEliteMap) {
-            EliteMapView(
-                map: camera.eliteMap,
-                version: camera.eliteVersion,
-                onClose: { showEliteMap = false },
-                clock: clock
+        .fullScreenCover(isPresented: $showSettings) {
+            SettingsView(
+                appMode: $appMode,
+                modeSwitchAllowed: modeSwitchAllowed,
+                clock: clock,
+                onClose: { showSettings = false }
             )
         }
         // Launch → LIVE preview immediately.
@@ -112,39 +106,6 @@ struct ContentView: View {
         }
     }
 
-    /// A mode pill on its own 20×11-cell claim. Selected = accent ring +
-    /// lit label; unselected = ControlFrame (ghost, BEAT invitation);
-    /// disabled mid-capture = checker face.
-    private func modePill(_ mode: AppMode) -> some View {
-        let selected = mode == appMode
-        let region = mode == .live ? GridLayout.modeLive : GridLayout.modeFace
-        return Button {
-            guard mode != appMode, modeSwitchAllowed else { return }
-            appMode = mode
-        } label: {
-            ZStack {
-                if selected {
-                    CellSprite(cols: region.w, rows: region.h, cellPt: Lattice.gifPx) { c, r in
-                        (c == 0 || c == region.w - 1 || r == 0 || r == region.h - 1)
-                            ? Ink.accent : nil
-                    }
-                } else {
-                    ControlFrame(cols: region.w, rows: region.h,
-                                 state: modeSwitchAllowed ? 0 : 3,
-                                 tick: clock.tick, reduceMotion: clock.reduceMotion)
-                }
-                CellText(mode.rawValue, rows: TypeRows.label,
-                         ink: Color(srgb8: selected ? Ink.ink : Ink.ledGhost))
-            }
-            .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!modeSwitchAllowed)
-        .accessibilityLabel("\(mode.rawValue) mode")
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
     // MARK: - LIVE: one view per CameraState
 
     private var liveBody: some View {
@@ -156,7 +117,14 @@ struct ContentView: View {
                 IdleStateView()
 
             case .previewing:
-                LivePreviewStateView(camera: camera, clock: clock)
+                // Graceful arrival: hold the loading screen until the
+                // first preview frame exists.
+                if camera.previewImage == nil {
+                    IdleStateView()
+                } else {
+                    LivePreviewStateView(camera: camera, clock: clock,
+                                         onSettings: { showSettings = true })
+                }
 
             case .recording(let frame):
                 RecordingStateView(previewImage: camera.previewImage,
@@ -244,7 +212,12 @@ struct ContentView: View {
                 IdleStateView()
 
             case .previewing:
-                FacePreviewStateView(camera: faceCamera, clock: clock)
+                if faceCamera.previewImage == nil {
+                    IdleStateView()
+                } else {
+                    FacePreviewStateView(camera: faceCamera, clock: clock,
+                                         onSettings: { showSettings = true })
+                }
 
             case .recording(let frame):
                 RecordingStateView(previewImage: faceCamera.previewImage,
@@ -280,37 +253,11 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Elite Map Access
-
-    private var showsMapButton: Bool {
-        switch camera.state {
-        case .previewing, .dualExplore, .refining, .done: return true
-        default: return false
-        }
-    }
-
-    private var eliteMapButton: some View {
-        let ink = camera.eliteMap.coverage > 0 ? Ink.ink : Ink.ledGhost
-        return Button { showEliteMap = true } label: {
-            ZStack {
-                ControlFrame(cols: GridLayout.eliteButton.w, rows: GridLayout.eliteButton.h,
-                             state: 0, tick: clock.tick, reduceMotion: clock.reduceMotion)
-                HStack(spacing: Lattice.pt(2)) {
-                    CellIcon.grid3x3(ink: ink)
-                    CellText("\(camera.eliteMap.coverage)/9", rows: TypeRows.label,
-                             ink: Color(srgb8: ink))
-                }
-            }
-            .frame(width: Lattice.gif(GridLayout.eliteButton.w),
-                   height: Lattice.gif(GridLayout.eliteButton.h))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Elite map, \(camera.eliteMap.coverage) of 9 cells explored")
-    }
+    // Elite-map gallery: parked with the A/B deprecation — EliteMapView
+    // stays compiled but has no entry point on the simple surface.
 
     // Share path: GIFSaver.presentShareSheet is the ONE implementation
-    // (walks to the topmost presenter — covers the elite-map cover too).
+    // (walks to the topmost presenter — covers the settings cover too).
 }
 
 #Preview {

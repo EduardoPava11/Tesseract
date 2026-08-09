@@ -60,6 +60,16 @@ enum CellMechanics {
         "eliteButton": "frame",
         // Capture / face preview (record's frame IS the CellButton ring)
         "record": "frame",
+        "settingsButton": "frame",
+        // Settings scene
+        "setModeLive": "frame",
+        "setModeFace": "frame",
+        "lookDyad": "frame",
+        "lookRefine": "frame",
+        "lookTess": "frame",
+        "toggleBleed": "frame",
+        "toggleMirror": "frame",
+        "setClose": "frame",
         // Dual explore
         "panelA": "brackets",
         "panelB": "brackets",

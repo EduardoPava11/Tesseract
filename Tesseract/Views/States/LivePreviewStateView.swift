@@ -13,16 +13,35 @@ import simd
 struct LivePreviewStateView: View {
     @ObservedObject var camera: CameraManager
     let clock: SurfaceClock
+    let onSettings: () -> Void
 
+    // SIMPLICITY DECREE (2026-08-09): the surface is the preview, the
+    // shutter, and the settings button — nothing else. The richer
+    // widgets (gauge/channels/info/palette) survive below, unplaced.
     var body: some View {
         ZStack(alignment: .topLeading) {
-            BirkhoffGauge(measure: camera.previewMeasure).place(GridLayout.gauge)
             quantizedPreview.place(GridLayout.preview)
-            channelPreviews.place(GridLayout.channels)
-            captureInfoLine.place(GridLayout.captureInfo)
-            PaletteSwatchView().place(GridLayout.palette)
             recordButton.place(GridLayout.record)
+            settingsButton.place(GridLayout.settingsButton)
         }
+    }
+
+    private var settingsButton: some View {
+        Button(action: onSettings) {
+            ZStack {
+                ControlFrame(cols: GridLayout.settingsButton.w,
+                             rows: GridLayout.settingsButton.h,
+                             state: 0, tick: clock.tick,
+                             reduceMotion: clock.reduceMotion)
+                CellText("SET", rows: TypeRows.label,
+                         ink: Color(srgb8: Ink.ledGhost))
+            }
+            .frame(width: Lattice.gif(GridLayout.settingsButton.w),
+                   height: Lattice.gif(GridLayout.settingsButton.h))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Settings")
     }
 
     // MARK: - Quantized Preview (64 cells = the 64×64 GIF at 1 atom/px)

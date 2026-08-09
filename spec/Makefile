@@ -20,7 +20,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/ResolutionLadder.hs \
                quantization/DitherRamp.hs \
                quantization/Centers.hs \
-               quantization/CentroidRefine.hs
+               quantization/CentroidRefine.hs \
+               quantization/DyadPalette.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -40,7 +41,8 @@ SPATIAL_EXTRA = spatial/ColorGraphs.hs \
 
 STATISTICS = statistics/BinomialCube.hs \
              statistics/BinomialFix.hs \
-             statistics/WassersteinPalette.hs
+             statistics/WassersteinPalette.hs \
+             statistics/StatsVariance.hs
 
 # DeviationManifold.hs exceeds default read but compiles fine.
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
@@ -51,7 +53,8 @@ UI = ui/CellMechanics.hs
 
 # GenIcon.hs takes ~2m and renders the app icon — run via `make icon`.
 OUTPUT = output/FrameGeometry.hs \
-         output/BreakInvariants.hs
+         output/BreakInvariants.hs \
+         output/ExportMethods.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
 OUTPUT_EXTRA = output/RealTesseract.hs \

@@ -39,20 +39,23 @@ struct GridRegion: Equatable {
 
 enum GridLayout {
 
-    // ── Chrome (shared across main-canvas scenes) ──
-    // The mode bar split into three touch-floor-legal claims (the old
-    // full-width bar put ~24pt pills inside a 44pt strip).
+    // ── Chrome ──
+    // SIMPLICITY DECREE (2026-08-09): no shared chrome. The main
+    // surface is preview + record + settings, nothing else. Mode
+    // selection moved into the settings scene.
+    static let chrome: [GridRegion] = []
+
+    /// DEPRECATED chrome — kept as named claims for reference; not in
+    /// any scene array. (wordmark/mode pills replaced by the settings
+    /// scene; eliteButton parked with the A/B deprecation.)
     static let wordmark = GridRegion("wordmark", col: 3, row: 14, w: 30, h: 11)
     static let modeLive = GridRegion("modeLive", col: 55, row: 14, w: 20, h: 11, interactive: true)
     static let modeFace = GridRegion("modeFace", col: 77, row: 14, w: 20, h: 11, interactive: true)
     static let eliteButton = GridRegion("eliteButton", col: 76, row: 30, w: 22, h: 11, interactive: true)
-
-    /// DEPRECATED — the pre-split full-width bar; ContentView still
-    /// places it until the chrome conversion. Not in any scene array.
     static let modeBar = GridRegion("modeBar", col: 0, row: 14, w: 100, h: 11, interactive: true)
 
-    /// Chrome present in every main-canvas scene.
-    static let chrome: [GridRegion] = [wordmark, modeLive, modeFace]
+    /// The one piece of surface chrome: the settings button, top-right.
+    static let settingsButton = GridRegion("settingsButton", col: 77, row: 14, w: 20, h: 11, interactive: true)
 
     // ── Capture scene (CameraState.previewing, LIVE) ──
     static let gauge = GridRegion("gauge", col: 18, row: 30, w: 54, h: 10)
@@ -62,16 +65,18 @@ enum GridLayout {
     static let palette = GridRegion("palette", col: 12, row: 176, w: 16, h: 16)
     static let record = GridRegion("record", col: 41, row: 174, w: 18, h: 18, interactive: true)
 
-    static let captureScene: [GridRegion] = chrome + [
-        eliteButton,
-        gauge, preview, channels, captureInfo, palette, record,
+    // SIMPLICITY: the capture surface is exactly three claims.
+    // (gauge/channels/captureInfo/palette stay as named claims for the
+    // deprecated richer surface; not in the scene.)
+    static let captureScene: [GridRegion] = [
+        preview, record, settingsButton,
     ]
 
-    // ── Face preview scene (FACE .previewing; no elite gallery) ──
+    // ── Face preview scene (FACE .previewing) ──
     static let faceDot = GridRegion("faceDot", col: 18, row: 116, w: 64, h: 6)
 
-    static let facePreviewScene: [GridRegion] = chrome + [
-        gauge, preview, faceDot, captureInfo, palette, record,
+    static let facePreviewScene: [GridRegion] = [
+        preview, record, settingsButton,
     ]
 
     // ── Recording scene (shared LIVE + FACE) ──
@@ -124,7 +129,7 @@ enum GridLayout {
     static let resultRetake = GridRegion("resultRetake", col: 64, row: 174, w: 18, h: 11, interactive: true)
 
     static let resultScene: [GridRegion] = chrome + [
-        eliteButton, resultGif, resultMetrics, resultShare, resultKeep, resultRetake,
+        resultGif, resultMetrics, resultShare, resultKeep, resultRetake,
     ]
 
     // ── Idle scene ──
@@ -145,6 +150,28 @@ enum GridLayout {
 
     static let errorScene: [GridRegion] = chrome + [
         errTitle, errMsg, errRetry, errSettings,
+    ]
+
+    // ── Settings scene (fullScreenCover — its own canvas) ──
+    // CAMERA row (LIVE/FACE) + LOOK radio (the 64³ machine's methods).
+    static let setTitle = GridRegion("setTitle", col: 18, row: 20, w: 64, h: 10)
+    static let setModeLabel = GridRegion("setModeLabel", col: 18, row: 44, w: 64, h: 6)
+    static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 20, h: 11, interactive: true)
+    static let setModeFace = GridRegion("setModeFace", col: 42, row: 54, w: 20, h: 11, interactive: true)
+    static let setLookLabel = GridRegion("setLookLabel", col: 18, row: 78, w: 64, h: 6)
+    static let lookDyad = GridRegion("lookDyad", col: 18, row: 90, w: 64, h: 11, interactive: true)
+    static let lookRefine = GridRegion("lookRefine", col: 18, row: 106, w: 64, h: 11, interactive: true)
+    static let lookTess = GridRegion("lookTess", col: 18, row: 122, w: 64, h: 11, interactive: true)
+    // The two useful-and-simple toggles: DYAD background bleed,
+    // export mirroring. Both persisted (ExportSettings).
+    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 142, w: 64, h: 11, interactive: true)
+    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 158, w: 64, h: 11, interactive: true)
+    static let setClose = GridRegion("setClose", col: 40, row: 190, w: 20, h: 11, interactive: true)
+
+    static let settingsScene: [GridRegion] = [
+        setTitle, setModeLabel, setModeLive, setModeFace,
+        setLookLabel, lookDyad, lookRefine, lookTess,
+        toggleBleed, toggleMirror, setClose,
     ]
 
     // ── Elite-map scene (fullScreenCover — its own canvas, no chrome) ──
@@ -192,6 +219,7 @@ enum GridLayout {
         ("result", resultScene),
         ("idle", idleScene),
         ("error", errorScene),
+        ("settings", settingsScene),
         ("eliteMap", eliteMapScene),
     ]
 
