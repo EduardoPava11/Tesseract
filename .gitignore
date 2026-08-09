@@ -41,3 +41,5 @@ nn/metal-harness/build/
 # emitted corpora never enter the repo. (nn/debayer/*.npz stays TRACKED
 # by design — weights + golden vectors are the parity chain.)
 nn/dither/*.npz
+
+nn/phase/*.npz

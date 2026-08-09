@@ -43,7 +43,8 @@ SPATIAL_EXTRA = spatial/ColorGraphs.hs \
 STATISTICS = statistics/BinomialCube.hs \
              statistics/BinomialFix.hs \
              statistics/WassersteinPalette.hs \
-             statistics/StatsVariance.hs
+             statistics/StatsVariance.hs \
+             statistics/PhaseEnergy.hs
 
 # DeviationManifold.hs exceeds default read but compiles fine.
 STATISTICS_EXTRA = statistics/DeviationManifold.hs

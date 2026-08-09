@@ -154,6 +154,7 @@ enum GIFMachine {
     /// solver a single-valued function of these, the STATS section
     /// rebuilds every palette byte: the GIF carries its own generator.
     static func dyadTrace(tables: [Data], stats: [DyadPalette.Stats],
+                          indexFrames: [[UInt8]],
                           settings: ExportSettings) -> String {
         var lines = [harmonyTrace(tables: tables)]
         lines.append("DYAD SETTINGS bleed=\(settings.bleed ? 1 : 0) mirror=\(settings.mirror ? 1 : 0)")
@@ -164,6 +165,7 @@ enum GIFMachine {
                         c[0][0], c[0][1], c[0][2], c[1][1], c[1][2], c[2][2]]
             lines.append(nums.map { "\($0)" }.joined(separator: " "))
         }
+        lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
         return lines.joined(separator: "\n")
     }
 
@@ -218,6 +220,7 @@ enum GIFMachine {
                    measure: measure, upscale: CameraConfig.exportUpscale,
                    perFrameTables: dyad.tables,
                    trace: dyadTrace(tables: dyad.tables, stats: dyad.stats,
+                                    indexFrames: dyad.indexFrames,
                                     settings: settings)) {
                 return data
             }

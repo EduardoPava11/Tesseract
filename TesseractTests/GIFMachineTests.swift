@@ -200,7 +200,7 @@ final class GIFMachineTests: XCTestCase {
     func testStatsTraceRebuildsTablesByteExact() throws {
         let out = try XCTUnwrap(DyadPipeline.process(frames: frames(withRGB: true)))
         let trace = GIFMachine.dyadTrace(
-            tables: out.tables, stats: out.stats,
+            tables: out.tables, stats: out.stats, indexFrames: out.indexFrames,
             settings: ExportSettings(method: .dyad, bleed: true, mirror: false))
         let rebuilt = try XCTUnwrap(GIFMachine.rebuildTables(fromTrace: trace))
         XCTAssertEqual(rebuilt, out.tables,
