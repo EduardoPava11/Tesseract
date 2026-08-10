@@ -22,7 +22,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/Centers.hs \
                quantization/CentroidRefine.hs \
                quantization/DyadPalette.hs \
-               quantization/PairPermutations.hs
+               quantization/PairPermutations.hs \
+               quantization/SpectralPalette.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -44,26 +45,31 @@ STATISTICS = statistics/BinomialCube.hs \
              statistics/BinomialFix.hs \
              statistics/WassersteinPalette.hs \
              statistics/StatsVariance.hs \
-             statistics/PhaseEnergy.hs
+             statistics/PhaseEnergy.hs \
+             statistics/Dissonance.hs
 
 # DeviationManifold.hs exceeds default read but compiles fine.
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
-NEURAL = neural/BayerResidual.hs
+NEURAL = neural/BayerResidual.hs \
+         neural/MapElites.hs
 
 UI = ui/CellMechanics.hs
+
+HARMONY = harmony/SetListDissonance.hs
 
 # GenIcon.hs takes ~2m and renders the app icon — run via `make icon`.
 OUTPUT = output/FrameGeometry.hs \
          output/BreakInvariants.hs \
-         output/ExportMethods.hs
+         output/ExportMethods.hs \
+         output/TriScaleLadder.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
 OUTPUT_EXTRA = output/RealTesseract.hs \
                output/GIFAnalysis.hs \
                output/TemporalSpatialGIF.hs
 
-CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL) $(UI) $(OUTPUT)
+CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL) $(UI) $(HARMONY) $(OUTPUT)
 
 # ── Targets ──────────────────────────────────────────────
 

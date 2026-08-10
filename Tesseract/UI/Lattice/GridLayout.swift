@@ -73,10 +73,12 @@ enum GridLayout {
     ]
 
     // ── Face preview scene (FACE .previewing) ──
+    // faceDot is placed transiently (2s after each face-found/lost
+    // transition, then hidden) — decree amendment 2026-08-09.
     static let faceDot = GridRegion("faceDot", col: 18, row: 116, w: 64, h: 6)
 
     static let facePreviewScene: [GridRegion] = [
-        preview, record, settingsButton,
+        preview, record, settingsButton, faceDot,
     ]
 
     // ── Recording scene (shared LIVE + FACE) ──
@@ -127,9 +129,12 @@ enum GridLayout {
     static let resultShare = GridRegion("resultShare", col: 18, row: 174, w: 18, h: 11, interactive: true)
     static let resultKeep = GridRegion("resultKeep", col: 41, row: 174, w: 18, h: 11, interactive: true)
     static let resultRetake = GridRegion("resultRetake", col: 64, row: 174, w: 18, h: 11, interactive: true)
+    /// Second register for KEEP outcomes (photos denied / save failed).
+    static let resultNote = GridRegion("resultNote", col: 10, row: 130, w: 80, h: 6)
 
     static let resultScene: [GridRegion] = chrome + [
         resultGif, resultMetrics, resultShare, resultKeep, resultRetake,
+        resultNote,
     ]
 
     // ── Idle scene ──

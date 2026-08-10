@@ -11,11 +11,15 @@ import UniformTypeIdentifiers
 
 enum GIFSaver {
 
-    /// Save GIF data to the Photos library. Returns true on success.
+    /// Denial is not failure: a denied add-only authorization can only be
+    /// fixed in Settings, so the UI must offer that path, not a retry.
+    enum SaveResult { case saved, denied, failed }
+
+    /// Save GIF data to the Photos library.
     /// Requests add-only authorization on first use.
-    static func saveToPhotos(_ data: Data) async -> Bool {
+    static func saveToPhotos(_ data: Data) async -> SaveResult {
         let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
-        guard status == .authorized || status == .limited else { return false }
+        guard status == .authorized || status == .limited else { return .denied }
 
         do {
             try await PHPhotoLibrary.shared().performChanges {
@@ -24,9 +28,9 @@ enum GIFSaver {
                 let request = PHAssetCreationRequest.forAsset()
                 request.addResource(with: .photo, data: data, options: options)
             }
-            return true
+            return .saved
         } catch {
-            return false
+            return .failed
         }
     }
 

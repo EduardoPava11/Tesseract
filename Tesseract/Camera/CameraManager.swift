@@ -114,6 +114,14 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var previewMeasure: BirkhoffMeasure?
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
+    /// Tri-scale ladder telemetry over the realized 64³ cube
+    /// (spec/output/TriScaleLadder.hs). Measurement only — no GIF
+    /// byte depends on it.
+    @Published private(set) var rungTelemetry: RungTelemetry?
+    /// Dissonance telemetry (spec/statistics/Dissonance.hs): tuning
+    /// at the rung-16 cadence + the urgency weight field. v1 is
+    /// measurement only.
+    @Published private(set) var dissonance: DissonanceTelemetry?
 
     // Processing progress (shown during compute phase)
     @Published var processProgress: Float = 0        // 0.0 → 1.0
@@ -181,9 +189,20 @@ final class CameraManager: NSObject, ObservableObject {
 
     private var hasConfigured = false
 
-    /// Error message for camera-permission denial. The error state view keys
-    /// off this exact string to offer an "Open Settings" action.
-    static let cameraDeniedMessage = "camera access denied"
+    // Message-key constants are nonisolated: they are read from the
+    // session queue (configureSession) and ARKit's delegate queue.
+
+    /// Error message for camera-permission denial. ContentView keys off
+    /// this exact string to offer an "Open Settings" action.
+    nonisolated static let cameraDeniedMessage = "camera access denied"
+
+    /// Terminal: this hardware has no TrueDepth camera. ContentView keys
+    /// off this string to render the gate (no retry — it cannot succeed).
+    nonisolated static let noTrueDepthMessage = "no truedepth camera"
+
+    /// GIFMachine.makeGIF returned nil — surfaced honestly instead of a
+    /// "done" state with nothing to show. Shared by LIVE and FACE.
+    nonisolated static let encodeFailedMessage = "gif export failed"
 
     func start() {
         guard state == .idle else { return }
@@ -562,7 +581,7 @@ final class CameraManager: NSObject, ObservableObject {
         guard let device = AVCaptureDevice.default(
             .builtInTrueDepthCamera, for: .video, position: .front
         ) else {
-            return "No TrueDepth camera"
+            return Self.noTrueDepthMessage
         }
 
         do {
@@ -996,6 +1015,17 @@ final class CameraManager: NSObject, ObservableObject {
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
                                              settings: ExportSettings.load())
 
+            // The 16/32/64 ladder over the realized cube — exact
+            // lattice-level sums, telemetry only (TriScaleLadder.swift).
+            let rungs = TriScaleLadder.telemetry(frames: quantizedFrames)
+            if let rungs {
+                logger.info("TriScale: mass \(rungs.mass) conserved=\(rungs.massConserved) free 64→32 \(rungs.freeBlocks3264)/32768, 32→16 \(rungs.freeBlocks1632)/4096")
+            }
+            let diss = DissonanceField.telemetry(frames: quantizedFrames)
+            if let diss {
+                logger.info("Dissonance: tuning (δG \(diss.loopTuning.kG), δB \(diss.loopTuning.kB))/1200, Ū \(diss.urgencyTotal)")
+            }
+
             // Teacher organism (PerfectQuantizer output) → MAP-Elites archive
             let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
             let entropy = EntropyMeasure.compute(paletteIndices: allIndices)
@@ -1007,6 +1037,8 @@ final class CameraManager: NSObject, ObservableObject {
                 self.processBoards = nil
                 self.gifData = gifData
                 self.gifMeasure = measure
+                self.rungTelemetry = rungs
+                self.dissonance = diss
                 self.generation = 0
                 self.sobolExplorer.reset()
                 // Initialize two genes: A = default, B = perturbed
@@ -1015,11 +1047,14 @@ final class CameraManager: NSObject, ObservableObject {
                 if let data = gifData {
                     self.placeOrganism(gene: self.geneA, beauty: measure?.beauty ?? 0,
                                        descriptor: descriptor, gifData: data, entropy: entropy)
+                    // Simplicity decree (2026-08-09): capture → result, no
+                    // A/B step. dualExplore/composing/refining stay compiled
+                    // but the flow never enters them.
+                    self.state = .done
+                } else {
+                    // A nil encode is a failure, not a result.
+                    self.state = .error(Self.encodeFailedMessage)
                 }
-                // Simplicity decree (2026-08-09): capture → result, no
-                // A/B step. dualExplore/composing/refining stay compiled
-                // but the flow never enters them.
-                self.state = .done
             }
         }
     }

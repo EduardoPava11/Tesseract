@@ -167,8 +167,10 @@ struct EliteMapView: View {
             saveState = .saving
             let data = cell.gifData
             Task {
-                let ok = await GIFSaver.saveToPhotos(data)
-                saveState = ok ? .saved : .failed
+                // Unreachable surface (A/B deprecation): denied folds
+                // into failed here; the shipped path is ResultStateView.
+                let result = await GIFSaver.saveToPhotos(data)
+                saveState = result == .saved ? .saved : .failed
             }
         } label: {
             CellFrameButton(symbol: saveSymbol, title: saveLabel,

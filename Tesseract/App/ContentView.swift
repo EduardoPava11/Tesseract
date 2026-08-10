@@ -171,21 +171,49 @@ struct ContentView: View {
                 }
 
             case .error(let msg):
-                ErrorStateView(
-                    message: msg,
-                    onRetry: {
-                        camera.state = .idle
-                        camera.start()
-                    },
-                    showsSettings: msg == CameraManager.cameraDeniedMessage
-                )
+                errorState(msg,
+                           restart: { camera.state = .idle; camera.start() },
+                           reshoot: { camera.state = .previewing })
             }
+        }
+    }
+
+    // Two-register error voice (2026-08-09): all-caps headline + one
+    // lowercase sentence that explains the connection. Terminal hardware
+    // gates render no RETRY (it could never succeed); permission denials
+    // add Open Settings; a failed encode retries to .previewing (the
+    // session is still running).
+    @ViewBuilder
+    private func errorState(_ msg: String,
+                            restart: @escaping () -> Void,
+                            reshoot: @escaping () -> Void) -> some View {
+        switch msg {
+        case CameraManager.cameraDeniedMessage:
+            ErrorStateView(message: "CAMERA OFF",
+                           detail: "allow camera access in Settings to see the preview",
+                           onRetry: restart,
+                           showsSettings: true)
+        case CameraManager.noTrueDepthMessage:
+            // The gate: Tesseract does not run on non-TrueDepth iPhones
+            // (Daniel, 2026-08-09). No capability key can hide the app
+            // from these devices, so the gate states the requirement.
+            ErrorStateView(message: "NO TRUEDEPTH",
+                           detail: "tesseract needs the Face ID camera, and this iPhone has none")
+        case FaceCaptureManager.faceTrackingUnsupportedMessage:
+            ErrorStateView(message: "NO FACE TRACKING",
+                           detail: "this device cannot track the ARKit face mesh")
+        case CameraManager.encodeFailedMessage:
+            ErrorStateView(message: "EXPORT FAILED",
+                           detail: "the GIF could not be encoded, record again",
+                           onRetry: reshoot)
+        default:
+            ErrorStateView(message: "ERROR", detail: msg, onRetry: restart)
         }
     }
 
     private func resultPlaceholder(onAgain: @escaping () -> Void) -> some View {
         VStack(spacing: Lattice.gif(4)) {
-            CellText("GIF ready", rows: TypeRows.body)
+            CellText("NO GIF", rows: TypeRows.body)
             Button(action: onAgain) {
                 CellFrameButton(icon: .retake(), title: "AGAIN", tick: 1,
                                 cols: GridLayout.resultRetake.w,
@@ -242,13 +270,9 @@ struct ContentView: View {
                 }
 
             case .error(let msg):
-                ErrorStateView(
-                    message: msg,
-                    onRetry: {
-                        faceCamera.state = .idle
-                        faceCamera.start()
-                    }
-                )
+                errorState(msg,
+                           restart: { faceCamera.state = .idle; faceCamera.start() },
+                           reshoot: { faceCamera.state = .previewing })
             }
         }
     }

@@ -1,29 +1,41 @@
 // ErrorStateView.swift
 // Tesseract
 //
-// Error — Retry always; Open Settings when the failure is a permission
-// denial (Retry can never succeed until the user flips the toggle).
+// Error — two-register voice (2026-08-09): a terse all-caps headline
+// plus one lowercase sentence that explains the connection, per the
+// permission-UX guidance (never a bare unexplained failure). RETRY is
+// optional — terminal states (missing hardware) render no dead action.
+// Open Settings appears when the failure is a permission denial
+// (Retry can never succeed until the user flips the toggle).
 // Region-placed (GridLayout.errorScene); shared by LIVE and FACE.
 
 import SwiftUI
 
 struct ErrorStateView: View {
+    /// All-caps headline register (e.g. "CAMERA OFF").
     let message: String
-    let onRetry: () -> Void
+    /// Lowercase explanatory register; wrapped into the errMsg region.
+    var detail: String? = nil
+    /// nil ⇒ terminal state: no RETRY button is rendered.
+    var onRetry: (() -> Void)? = nil
     var showsSettings: Bool = false
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            CellText("ERROR", rows: TypeRows.body, ink: Color(srgb8: Ink.reject))
+            CellText(message, rows: TypeRows.body, ink: Color(srgb8: Ink.reject))
                 .place(GridLayout.errTitle)
-            messageLines.place(GridLayout.errMsg)
-            Button(action: onRetry) {
-                CellFrameButton(title: "RETRY", tick: 1,
-                                cols: GridLayout.errRetry.w, rows: GridLayout.errRetry.h)
+            if let detail {
+                detailLines(detail).place(GridLayout.errMsg)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Retry")
-            .place(GridLayout.errRetry)
+            if let onRetry {
+                Button(action: onRetry) {
+                    CellFrameButton(title: "RETRY", tick: 1,
+                                    cols: GridLayout.errRetry.w, rows: GridLayout.errRetry.h)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Retry")
+                .place(GridLayout.errRetry)
+            }
             if showsSettings {
                 Button {
                     if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -40,15 +52,15 @@ struct ErrorStateView: View {
         }
     }
 
-    // CellText is single-line; word-wrap the message to the region.
-    private var messageLines: some View {
+    // CellText is single-line; word-wrap the detail to the region.
+    private func detailLines(_ text: String) -> some View {
         VStack(spacing: Lattice.pt(2)) {
-            ForEach(Array(Self.wrap(message, width: 36).enumerated()), id: \.offset) { _, line in
+            ForEach(Array(Self.wrap(text, width: 36).enumerated()), id: \.offset) { _, line in
                 CellText(line, rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(message)
+        .accessibilityLabel(text)
     }
 
     static func wrap(_ text: String, width: Int) -> [String] {

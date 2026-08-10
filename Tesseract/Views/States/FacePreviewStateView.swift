@@ -15,11 +15,29 @@ struct FacePreviewStateView: View {
 
     // SIMPLICITY DECREE (2026-08-09): preview + shutter + settings,
     // nothing else (richer widgets survive below, unplaced).
+    // Amendment (2026-08-09): the face dot appears transiently — each
+    // face-found/lost transition shows it for 2s, then it cuts out
+    // (a hard cut, not an alpha fade: the vocabulary has no opacity).
+    @State private var dotVisible = false
+    @State private var dotRevision = 0
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             quantizedPreview.place(GridLayout.preview)
             recordButton.place(GridLayout.record)
             settingsButton.place(GridLayout.settingsButton)
+            if dotVisible {
+                faceDot.place(GridLayout.faceDot)
+            }
+        }
+        .onChange(of: camera.faceDetected) { _, _ in
+            dotVisible = true
+            dotRevision += 1
+        }
+        .task(id: dotRevision) {
+            guard dotVisible else { return }
+            try? await Task.sleep(for: .seconds(2))
+            dotVisible = false
         }
     }
 

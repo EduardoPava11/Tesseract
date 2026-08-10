@@ -13,7 +13,7 @@ struct ResultStateView: View {
     let onAgain: () -> Void
     let onShare: () -> Void
 
-    enum KeepState { case idle, saving, saved, failed }
+    enum KeepState { case idle, saving, saved, denied, failed }
     @State private var keepState: KeepState = .idle
 
     var body: some View {
@@ -53,6 +53,21 @@ struct ResultStateView: View {
             .buttonStyle(.plain)
             .accessibilityLabel("Retake")
             .place(GridLayout.resultRetake)
+
+            // Second register (2026-08-09): one lowercase line explaining
+            // a KEEP outcome the button label alone cannot.
+            if let note = keepNote {
+                CellText(note, rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
+                    .place(GridLayout.resultNote)
+            }
+        }
+    }
+
+    private var keepNote: String? {
+        switch keepState {
+        case .denied: return "photos off, allow adding in Settings"
+        case .failed: return "the GIF did not save, try again"
+        default: return nil
         }
     }
 
@@ -78,6 +93,7 @@ struct ResultStateView: View {
         case .idle: return "square.and.arrow.down"
         case .saving: return "ellipsis"
         case .saved: return "checkmark"
+        case .denied: return "gearshape"
         case .failed: return "exclamationmark.triangle"
         }
     }
@@ -87,16 +103,30 @@ struct ResultStateView: View {
         case .idle: return "KEEP"
         case .saving: return "…"
         case .saved: return "KEPT"
+        case .denied: return "SETTINGS"
         case .failed: return "RETRY"
         }
     }
 
     private func keep() {
+        // Denied is only fixable in Settings — the button becomes the
+        // deep link (RETRY could never succeed; NN/g permission pattern).
+        // Reset to idle so a return from Settings offers KEEP again.
+        if keepState == .denied {
+            if let url = URL(string: UIApplication.openSettingsURLString) {
+                UIApplication.shared.open(url)
+            }
+            keepState = .idle
+            return
+        }
         keepState = .saving
         let data = gifData
         Task {
-            let ok = await GIFSaver.saveToPhotos(data)
-            keepState = ok ? .saved : .failed
+            switch await GIFSaver.saveToPhotos(data) {
+            case .saved: keepState = .saved
+            case .denied: keepState = .denied
+            case .failed: keepState = .failed
+            }
         }
     }
 }

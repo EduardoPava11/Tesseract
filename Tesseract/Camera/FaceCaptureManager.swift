@@ -21,6 +21,7 @@
 // PerfectQuantizer + GIFEncoder exactly like CameraManager's processing path.
 
 import ARKit
+import AVFoundation
 import CoreVideo
 import os.log
 
@@ -48,6 +49,12 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     @Published var faceDetected: Bool = false
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
+    /// Tri-scale ladder telemetry (mirrors CameraManager) —
+    /// measurement only; the anatomical signal rides the same cube.
+    @Published private(set) var rungTelemetry: RungTelemetry?
+    /// Dissonance telemetry (mirrors CameraManager) — the anatomical
+    /// signal rides the depth slot, so urgency reads face-vs-ground.
+    @Published private(set) var dissonance: DissonanceTelemetry?
     @Published var processProgress: Float = 0
     @Published var processPhase: String = ""
 
@@ -68,10 +75,21 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     // MARK: - Lifecycle
 
+    /// Terminal: no ARKit face tracking on this hardware. ContentView
+    /// keys off this string to render the gate (no retry).
+    nonisolated static let faceTrackingUnsupportedMessage = "face tracking unsupported"
+
     func start() {
         guard state == .idle else { return }
+        // Same denial handling as the LIVE path: reuse the exact message
+        // ContentView keys the Open Settings action off. Without this,
+        // a revoked permission surfaces as a raw ARKit error string.
+        if case .denied = AVCaptureDevice.authorizationStatus(for: .video) {
+            state = .error(CameraManager.cameraDeniedMessage)
+            return
+        }
         guard ARFaceTrackingConfiguration.isSupported else {
-            state = .error("ARKit face tracking not supported on this device")
+            state = .error(Self.faceTrackingUnsupportedMessage)
             return
         }
 
@@ -347,12 +365,27 @@ final class FaceCaptureManager: NSObject, ObservableObject {
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
                                              settings: ExportSettings.load())
 
+            // The 16/32/64 ladder over the realized cube — exact
+            // lattice-level sums, telemetry only (TriScaleLadder.swift).
+            let rungs = TriScaleLadder.telemetry(frames: quantizedFrames)
+            if let rungs {
+                logger.info("TriScale: mass \(rungs.mass) conserved=\(rungs.massConserved) free 64→32 \(rungs.freeBlocks3264)/32768, 32→16 \(rungs.freeBlocks1632)/4096")
+            }
+            let diss = DissonanceField.telemetry(frames: quantizedFrames)
+            if let diss {
+                logger.info("Dissonance: tuning (δG \(diss.loopTuning.kG), δB \(diss.loopTuning.kB))/1200, Ū \(diss.urgencyTotal)")
+            }
+
             await MainActor.run {
                 self.processProgress = 1.0
                 self.processPhase = ""
                 self.gifData = gifData
                 self.gifMeasure = measure
-                self.state = .done
+                self.rungTelemetry = rungs
+                self.dissonance = diss
+                // A nil encode is a failure, not a result (mirrors LIVE).
+                self.state = gifData == nil
+                    ? .error(CameraManager.encodeFailedMessage) : .done
             }
         }
     }
@@ -389,7 +422,15 @@ extension FaceCaptureManager: ARSessionDelegate {
     }
 
     nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
-        let message = error.localizedDescription
+        // Permission revocation arrives here as ARError.cameraUnauthorized;
+        // map it to the shared denied message so the error surface offers
+        // Open Settings instead of echoing a raw system string.
+        let message: String
+        if let arError = error as? ARError, arError.code == .cameraUnauthorized {
+            message = CameraManager.cameraDeniedMessage
+        } else {
+            message = error.localizedDescription
+        }
         logger.error("FaceCapture: session failed — \(message)")
         Task { @MainActor in
             self.state = .error(message)

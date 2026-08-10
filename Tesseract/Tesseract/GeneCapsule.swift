@@ -24,8 +24,8 @@ struct GeneCapsule {
     ///   [4..7]   Float32 attention_zero
     ///   [8..11]  Float32 core_scale
     ///   [12..15] Float32 core_zero
-    ///   [16..]   Int8 quantized weights (4548 bytes)
-    ///   Total: 16 + 4548 = 4564 bytes
+    ///   [16..]   Int8 quantized weights (4581 bytes)
+    ///   Total: 16 + 4581 = 4597 bytes
     static func encode(_ gene: GeneWeights) -> Data {
         var data = Data()
         data.reserveCapacity(16 + GeneWeights.totalCount)

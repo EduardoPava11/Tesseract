@@ -10,7 +10,7 @@
 // Architecture:
 //   InputEncoder : R^137 → R^32   (ATTENTION, 4416 params)
 //        ReLU
-//   OutputHead   : R^32 → R^4    (CORE, 132 params)
+//   OutputHead   : R^32 → R^5    (CORE, 165 params)
 //        Sigmoid × 3.999 → floor → {0,1,2,3}⁴
 //
 // Total: 4,581 params. Gene capsule: ~4.5 KB (Int8).
@@ -42,6 +42,8 @@ constant uint B1_OFFSET = HIDDEN_DIM * INPUT_DIM;            // 4384
 constant uint W2_OFFSET = B1_OFFSET + HIDDEN_DIM;            // 4416
 constant uint B2_OFFSET = W2_OFFSET + OUTPUT_DIM * HIDDEN_DIM; // 4576
 constant uint TOTAL_WEIGHTS = B2_OFFSET + OUTPUT_DIM;         // 4581
+// Pins the layout arithmetic (and keeps the constant referenced).
+static_assert(TOTAL_WEIGHTS == 4581, "gene weight layout drifted");
 
 // ════════════════════════════════════════════════════════════════
 // § 2. METADATA (per-frame, per-organism state)

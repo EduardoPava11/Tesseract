@@ -23,8 +23,9 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (27 files green
-  as of 2026-08-09; the tally must stay at zero failures).
+- `spec/` — runghc axiom suite: `cd spec && make test` (35 files green
+  as of 2026-08-10, incl. neural/MapElites.hs newly enrolled; the tally
+  must stay at zero failures).
   New mechanisms get a spec with axioms BEFORE the Swift port.
 - The app is a 64³ GIF MACHINE (spec/output/ExportMethods.hs): every
   export is 64 frames of 64×64 indices; METHODS (tesseract | refined |
@@ -35,6 +36,34 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   σ-mirror pair-dither bleeding to 255. Assignment runs on the ANE
   (Tesseract/ML/DyadAssign.mlpackage, authored in nn/dyad-assign/,
   exact CPU fallback; placement laws XP1/XP2).
+- The 16/32/64 ladder (spec/output/TriScaleLadder.hs →
+  Tesseract/TriScaleLadder.swift, 2026-08-10): SixFour's color-head
+  tri-scale pyramid ported to the export cube. Exact u64 lattice-level
+  sums pooled over 2×2×2 spacetime blocks (64³→32³→16³); time law
+  side × delay = 320 cs. MEASUREMENT ONLY — published as rungTelemetry
+  on both capture managers; no GIF byte depends on it; trains nothing
+  (★NO-CAPTURE-TRAINING). Distinct from quantization/ResolutionLadder
+  (subject-gated per-cell resolution). TL8/TL9 (2026-08-10): 16³ ==
+  32³ == 64³ in the information process, compute time = the
+  equivalence; THE RESOLUTION OF DEPTH is rung 16 (64 draws per
+  judgment, 4096 judgments/loop at 5 Hz; RGB rides 64-rung at 20 Hz).
+  Gates: spec TL1–TL9 + TesseractTests/TriScaleLadderTests.
+- THE DISSONANCE WEAVE (2026-08-10, design docs/dissonance-weave-design.md):
+  Sethares/Plomp-Levelt roughness ported as ONE kernel, three ports —
+  spec/statistics/Dissonance.hs (kernel, DS1–DS16; b1=3.51 b2=5.75
+  x*=0.24 s1=0.0207 s2=18.96), spec/quantization/SpectralPalette.hs
+  (octaves in RGB → color: channel combs (4,5,6)·125·2^ℓ Hz, tuning =
+  argmin of the loop's own occupancy spectrum, σ-involution = tritone),
+  spec/harmony/SetListDissonance.hs (F0-lock 0.3125 Hz; inter-loop
+  (X_ear, χ_eye) dyad; set ordering). Depth → urgency: bond roughness
+  on σ(d) cadence with ZERO tuned constants (near/far = exact octave ⇒
+  x = x* theorem); urgency field 16³ at 5 Hz (TL9 clock).
+  SWIFT PORT v1 LANDED (Dissonance.swift + DissonanceTests): kernel,
+  G quadratic form, tuning at the rung-16 cadence (16 reads/loop,
+  Daniel's TL8 ruling), urgency field published as `dissonance` on
+  both managers. ★URGENCY IS A WEIGHT (the color-weight slot, no
+  directional sign). Telemetry-only; felt channel decided after the
+  device movement pass.
 - `isp-spec/` — DEPRECATED rear-camera cabal ISP spec, read-only reference.
 - `nn/` — Mac-side lab: MLX-trained 5,616-param residual debayer
   (`nn/debayer/`, +3.72 dB over bilinear) and its Metal parity harness

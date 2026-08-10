@@ -18,11 +18,11 @@ import Foundation
 // ════════════════════════════════════════════════════════════════
 
 /// Gene NN weights: ATTENTION (W1, b1) + CORE (W2, b2).
-/// Flat array of 4548 floats matching Gene.metal layout:
+/// Flat array of 4581 floats matching Gene.metal layout:
 ///   [0..4383]    W1: 32 × 137
 ///   [4384..4415] b1: 32
-///   [4416..4543] W2: 4 × 32
-///   [4544..4547] b2: 4
+///   [4416..4575] W2: 5 × 32
+///   [4576..4580] b2: 5
 struct GeneWeights: Equatable {
     static let inputDim = 137
     static let hiddenDim = 32
