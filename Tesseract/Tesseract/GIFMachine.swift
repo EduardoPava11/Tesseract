@@ -195,6 +195,17 @@ enum GIFMachine {
                side: QuantizedFrame.size) {
             lines.append(PhaseTelemetry.trace(phase))
         }
+        // SK GENES (v1, measurement only — the grounded gene machine,
+        // docs/sk-gene-calculus-2026-08-11.md §14): one gene per phase
+        // class played from every rung-16 block latent. Comment bytes
+        // only; flag-gated (CameraConfig.skGenes, default OFF).
+        if CameraConfig.skGenes,
+           frames.count == indexFrames.count,
+           frames.allSatisfy({ $0.rawRGB != nil }),
+           let sk = SKGene.trace(sourceRGB: frames.map { $0.rawRGB! },
+                                 side: QuantizedFrame.size) {
+            lines.append(sk)
+        }
         return lines.joined(separator: "\n")
     }
 

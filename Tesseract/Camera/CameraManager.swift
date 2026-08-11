@@ -91,6 +91,13 @@ enum CameraConfig {
     // comparison. Internal flag by design: no settings-cover surface
     // without Daniel's ruling (simplicity decree).
     static let phaseChaosLoop = false
+
+    // ★SK GENES (docs/sk-gene-calculus-2026-08-11.md §14, placement
+    // ruling 2026-08-11): the grounded gene machine — measurement
+    // only, one "SK GENES v1" provenance line in the GIF comment;
+    // no image byte depends on it. Internal flag by design (no
+    // settings-cover surface without a ruling; simplicity decree).
+    static let skGenes = false
 }
 
 @MainActor
