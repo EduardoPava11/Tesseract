@@ -34,7 +34,7 @@
 
 module TriScaleLadder where
 
-import Data.List (transpose)
+import Data.List (nub, transpose)
 
 -- ════════════════════════════════════════════════════════════════
 -- § 1. THE CUBE AND THE CARRIER (exact integer sums)
@@ -275,6 +275,137 @@ axiom_TL9 =
   && 100 `div` delayCs baseRung == 20
 
 -- ════════════════════════════════════════════════════════════════
+-- § 8. OFFSET LAWS (2026-08-11, Daniel: "several ways to get
+-- 2×2×2 ↔ 1 — think of convolutions"; the scales are in time too)
+--
+-- A stride-2 2×2×2 sum pool is ONE POLYPHASE COMPONENT of the box
+-- convolution: the offset group (ℤ/2)³ indexes 8 phases, and the
+-- shipped ladder reads phase (0,0,0) only. On the loop's torus
+-- (t wraps exactly — the 320 cs loop is periodic; spatial wrap is
+-- the modeling choice made here) every phase is a partition, the 8
+-- phases together are the full stride-1 sliding window, and the 8
+-- windows covering any fine cell — one per phase — sum to the
+-- trilinear tent [1,2,1]³: the anti-aliasing prefilter, realizable
+-- one phase per tick at box cost (temporal dither of the reader).
+--
+-- CARRIER vs READS: only phase 0 serves the telescoping tower
+-- (TL5's disjoint bits need nested partitions, and TL12 shows the
+-- aligned tower reaches only even 4-offsets). The carrier stays
+-- aligned — phases are a READ cadence. Phase-cycled TELEMETRY
+-- (this ladder, the Dissonance tuning trace) needs no ruling;
+-- offsetting DyadPreview's slow state moves GIF bytes and does.
+-- ════════════════════════════════════════════════════════════════
+
+type Offset = (Int, Int, Int)
+
+-- | The corners of the 2×2×2 block == the phase group (ℤ/2)³.
+offsets2 :: [Offset]
+offsets2 = [ (f, r, c) | f <- [0, 1], r <- [0, 1], c <- [0, 1] ]
+
+sideOf :: Cube -> Int
+sideOf = length
+
+-- | Torus lookup (t wraps by loop periodicity; space by choice).
+at :: Cube -> Int -> Int -> Int -> Integer
+at cu f r c = cu !! (f `mod` n) !! (r `mod` n) !! (c `mod` n)
+  where n = sideOf cu
+
+-- | Stride-2 sum pool at phase o: blocks {2v + o + {0,1}³} mod n.
+poolAt :: Offset -> Cube -> Cube
+poolAt (of_, or_, oc) cu =
+  [ [ [ sum [ at cu (2 * f + of_ + df) (2 * r + or_ + dr)
+                    (2 * c + oc + dc)
+            | (df, dr, dc) <- offsets2 ]
+      | c <- [0 .. h - 1] ] | r <- [0 .. h - 1] ] | f <- [0 .. h - 1] ]
+  where h = sideOf cu `div` 2
+
+-- | Stride-4 sum pool at a (mod 4) phase.
+pool4At :: Offset -> Cube -> Cube
+pool4At (of_, or_, oc) cu =
+  [ [ [ sum [ at cu (4 * f + of_ + df) (4 * r + or_ + dr)
+                    (4 * c + oc + dc)
+            | df <- [0 .. 3], dr <- [0 .. 3], dc <- [0 .. 3] ]
+      | c <- [0 .. h - 1] ] | r <- [0 .. h - 1] ] | f <- [0 .. h - 1] ]
+  where h = sideOf cu `div` 4
+
+-- | The stride-1 sliding-window sum: every anchor, every phase.
+slide :: Cube -> Cube
+slide cu =
+  [ [ [ sum [ at cu (f + df) (r + dr) (c + dc)
+            | (df, dr, dc) <- offsets2 ]
+      | c <- [0 .. n - 1] ] | r <- [0 .. n - 1] ] | f <- [0 .. n - 1] ]
+  where n = sideOf cu
+
+-- | The trilinear tent [1,2,1]³ (total weight 64), directly.
+tent :: Cube -> Cube
+tent cu =
+  [ [ [ sum [ w df * w dr * w dc * at cu (f + df) (r + dr) (c + dc)
+            | df <- [-1, 0, 1], dr <- [-1, 0, 1], dc <- [-1, 0, 1] ]
+      | c <- [0 .. n - 1] ] | r <- [0 .. n - 1] ] | f <- [0 .. n - 1] ]
+  where n = sideOf cu
+        w :: Int -> Integer
+        w 0 = 2
+        w _ = 1
+
+-- (TL10) PHASES PARTITION THE TORUS: every one of the 8 offsets
+--        conserves mass exactly, and phase (0,0,0) IS the aligned
+--        carrier — the new machinery contains the old law.
+axiom_TL10 :: Bool
+axiom_TL10 = all ok seeds
+  where ok seed = let cu = cubeOf seed 8
+                  in all (\o -> total (poolAt o cu) == total cu) offsets2
+                  && poolAt (0, 0, 0) cu == poolL cu
+
+-- (TL11) THE TENT IS THE ORBIT: (a) every sliding anchor lives in
+--        exactly one phase — S[p] == pool_{p mod 2} at p div 2;
+--        (b) the 8 windows covering a cell sum to [1,2,1]³, so
+--        cycling phases realizes the anti-aliasing tent at box
+--        cost; (c) those 8 windows' anchors carry 8 DISTINCT
+--        parities — one read per phase, none wasted.
+axiom_TL11 :: Bool
+axiom_TL11 = all ok seeds && paritiesDistinct
+  where
+    ok seed =
+      let cu = cubeOf seed 8
+          n  = sideOf cu
+          s  = slide cu
+          pools = [ (o, poolAt o cu) | o <- offsets2 ]
+          phasePool o = maybe (error "phase") id (lookup o pools)
+      in and [ s !! f !! r !! c ==
+                 phasePool (f `mod` 2, r `mod` 2, c `mod` 2)
+                   !! (f `div` 2) !! (r `div` 2) !! (c `div` 2)
+             | f <- [0 .. n - 1], r <- [0 .. n - 1], c <- [0 .. n - 1] ]
+      && tent cu ==
+           [ [ [ sum [ at s (f - qf) (r - qr) (c - qc)
+                     | (qf, qr, qc) <- offsets2 ]
+               | c <- [0 .. n - 1] ] | r <- [0 .. n - 1] ]
+             | f <- [0 .. n - 1] ]
+    paritiesDistinct =
+      length (nub [ ( (- qf) `mod` 2, (- qr) `mod` 2, (- qc) `mod` 2 )
+                  | (qf, qr, qc) <- offsets2 ]) == 8
+
+-- (TL12) PHASE REACHABILITY: staged offsets compose as o₁ + 2·o₂
+--        (pool_{o₂} ∘ pool_{o₁} == pool4 at o₁ + 2o₂, all 64
+--        pairs), so the aligned tower reaches ONLY the even
+--        4-offsets — witness: an odd-phase 4-pool no even offset
+--        reproduces. Odd phases need fresh fine reads:
+--        phase-cycling is a READ cadence, never a tower rebuild.
+axiom_TL12 :: Bool
+axiom_TL12 = all ok seeds && witness
+  where
+    ok seed =
+      let cu = cubeOf seed 8
+      in and [ poolAt o2 (poolAt o1 cu)
+                 == pool4At (add3 o1 (mul2 o2)) cu
+             | o1 <- offsets2, o2 <- offsets2 ]
+    witness =
+      let cu   = cubeOf 3 8
+          odd1 = pool4At (1, 0, 0) cu
+      in all (\o2 -> pool4At (mul2 o2) cu /= odd1) offsets2
+    add3 (a, b, c) (d, e, f) = (a + d, b + e, c + f)
+    mul2 (a, b, c) = (2 * a, 2 * b, 2 * c)
+
+-- ════════════════════════════════════════════════════════════════
 -- § 7. MAIN
 -- ════════════════════════════════════════════════════════════════
 
@@ -307,6 +438,9 @@ main = do
   check "TL7 concentrated block ⇔ W = 1 ⇔ zero bits (skip it)"       [axiom_TL7]
   check "TL8 rung equivalence: one process, three rates (orbit inv)" [axiom_TL8]
   check "TL9 depth resolves at rung 16: 64 draws/judgment, 5 Hz"     [axiom_TL9]
+  check "TL10 phases partition the torus; phase 0 == the carrier"    [axiom_TL10]
+  check "TL11 tent [1,2,1]³ == the 8-phase orbit (free anti-alias)"  [axiom_TL11]
+  check "TL12 offsets compose o₁+2o₂; odd phases need fine reads"    [axiom_TL12]
   putStrLn ""
   putStrLn "  16³ == 32³ == 64³ in the information process; compute"
   putStrLn "  time is the equivalence. Depth's resolution is rung 16."

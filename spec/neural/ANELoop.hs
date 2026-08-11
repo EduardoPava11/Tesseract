@@ -307,6 +307,129 @@ axiom_AL8 = rgbHz `div` depthHz == blockSide
     judgmentsPerLoop = 4096
 
 -- ════════════════════════════════════════════════════════════════
+-- § 4b. THE SIMT IDENTITY (2026-08-11, Daniel: "continue with an
+-- SIMT model")
+--
+-- The Metal port runs ONE GPU THREAD PER 4³ BLOCK (AL2: blocks
+-- never couple, so 4096 threads need no synchronization at all)
+-- and carries the block mean and the eight 2-cell means as RUNNING
+-- SUMS: after an accepted exchange δ at voxel v, bsum += δ and
+-- c2[cell v] += δ — O(1) per stage instead of re-reading 64
+-- voxels. AL9 states the identity that makes this lawful, over
+-- EXACT arithmetic (Rational): the running-sum sweep IS the
+-- recomputing sweep — same accepts, same states, and the carried
+-- sums equal the recomputed sums after every sweep. In float the
+-- two round differently; AL4's monotonicity and the near-tie
+-- parity gate (XP2) absorb that, exactly as with the ANE engine.
+-- Unlike the fused ANE graph, the kernel's K is a RUNTIME loop
+-- bound — the SIMT port is the runtime-adaptive-K execution port.
+-- ════════════════════════════════════════════════════════════════
+
+type R3 = (Rational, Rational, Rational)
+
+rAdd, rSub :: R3 -> R3 -> R3
+rAdd (a, b, c) (d, e, f) = (a + d, b + e, c + f)
+rSub (a, b, c) (d, e, f) = (a - d, b - e, c - f)
+
+rScale :: Rational -> R3 -> R3
+rScale s (a, b, c) = (s * a, s * b, s * c)
+
+rDot :: R3 -> R3 -> Rational
+rDot (a, b, c) (d, e, f) = a * d + b * e + c * f
+
+rZero :: R3
+rZero = (0, 0, 0)
+
+-- | Block-local raster: v = x + 4(y + 4t); its 2-cell index.
+cellOf :: Int -> Int
+cellOf v = (x `div` 2) + 2 * ((y `div` 2) + 2 * (t `div` 2))
+  where (x, y, t) = (v `mod` 4, (v `div` 4) `mod` 4, v `div` 16)
+
+curvatureQ :: Rational
+curvatureQ = 1 + 1 / 8 + 1 / 64
+
+-- | The block-local visit law shared by both sweeps (mirrors
+--   sweepBlockCPU and the Metal kernel: fold candidates in order,
+--   strict decrease only, ties keep the current index).
+visitQ :: [R3] -> R3 -> Int -> (Rational, Int)
+visitQ cand g qv0 =
+  foldl pick (0, qv0) (zip [0 ..] cand)
+  where
+    qv = cand !! qv0
+    pick (bs, bi) (ci, c) =
+      let d = rSub c qv
+          df = 2 * rDot g d + curvatureQ * rDot d d
+      in if df < bs then (df, ci) else (bs, bi)
+
+-- | The recomputing sweep (the law, block-local).
+sweepReQ :: [R3] -> [R3] -> Int -> [Int] -> [Int]
+sweepReQ cand y k start = iterate one start !! k
+  where
+    one q = foldl visit q [0 .. 63]
+    visit q v =
+      let e i = rSub (cand !! (q !! i)) (y !! i)
+          m2 = rScale (1 / 8) (foldl rAdd rZero
+                 [ e w | w <- [0 .. 63], cellOf w == cellOf v ])
+          m4 = rScale (1 / 64) (foldl rAdd rZero [ e w | w <- [0 .. 63] ])
+          g = e v `rAdd` m2 `rAdd` m4
+          (best, bi) = visitQ cand g (q !! v)
+      in if best < 0
+           then [ if i == v then bi else qi | (i, qi) <- zip [0 ..] q ]
+           else q
+
+-- | The running-sum sweep (the SIMT kernel, verbatim in Rational).
+--   Returns the final state AND the carried sums for the invariant.
+sweepIncQ :: [R3] -> [R3] -> Int -> [Int] -> ([Int], R3, [R3])
+sweepIncQ cand y k start = go k (start, bsum0, c20)
+  where
+    e0 q v = rSub (cand !! (q !! v)) (y !! v)
+    bsum0 = foldl rAdd rZero [ e0 start v | v <- [0 .. 63] ]
+    c20 = [ foldl rAdd rZero [ e0 start v | v <- [0 .. 63], cellOf v == cell ]
+          | cell <- [0 .. 7] ]
+    go 0 (q, bs, c2) = (q, bs, c2)
+    go n (q, bs, c2) = go (n - 1) (foldl visit (q, bs, c2) [0 .. 63])
+    visit (q, bs, c2) v =
+      let ev = rSub (cand !! (q !! v)) (y !! v)
+          g = ev `rAdd` rScale (1 / 8) (c2 !! cellOf v)
+                 `rAdd` rScale (1 / 64) bs
+          (best, bi) = visitQ cand g (q !! v)
+          d = rSub (cand !! bi) (cand !! (q !! v))
+      in if best < 0
+           then ( [ if i == v then bi else qi | (i, qi) <- zip [0 ..] q ]
+                , bs `rAdd` d
+                , [ if cell == cellOf v then s `rAdd` d else s
+                  | (cell, s) <- zip [0 ..] c2 ] )
+           else (q, bs, c2)
+
+-- Deterministic block instances (indices from the spec's own LCG).
+blockCase :: Int -> ([R3], [R3], [Int])
+blockCase seed =
+  ( take 8 rats                                     -- candidates
+  , take 64 (drop 8 rats)                           -- targets
+  , take 64 [ floor (u * 8) `mod` 8 | u <- uniforms (seed * 131) ] )
+  where
+    rats = [ (q a, q b, q c)
+           | ((a, b, c) : _) <- iterate (drop 1) (triples (uniforms seed)) ]
+    q x = toRational x - 1 / 2
+
+-- (AL9) THE SIMT IDENTITY: over exact arithmetic the running-sum
+--       sweep equals the recomputing sweep for every K tested, and
+--       the carried sums equal the sums recomputed from the final
+--       state — δ-updates lose nothing, in any order of sweeps.
+axiom_AL9 :: Bool
+axiom_AL9 = all ok [ (seed, k) | seed <- [21, 22, 23], k <- [0, 1, 3] ]
+  where
+    ok (seed, k) =
+      let (cand, y, start) = blockCase seed
+          re = sweepReQ cand y k start
+          (inc, bs, c2) = sweepIncQ cand y k start
+          e v = rSub (cand !! (inc !! v)) (y !! v)
+          bsRe = foldl rAdd rZero [ e v | v <- [0 .. 63] ]
+          c2Re = [ foldl rAdd rZero [ e v | v <- [0 .. 63], cellOf v == cell ]
+                 | cell <- [0 .. 7] ]
+      in re == inc && bs == bsRe && c2 == c2Re
+
+-- ════════════════════════════════════════════════════════════════
 -- § 5. MAIN
 -- ════════════════════════════════════════════════════════════════
 
@@ -325,6 +448,7 @@ main = do
   check "AL6 determinism + sweep composition"                       [axiom_AL6]
   check "AL7 curvature = 1 + 1/8 + 1/64, zero move costs zero"      [axiom_AL7]
   check "AL8 clock identity: 20/5 = 4 = block time; 64; 4096"       [axiom_AL8]
+  check "AL9 SIMT identity: running sums == recomputed, exactly"    [axiom_AL9]
   putStrLn ""
   let final = loopK 6 palette8 targets q0
       f0 = bigF (zipWith vSub q0 targets)

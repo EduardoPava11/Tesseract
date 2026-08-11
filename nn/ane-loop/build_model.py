@@ -47,13 +47,20 @@ NOTES (session 2026-08-11, docs/session-2026-08-11.md):
   reference is M-series; CameraConfig.phaseChaosLoop gates use).
 """
 
+import sys
 import time
 
 import numpy as np
 import coremltools as ct
 from coremltools.converters.mil import Builder as mb
 
-B, V, C, K = 4096, 64, 8, 4     # blocks, voxels/block, candidates, sweeps
+B, V, C = 4096, 64, 8           # blocks, voxels/block, candidates
+# K from argv (default 4). K=4 is the export model; K=1 is the
+# STREAMING unit for the B+E offset architecture (one sweep per
+# dispatch, chained with warm starts — K_eff picked by dispatch
+# count on device, not recompiled). iPhone 17 Pro is the target
+# hardware; the bench harness is TesseractTests/ANELoopBenchTests.
+K = int(sys.argv[1]) if len(sys.argv) > 1 else 4
 SIDE = 4                        # block is 4 x 4 x 4 (x, y, t)
 CURV = 1.0 + 1.0 / 8.0 + 1.0 / 64.0   # AL7: reciprocal block volumes
 
@@ -185,7 +192,8 @@ def main():
         compute_units=ct.ComputeUnit.ALL,
         minimum_deployment_target=ct.target.iOS17,
     )
-    model.save("ANELoop.mlpackage")
+    name = "ANELoop.mlpackage" if K == 4 else f"ANELoopK{K}.mlpackage"
+    model.save(name)
     print(f"converted + saved in {time.time() - t0:.1f}s")
 
     # Reference and the objective's descent (AL4 witness).

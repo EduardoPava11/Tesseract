@@ -203,8 +203,51 @@ rulings.
   Gates: ANELoopTests (AL4/AL5/AL6 on the twin; σ-half closure;
   face bytes fixed; F-never-worse via the PhaseTelemetry kernel;
   flag-off byte-identity) + all DYAD suites green.
-- **L4 (latent):** the learned passer — synthetic corpus, algebraic
-  teacher, axiom gate. Separate ruling before any training lands.
+- **L3½ (iPhone 17 Pro engineering) — 2026-08-11 (Daniel: "this is
+  the hardware we need to optimize for"):** target pinned = A19 Pro
+  (16-core ANE + GPU-core neural accelerators, so the compute-unit
+  choice is an empirical question). Three artifacts:
+  (1) build_model.py takes K from argv; **ANELoopK1.mlpackage**
+  built (64 fused stages, one sweep per dispatch) — the B+E
+  STREAMING unit: chained dispatches with warm starts pick K_eff at
+  runtime instead of recompiling. Gates: monotone (F 22564 → 6070 —
+  ONE sweep captures most of the descent, licensing K_eff 1–2),
+  99.84% parity, Mac steady 10 ms/dispatch.
+  (2) Bundled as Tesseract/ML/ANELoopK1Model.mlpackage (740K);
+  ANELoop.isStreamingAvailable. No runtime consumer until the
+  device numbers pin the cadence.
+  (3) **TesseractTests/ANELoopBenchTests = the owed A-series
+  microbenchmark.** Device-only (simulator runs are skipped as
+  meaningless); times K4 and K1 across {all, cpu+ane, cpu+gpu,
+  cpu}; two-point fit perStage = (t₄−t₁)/192 and dispatch floor =
+  t₁ − 64·perStage; prints the budget verdict (K4 dispatches per
+  200 ms rung-16 tick, K1 dispatches per 50 ms polyphase tick =
+  the measured K_eff for B+E). Run ⌘U on the phone, filter
+  ANELoopBench, read the "ANE-LOOP BENCH" lines. Mac reference fit:
+  ~0.115 ms/stage, floor ~2.7 ms. Build-for-testing (device
+  generic): SUCCEEDED; K stays pinned at 4 until the phone speaks.
+- **L3¾ (SIMT port) — 2026-08-11 (Daniel: "continue with an SIMT
+  model"):** the THIRD execution port — a hand-written Metal kernel
+  beside the CPU twin (law) and the fused ANE graph. AL9 first
+  (spec §4b, exact over Rational): the RUNNING-SUM identity —
+  carrying bsum and the eight 2-cell sums, δ-updated on every
+  accepted exchange, IS the recomputing sweep; O(1) per stage.
+  Kernel Metal/ANELoop.metal (aneLoopSweepSIMT): ONE THREAD PER
+  BLOCK (AL2 ⇒ no sync, no atomics, no barriers), candidate
+  indices in/out (no nearest-color recovery), and — the structural
+  win over the ANE — **K is a runtime loop bound**: one pipeline
+  serves every sweep count, so B+E's K_eff needs no recompiled
+  graph and AL4 lets the CPU stop dispatching mid-budget lawfully.
+  Wrapper ANELoop.sweepSIMT + isSIMTAvailable; MTL_FAST_MATH: NO
+  project-wide keeps IEEE program order. GATES:
+  ANELoopSIMTParityTests EXECUTED on the iPhone 17 Pro simulator —
+  **100.00% assignment agreement** with the CPU twin (float-parity
+  inputs, XP2 standard was ≥98%), F 119.06 → 25.71 identical on
+  both ports to 2 decimals, K=0 identity exact (AL5 on GPU);
+  device build-for-testing green. Bench now prints metal-simt K1/K4
+  rows + stage/floor fit beside the four CoreML configs — on the
+  A19 Pro this is the direct GPU-vs-ANE row the .cpuAndGPU
+  scheduler can't show. Device timing rides the same ⌘U run.
 
 Open questions for Daniel: (a) K's worst-case budget (measure first,
 then pin with provenance); (b) whether the 5 Hz live loop (rung-16

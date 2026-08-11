@@ -69,8 +69,21 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   all DYAD suites green. Offset architectures (§5½ of the doc):
   recommended B+E = temporal polyphase + streaming warm starts
   (20 Hz outputs after 4-frame warmup); rulings open for D
-  (overlapped objective) and F (per-channel rungs). A-series
-  microbenchmark owed on device. The role split is
+  (overlapped objective) and F (per-channel rungs). 17-PRO
+  ENGINEERING (2026-08-11, target hardware = A19 Pro):
+  ANELoopK1Model.mlpackage bundled (K=1 streaming unit for B+E —
+  K_eff = dispatch count, no recompile; one sweep already takes F
+  22564→6070) + ANELoopBenchTests = the owed A-series
+  microbenchmark (device-only, compute-unit sweep incl. the A19
+  GPU neural accelerators, two-point stage/floor fit, 5 Hz / 20 Hz
+  budget verdicts). Daniel runs ⌘U on the phone to pin K. SIMT PORT
+  (2026-08-11): AL9 green (spec §4b — running-sum sweep == law,
+  exact over Rational); Metal/ANELoop.metal one-thread-per-block
+  kernel (no sync, RUNTIME K — the adaptive-K port the fused ANE
+  graph can't be) + ANELoop.sweepSIMT; ANELoopSIMTParityTests
+  PASSED on 17 Pro sim: 100.00% agreement, F 119.06→25.71 equal on
+  both ports; bench prints metal-simt rows for the direct GPU-vs-ANE
+  comparison on A19. The role split is
   CONSTANT-FREE (spec/temporal/DepthMixture.hs, 2026-08-10 decree:
   no naked thresholds): pull t = posterior of a tied-variance
   two-phase mixture fit on the capture's own pooled depth field;
@@ -91,7 +104,18 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   32³ == 64³ in the information process, compute time = the
   equivalence; THE RESOLUTION OF DEPTH is rung 16 (64 draws per
   judgment, 4096 judgments/loop at 5 Hz; RGB rides 64-rung at 20 Hz).
-  Gates: spec TL1–TL9 + TesseractTests/TriScaleLadderTests.
+  §8 OFFSET LAWS (2026-08-11, Daniel: "2×2×2 ↔ 1, think
+  convolutions"): the stride-2 spacetime pool is ONE of 8 polyphase
+  components ((ℤ/2)³); TL10–TL12 green — phases partition the loop
+  torus (t-wrap exact by periodicity), the 8-phase orbit == the
+  [1,2,1]³ tent prefilter (phase-cycled reads = anti-aliasing at box
+  cost), offsets compose o₁+2o₂ so odd phases need fresh fine reads.
+  CARRIER stays aligned (only phase 0 telescopes); phases are a READ
+  cadence. Phase-cycling telemetry reads (ladder, Dissonance tuning)
+  needs no ruling; offsetting DyadPreview's GIF-shaping slow state
+  AWAITS RULING (and its ≤16 EMA ring must scale with cadence to
+  keep the 3.2 s span law).
+  Gates: spec TL1–TL12 + TesseractTests/TriScaleLadderTests.
 - THE DISSONANCE WEAVE (2026-08-10, design docs/dissonance-weave-design.md):
   Sethares/Plomp-Levelt roughness ported as ONE kernel, three ports —
   spec/statistics/Dissonance.hs (kernel, DS1–DS16; b1=3.51 b2=5.75

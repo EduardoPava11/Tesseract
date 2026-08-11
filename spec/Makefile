@@ -55,7 +55,9 @@ STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
 NEURAL = neural/BayerResidual.hs \
          neural/MapElites.hs \
-         neural/ANELoop.hs
+         neural/ANELoop.hs \
+         neural/SKGeneCalculus.hs \
+         neural/SKGeneSemantics.hs
 
 UI = ui/CellMechanics.hs
 

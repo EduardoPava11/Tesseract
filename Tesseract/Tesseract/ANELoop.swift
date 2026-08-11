@@ -27,6 +27,7 @@
 
 import CoreML
 import Foundation
+import Metal
 
 enum ANELoop {
 
@@ -101,15 +102,26 @@ enum ANELoop {
 
     // Bundled as ANELoopModel.mlpackage (the "Model" suffix keeps
     // Xcode's generated class clear of this enum's name).
-    nonisolated(unsafe) private static let model: MLModel? = {
-        guard let url = Bundle.main.url(forResource: "ANELoopModel", withExtension: "mlmodelc")
+    nonisolated(unsafe) private static let model: MLModel? = loadModel("ANELoopModel")
+
+    // The K=1 STREAMING unit (ANELoopK1Model.mlpackage): one sweep
+    // per dispatch, for the B+E offset architecture — chained
+    // dispatches with warm starts pick K_eff at runtime instead of
+    // recompiling the graph. Bundled and benchmarked
+    // (ANELoopBenchTests on the iPhone 17 Pro, the target hardware);
+    // no runtime consumer until the device numbers pin the cadence.
+    nonisolated(unsafe) private static let modelK1: MLModel? = loadModel("ANELoopK1Model")
+
+    private static func loadModel(_ resource: String) -> MLModel? {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "mlmodelc")
         else { return nil }
         let config = MLModelConfiguration()
         config.computeUnits = .all
         return try? MLModel(contentsOf: url, configuration: config)
-    }()
+    }
 
     static var isAvailable: Bool { model != nil }
+    static var isStreamingAvailable: Bool { modelK1 != nil }
 
     /// All 4096 blocks in one dispatch. Inputs are block-major
     /// [B, 64, 3] / [B, C, 3] Float32; returns the swept colors, or
@@ -142,6 +154,70 @@ enum ANELoop {
         guard result.count == n else { return nil }
         let p = result.dataPointer.bindMemory(to: Float.self, capacity: n)
         return [Float](UnsafeBufferPointer(start: p, count: n))
+    }
+
+    // MARK: - The SIMT port (Metal; runtime K — AL9's running sums)
+
+    // One GPU thread per block (AL2: no coupling ⇒ no sync). Unlike
+    // the fused ANE graph, `sweeps` is a runtime argument — the
+    // runtime-adaptive-K execution port for the B+E streaming
+    // cadence. Kernel: Metal/ANELoop.metal (aneLoopSweepSIMT);
+    // parity vs the CPU twin gated near-ties-only (XP2) by
+    // ANELoopSIMTParityTests; timed by ANELoopBenchTests on the
+    // iPhone 17 Pro.
+    private static let simt:
+        (queue: MTLCommandQueue, pipeline: MTLComputePipelineState)? = {
+        guard let device = MTLCreateSystemDefaultDevice(),
+              let queue = device.makeCommandQueue(),
+              let library = device.makeDefaultLibrary(),
+              let fn = library.makeFunction(name: "aneLoopSweepSIMT"),
+              let pipeline = try? device.makeComputePipelineState(function: fn)
+        else { return nil }
+        return (queue, pipeline)
+    }()
+
+    static var isSIMTAvailable: Bool { simt != nil }
+
+    /// The exchange loop on the GPU: candidate INDICES in and out
+    /// (no nearest-color recovery step), K picked at call time.
+    /// Returns nil when Metal is unavailable (callers fall back).
+    static func sweepSIMT(
+        q0: [UInt8], y: [Float], cand: [Float],
+        blockCount: Int, sweeps: Int
+    ) -> [UInt8]? {
+        guard let simt, sweeps >= 0,
+              q0.count == blockCount * blockVoxels,
+              y.count == blockCount * blockVoxels * 3,
+              cand.count == blockCount * candidateCount * 3 else { return nil }
+        let device = simt.pipeline.device
+        guard
+            let yBuf = y.withUnsafeBytes({ device.makeBuffer(
+                bytes: $0.baseAddress!, length: $0.count) }),
+            let cBuf = cand.withUnsafeBytes({ device.makeBuffer(
+                bytes: $0.baseAddress!, length: $0.count) }),
+            let qBuf = q0.withUnsafeBytes({ device.makeBuffer(
+                bytes: $0.baseAddress!, length: $0.count) }),
+            let commands = simt.queue.makeCommandBuffer(),
+            let encoder = commands.makeComputeCommandEncoder()
+        else { return nil }
+        var k = UInt32(sweeps)
+        var blocks = UInt32(blockCount)
+        encoder.setComputePipelineState(simt.pipeline)
+        encoder.setBuffer(yBuf, offset: 0, index: 0)
+        encoder.setBuffer(cBuf, offset: 0, index: 1)
+        encoder.setBuffer(qBuf, offset: 0, index: 2)
+        encoder.setBytes(&k, length: MemoryLayout<UInt32>.size, index: 3)
+        encoder.setBytes(&blocks, length: MemoryLayout<UInt32>.size, index: 4)
+        let width = min(simt.pipeline.maxTotalThreadsPerThreadgroup, 64)
+        encoder.dispatchThreads(
+            MTLSize(width: blockCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
+        encoder.endEncoding()
+        commands.commit()
+        commands.waitUntilCompleted()
+        guard commands.status == .completed else { return nil }
+        let p = qBuf.contents().bindMemory(to: UInt8.self, capacity: q0.count)
+        return [UInt8](UnsafeBufferPointer(start: p, count: q0.count))
     }
 
     // MARK: - The flag-gated consumer (ruling R3)
