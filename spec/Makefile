@@ -57,7 +57,8 @@ NEURAL = neural/BayerResidual.hs \
          neural/MapElites.hs \
          neural/ANELoop.hs \
          neural/SKGeneCalculus.hs \
-         neural/SKGeneSemantics.hs
+         neural/SKGeneSemantics.hs \
+         neural/OctaveCodec.hs
 
 UI = ui/CellMechanics.hs
 
@@ -103,6 +104,10 @@ test:
 icon:
 	@echo "════ GenIcon (slow, ~2m) ════"
 	@$(RUNGHC) $(FLAGS) output/GenIcon.hs
+
+# Emit the gene-JEPA training corpus → nn/sk-gene/corpus/
+corpus:
+	@$(RUNGHC) $(FLAGS) output/SKCorpusEmit.hs
 
 test-verbose:
 	@for f in $(CORE); do \

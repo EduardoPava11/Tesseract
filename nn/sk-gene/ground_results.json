@@ -1,0 +1,30 @@
+{
+  "version": "ground-v1",
+  "seed": 20260811,
+  "steps": 8000,
+  "params": 14382,
+  "frozen": [
+    "weights.npz (passer)",
+    "codec_weights.npz (codec)"
+  ],
+  "held": {
+    "elements": 24,
+    "events": 122880,
+    "err_model": 0.01453520730137825,
+    "delta_vs_identity": -0.5510089993476868,
+    "delta_vs_swapped": -0.7212697863578796
+  },
+  "classicality": {
+    "codeword_disp": 0.012969954870641232,
+    "off_disp": 0.022740362212061882
+  },
+  "retrieval_top1": 0.2451171875,
+  "gates": {
+    "G1": true,
+    "G2": true,
+    "G3": true,
+    "G4": true,
+    "G5": true,
+    "G6": true
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "version": "codec-v1",
+  "seed": 20260811,
+  "steps": 6000,
+  "params": 3294,
+  "train_samples": 432000,
+  "held_samples": 216000,
+  "nll": {
+    "model": -12.56787395477295,
+    "baseline": -11.72903532917963,
+    "delta_per_element": -0.8388401663844233,
+    "element_wins": 22,
+    "elements": 24
+  },
+  "calibration": {
+    "mean_z": -0.0026755461003631353,
+    "var_z": 1.0825141668319702
+  },
+  "rulings": {
+    "G1": "level-conditioning admissible (scale physical, axis gauge)",
+    "G2a": "architectural vanishing g_C = dist2(x,C)*ghat(x)"
+  },
+  "gates": {
+    "D1": true,
+    "D2": true,
+    "D3": true,
+    "D4": true,
+    "D5": true,
+    "D6": true
+  }
+}

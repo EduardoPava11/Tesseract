@@ -1,0 +1,35 @@
+{
+  "version": "v2-axis-anonymous",
+  "seed": 20260811,
+  "steps": 4000,
+  "d": 24,
+  "h": 48,
+  "params": 8304,
+  "dag_nodes": 20897,
+  "loss_first": 1.8457677364349365,
+  "loss_last": 0.01881749927997589,
+  "heldout": {
+    "n": 2746,
+    "err_model": 0.024106165394186974,
+    "err_identity": 0.037673212587833405,
+    "err_shuffled_sym": 0.03279968351125717,
+    "win_vs_identity": 0.5721049308776855,
+    "win_vs_shuffled": 0.8318181818181818,
+    "threshold_3sigma": 0.5286247032190253
+  },
+  "rollout": {
+    "n": 1435,
+    "accuracy": 0.9881533101045297,
+    "threshold_3sigma": 0.5395972758011341,
+    "axis_typed_baseline": 0.988865692414753
+  },
+  "gates": {
+    "P1": true,
+    "E2": true,
+    "P2": true,
+    "P3": true,
+    "P4": true,
+    "E1": true,
+    "P5": true
+  }
+}

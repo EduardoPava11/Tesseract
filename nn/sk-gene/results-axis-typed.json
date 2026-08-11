@@ -1,0 +1,29 @@
+{
+  "seed": 20260811,
+  "steps": 2000,
+  "d": 24,
+  "h": 48,
+  "loss_first": 1.4341280460357666,
+  "loss_last": 0.012221958488225937,
+  "heldout": {
+    "n": 2746,
+    "err_model": 0.01707865297794342,
+    "err_identity": 0.06424600630998611,
+    "err_shuffled": 0.03257255256175995,
+    "win_vs_identity": 0.6387472748756409,
+    "win_vs_shuffled": 0.5768390893936157,
+    "threshold_3sigma": 0.5286247032190253
+  },
+  "rollout": {
+    "n": 1437,
+    "accuracy": 0.988865692414753,
+    "threshold_3sigma": 0.5395697106910748
+  },
+  "gates": {
+    "P1": true,
+    "P2": true,
+    "P3": true,
+    "P4": true,
+    "P5": true
+  }
+}

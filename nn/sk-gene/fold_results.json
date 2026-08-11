@@ -1,0 +1,20 @@
+{
+  "passer": {
+    "agreement": 0.9993220338983051,
+    "held": 1475,
+    "flips": 1,
+    "pert_median": 0.0003439364004140248,
+    "pert_max": 0.0016585212177540672
+  },
+  "codec": {
+    "classicality_exact": true,
+    "recon_err": 0.0002440810203552246,
+    "recon_bound": 0.0078125,
+    "offbook_parity": 0.00065243940992743
+  },
+  "gates": {
+    "F1": true,
+    "F2": true,
+    "F3": true
+  }
+}

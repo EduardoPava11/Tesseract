@@ -305,3 +305,217 @@ as conditioning) inside the JEPA loss, without their pixel-free-ness
 problem in reverse. Verdict: **action-conditioned H-JEPA + the three
 additions**. Train Mac-side on the synthetic corpus; runtime stays the
 fixed 16-step fused graph of §5.
+
+## §11. S(x,y,t) and K(x,y)/K(y,x): the rotation laws (ruling 2026-08-11)
+
+Daniel's observation — S is ternary like the axis triple, K is binary and
+ordered — is exact under the axis clock, and it goes deeper than arity.
+Gates AX6–AX8 verify all of this on every one of the 27,419 corpus events.
+
+**S(x,y,t) is literal.** An S-redex spine is three App nodes at
+consecutive depths d, d+1, d+2 — all three axes exactly once — and its
+operands root one per axis phase too: x@a, z@a+1, y@a+2 (a = d mod 3).
+S is the intrinsically three-axis operator; there is no "S along one
+axis". One S-event engages the whole (x, y, t) frame.
+
+**K is two-axis, ordered, and chiral.** The K-spine covers exactly the
+ordered pair (a, a+1) — under the depth clock only the forward-cyclic
+pairs (x,y), (y,t), (t,x) ever occur, never the reversed ones. The
+discarded operand roots at phase a+1, the kept one at a+2. The mirrored
+projection K(y,x) is **not primitive**: keep-right = K·(SKK), size 4
+versus 1, taking exactly 3 steps [K, S, K] versus K's single step (AX8).
+The calculus *charges for mirrors* — chirality is broken at the primitive
+level and restored only by paying leaves and time.
+
+**Reduction twists.** Tracking per-axis App counts exactly (the closed
+forms in `predictHist`):
+
+    K-event: kept subtree x re-roots d+2 → d — its every App node
+             rotates axis phase by +1. Contraction is a SCREW MOTION
+             in (scale, axis-phase), not a plain projection.
+    S-event: the copied argument z re-roots d+1 → d+2 in BOTH copies
+             (rotates +1), the function context x rotates −1, y stays;
+             the spine trades one (a+2)-App for a second (a+1)-App.
+
+So computation does not stay on one axis: surviving content precesses
+through x → y → t as it is contracted, and copies precess as they are
+made. A gene is a choreography of axis precession — which is exactly what
+a spacetime texture wants to be.
+
+**Why halting-bounded genes = threadable inference.** The size-7 halting
+prerequisite is a scheduling theorem in disguise:
+
+- SK5: every halter finishes in ≤ 15 steps and SK9: the step function
+  idles on normal forms ⇒ ALL lanes run the same fixed 16-step program
+  with zero data-dependent control flow — halted lanes idle, divergent
+  lanes clamp. Lane-uniform = SIMD/ANE/thread-safe by construction.
+- AX5: per-activation memory is bounded a priori (41 for halters, 187 at
+  the horizon for divergers) — static allocation per thread.
+- AL2 (block decomposition): activations on different 4³ spacetime
+  blocks are independent — thread-per-block with no synchronization.
+- The vocabulary is 6 tokens ⇒ 6 small kernels; a gene compiles to a
+  static schedule of ≤ 16 typed kernel launches, fusable into one graph.
+
+"A model that is aware of computation is a better performer": the model
+is conditioned on the computation itself — action tokens, halting class,
+NF class id are all compile-time-known conditioning signals (trace
+supervision in the NPI/scratchpad lineage). Nothing about the gene is
+discovered at runtime; the runtime only *plays* it.
+
+## §12. The gauge principle: axis identity lives in the encoder
+       (ruling 2026-08-11, correcting §8–§9's over-typing)
+
+Daniel's ruling: "S(x,y,z) ≠ S(x,y,t) — elements in K(x,y) and S(x,y,z)
+are swapable. If we say z == t we doom the Wolfram findings; in latent
+space they should be swapable. The identity of x,y,t should live outside,
+in the encoder."
+
+This is correct, and the first passer (v1) violated it. The Wolfram
+findings — the halting taxonomy, the 2,692-class quotient, the two
+divergers — are theorems about the PURE calculus, invariant under any
+relabeling of axes. Operand slots are anonymous spine positions, not
+physical directions. v1's three axis-typed application maps gave the same
+subterm different semantics at different phases — and AX6–AX7 prove phase
+PRECESSES under reduction, so v1's meaning was frame-dependent. Wrong at
+the root.
+
+**The corrected decomposition:**
+
+    CORE        axis-anonymous. ONE application map; TWO action tokens
+                (S, K). Terms encode with no phase anywhere. What
+                survives from §8's typing is only what is intrinsic to
+                the calculus: spine position (K's chirality, AX8) and
+                depth structure. Physical axes never enter.
+    GROUNDING   the octree fold's WIRING decides which physical axis
+                each level splits. The weave-order convention is a
+                gauge choice — a coordinate frame — carrying zero
+                learned axis-specific weights. Swapping x,y,t = re-
+                wiring the fold; no weights change.
+    CONNECTION  the rotation laws (AX6–AX8) are re-read: they are not
+                laws of content but of the FRAME — how the gauge
+                parallel-transports along the tower (kept subtrees
+                precess +1 per contraction). The core is the fiber;
+                the axis clock is the connection on the bundle.
+
+The 6-token vocabulary of §8 is thereby demoted to *documentation of the
+embedding*: the corpus keeps its axis field (it describes the standard
+gauge), but the passer reads only the symbol.
+
+**Empirical confirmation** (train_passer.py v2, gate E1): the
+axis-anonymous core reaches rollout→NF accuracy 0.988 vs 0.989 for the
+axis-typed v1 — inside the 3σ binomial margin — with HALF the parameters
+(8,304 vs 17,760) and a smaller DAG (20,897 phase-free nodes vs 22,440
+phase-tagged). Axis identity carried no semantic information, exactly as
+the calculus demands. Meanwhile the symbols alone carry sharp meaning:
+on held-out pairs where a shuffle actually swaps S↔K, the true token
+wins 83.2% (n=1,100, 3σ=0.545). And gate E2: permuting the corpus's axis
+labels (x→y→t→x) changes no model input — swap invariance is exact by
+construction, checked.
+
+Consequence for the octave codec (§3): σ and κ are ONE binary pair
+applied by the wiring to whichever axis a level rides — never σ_x, σ_y,
+σ_t as separate weights. §8's per-axis reading survives only as the
+grounding's wiring diagram. The Wolfram findings transfer to latent
+dynamics verbatim BECAUSE the core is exactly as anonymous as the
+calculus that produced them.
+
+## §13. The color-side codec: gap audit, proofs, build (2026-08-11)
+
+Built AFTER the codec-gap-audit workflow, per ruling ("IF you can prove
+axioms, and theorems align with the haskell spec"). The audit's verdict:
+R1/R2/R7 were closable by proof; two rulings and one spec gap remained;
+the sampler-of-record already existed.
+
+**Proofs (spec/neural/OctaveCodec.hs, CX1–CX7, all green, registered):**
+the codec's exact laws in the form it is actually built — the composed
+binary form σ_g(x) = (x + g(x), x − g(x)), κ = mean, three wired levels.
+CX2 is the theorem the audit flagged missing (wired composition preserves
+DC for arbitrary per-level, per-position generators — SK7 covered only
+the flat form); CX5 aligns composed and flat (constant per-level details
+land in character bands w=100/010/001, cross-bands zero); CX6 lifts SK8's
+toy classicality to dyad-256 scale via the ∀-codebook annihilator law
+
+    g_C(x) = dist²(x, C) · ĝ(x)
+
+(vanishes exactly iff x ∈ C, any finite C — the palette is an INPUT,
+never weights, the same move as the gauge principle); CX7 proves dynamic
+per-capture palettes are safe (same ĝ, two captures, each copies its own
+palette exactly, cross-palette points defect).
+
+**Adopted derived rulings (Daniel may veto):**
+- G1: scale/level conditioning of ĝ is ADMISSIBLE — scale is physical
+  (the 3:2:1 ladder already treats levels distinctly), axis is gauge.
+  CX2 proves the laws hold either way.
+- G2a: classicality by ARCHITECTURAL vanishing (the CX6 mask), never a
+  loss term — preserves "structural, not trained".
+
+**Trainer (nn/sk-gene/train_codec.py, D1–D6 all green):** learns ONLY
+the conditional detail prior p(d | stage-parent, ctx, level) — a 3,294-
+param Gaussian head. Corpus = nn/dither/data.py, the sampler-of-record
+((file, seed) → byte-identical; TRAIN/HELDOUT seed ranges disjoint).
+Conditioning: stage-parent value + the enclosing split's detail in raw
+AND log-magnitude form (wavelet scale persistence, Crouse–Baraniuk–
+Nowak) + octave level. Stage index is NOT conditioned on — under the
+wiring it is the axis, so conditioning on it would be axis-typing.
+Results: ΔNLL −0.87 nats/sample vs the per-level unconditional Gaussian,
+cluster-robust across 24 held-out elements (wins 22/24; element-level 3σ
+statistics — samples within an element share its field scale, so
+effective n is the element count); calibrated (|z̄| = 0.001,
+var z − 1 = 0.06, inside element-level 3σ); composed retraction 6e-8
+(fp32 rounding); classicality exact against a REAL dyad-256 palette
+built by the byte-exact-gated nn/phase/dyad_solver.build_dyad from a
+held-out element's masked pixels.
+
+Owed: the fold (build_model.py pattern — both weight sets into fused
+graph constants, fp16 centered-input discipline, parity gate vs the
+float64 law) and the term↔color coupling (the passer's latent L and the
+codec's OKLab octave meet at the grounding).
+
+## §14. The grounding: term↔color coupling (2026-08-11, ruling
+       "this sounds like the encoder... train and ensure it learns")
+
+The coupling IS an encoder — and per §12 it is exactly where axis
+identity is allowed to live: E reads the block through the wiring.
+
+    E : color octave block [8×3 OKLab, wiring order] → z ∈ ℝ²⁴
+        (the SAME latent space the genes live in)
+
+E is the ONLY trainable (nn/sk-gene/train_ground.py, 14,382 params);
+passer and codec are FROZEN. Training makes the square commute through
+the frozen predictor and frozen token embeddings:
+
+    S-law   pred(E(const(x)), tok_S) ≈ E(Ŝ(x))     (masked codec expand)
+    K-law   pred(E(X), tok_K) ≈ E(const(K̂X))       (real-block contract)
+
+E's features are the block's Haar character coefficients (the AX1
+basis) + level. Two ingredients proved decisive:
+
+1. **The manifold anchor**: the frozen predictor's vector field only
+   MEANS S/K on the gene-latent cloud where it was trained — without an
+   anchor E collapsed into regions where the two tokens act alike.
+   E's output distribution is moment-matched to the gene_table cloud
+   (both moments derived from the table; no naked constants).
+2. **Codeword S-pairs in training**: the masked codec gives
+   Ŝ(c) = const(c) exactly (CX6/F2), so codewords are legitimate
+   fixed-point events — teaching them directly.
+
+**Gates (G1–G6 all green; cluster-robust, derived thresholds):**
+- G2 *learns*: on moved events (per-element median split — identity is
+  near-optimal where the op changes nothing), coupling error beats
+  identity by −0.55 ± 0.14 (3σ).
+- G3 *THE COUPLING CLAIM*: swapping the term-trained S/K token on a
+  held-out color event costs +0.72 ± 0.03 (3σ) — the tokens learned
+  from TERM reduction organize COLOR dynamics through a frozen
+  predictor. Term-S is color-expansion; term-K is color-contraction,
+  measurably, cross-modally.
+- G4 *classicality grounded*: codeword S-displacement 0.013 vs 0.023
+  off-palette (3σ) — the palette's classical states are latent fixed
+  points of expansion, closing the loop with §4.
+- G5 *retrieval*: the predicted latent ranks the true post-event block
+  top-1 at 24.5% among 256 per element (chance 0.4%).
+
+The arc is closed: calculus (SK/AX/CX laws) → corpus (27,419 pairs) →
+passer (term dynamics) → codec (color octave) → fold (two fp16 ANE
+graphs + gene table) → grounding (one encoder joining them). Every
+learned map is gated; every law is executable. What remains is
+Daniel's: Swift integration rulings, and the device pass.

@@ -43,6 +43,24 @@
 --        exceed term size 41 (= max normal form size); divergers
 --        reach exactly 187 at the unroll horizon — the per-
 --        activation term-tree capacity the tower must host
+--
+-- Daniel's question (2026-08-11): "S(x,y,t) and K(x,y)/K(y,x)?!"
+-- Answer, made exact under the axis clock (axis = depth mod 3):
+--
+--   AX6  S IS the ternary all-axes operator: its 3-App spine sits
+--        at depths d,d+1,d+2 (all three axes once) and its
+--        operands root one-per-phase (x@a, z@a+1, y@a+2). The
+--        ROTATION LAW, checked on every event via exact per-axis
+--        App-histogram accounting: the copied argument z rotates
+--        +1 (both copies), the function context x rotates −1, y
+--        stays; net spine budget +1 on axis a+1, −1 on a+2
+--   AX7  K rotation law: spine covers exactly the ordered pair
+--        (a, a+1) — forward-cyclic only, never reversed; discard
+--        y roots at phase a+1, keep x at a+2, and the kept
+--        subtree rotates +1 on survival (contraction twists)
+--   AX8  chirality is charged: the mirrored projection K(y,x) is
+--        NOT primitive — keep-right = K·(SKK), size 4 vs 1,
+--        realizing y in exactly 3 steps [K,S,K] vs K's 1
 -- ════════════════════════════════════════════════════════════════
 
 module Main where
@@ -79,38 +97,104 @@ axisOf d = toEnum (d `mod` 3)
 
 type Action = (Sym, Axis)
 
--- One leftmost-outermost step tagged (symbol, redex depth).
-stepD :: C -> Maybe ((Sym, Int), C)
-stepD = go 0
+-- The redex, with its depth and operands (the raw material of the
+-- rotation laws): K-spine holds y@d+1(discard), x@d+2(keep);
+-- S-spine holds z@d+1, y@d+2, x@d+3.
+data Redex = RK Int C C          -- depth, x (kept), y (discarded)
+           | RS Int C C C        -- depth, x, y, z (copied)
+  deriving (Eq, Show)
+
+symOf :: Redex -> Sym
+symOf (RK {}) = SymK
+symOf (RS {}) = SymS
+
+depthOf :: Redex -> Int
+depthOf (RK d _ _)   = d
+depthOf (RS d _ _ _) = d
+
+-- One leftmost-outermost step with full redex information.
+stepR :: C -> Maybe (Redex, C)
+stepR = go 0
   where
-    go d (App (App K x) _)         = Just ((SymK, d), x)
-    go d (App (App (App S x) y) z) = Just ((SymS, d), App (App x z) (App y z))
+    go d (App (App K x) y)         = Just (RK d x y, x)
+    go d (App (App (App S x) y) z) = Just (RS d x y z, App (App x z) (App y z))
     go d (App f a) = case go (d + 1) f of
-      Just (t, f') -> Just (t, App f' a)
+      Just (r, f') -> Just (r, App f' a)
       Nothing      -> fmap (App f) <$> go (d + 1) a
     go _ _ = Nothing
+
+stepD :: C -> Maybe ((Sym, Int), C)
+stepD t = (\(r, t') -> ((symOf r, depthOf r), t')) <$> stepR t
 
 unroll, sizeCap :: Int
 unroll  = 16
 sizeCap = 50000
 
 -- Truncated trajectory (the JEPA sees exactly this):
--- events = [(action, term-after)]; Bool = halted within unroll.
-traj :: C -> ([(Action, C)], C, Bool)
+-- events = [(redex, term-before, term-after)]; Bool = halted.
+traj :: C -> ([(Redex, C, C)], C, Bool)
 traj = go 0 []
   where
     go n acc t
       | n >= unroll || size t > sizeCap = (reverse acc, t, False)
-      | otherwise = case stepD t of
-          Nothing            -> (reverse acc, t, True)
-          Just ((sym, d), t') ->
-            go (n + 1) (((sym, axisOf d), t') : acc) t'
+      | otherwise = case stepR t of
+          Nothing      -> (reverse acc, t, True)
+          Just (r, t') -> go (n + 1) ((r, t, t') : acc) t'
+
+actOf :: Redex -> Action
+actOf r = (symOf r, axisOf (depthOf r))
 
 pool :: [C]
 pool = trees 7
 
-corpus :: [(C, [(Action, C)], C, Bool)]
+corpus :: [(C, [(Redex, C, C)], C, Bool)]
 corpus = [ (g, es, nf, h) | g <- pool, let (es, nf, h) = traj g ]
+
+-- ════════════════════════════════════════════════════════════════
+-- § 1b. Per-axis App-histogram accounting (the rotation laws)
+--       H r t = App counts of subtree t (rooted at depth r) by
+--       axis phase; hAt d = a single App at depth d.
+-- ════════════════════════════════════════════════════════════════
+
+type Hist = (Int, Int, Int)
+
+hZero :: Hist
+hZero = (0, 0, 0)
+
+hAt :: Int -> Hist
+hAt d = case d `mod` 3 of
+  0 -> (1,0,0); 1 -> (0,1,0); _ -> (0,0,1)
+
+hAdd, hSub :: Hist -> Hist -> Hist
+hAdd (a,b,c) (p,q,r) = (a+p, b+q, c+r)
+hSub (a,b,c) (p,q,r) = (a-p, b-q, c-r)
+
+appHist :: Int -> C -> Hist
+appHist _ S = hZero
+appHist _ K = hZero
+appHist r (App f a) =
+  hAt r `hAdd` appHist (r+1) f `hAdd` appHist (r+1) a
+
+-- Closed-form prediction of the post-term's axis histogram from
+-- the pre-term and the redex alone — the ROTATION LAWS:
+--   K: lose spine (a, a+1) and all of y@d+1 and x@d+2; regain x
+--      rooted at d (kept subtree rotates +1 ≡ −2)
+--   S: spine trades one a+2-App for a second a+1-App; x re-roots
+--      d+3 → d+2 (rotates −1); z re-roots d+1 → d+2 twice
+--      (both copies rotate +1); y stays at d+2
+predictHist :: C -> Redex -> Hist
+predictHist pre (RK d x y) =
+  appHist 0 pre
+    `hSub` hAt d `hSub` hAt (d+1)
+    `hSub` appHist (d+1) y
+    `hSub` appHist (d+2) x
+    `hAdd` appHist d x
+predictHist pre (RS d x _y z) =
+  appHist 0 pre
+    `hAdd` hAt (d+1) `hSub` hAt (d+2)
+    `hAdd` appHist (d+2) x `hSub` appHist (d+3) x
+    `hAdd` appHist (d+2) z `hAdd` appHist (d+2) z
+    `hSub` appHist (d+1) z
 
 -- ════════════════════════════════════════════════════════════════
 -- § 2. Axis-separable Haar on ℚ: the octave as cube of the
@@ -193,7 +277,7 @@ main = do
             [blockA, blockB]
 
   -- shared corpus statistics
-  let allEvents = [ a | (_, es, _, _) <- corpus, (a, _) <- es ]
+  let allEvents = [ actOf r | (_, es, _, _) <- corpus, (r, _, _) <- es ]
       hist      = M.toList $ M.fromListWith (+) [ (a, 1::Int) | a <- allEvents ]
       halters   = [ (es, nf) | (_, es, nf, True) <- corpus ]
       divergers = [ es | (_, es, _, False) <- corpus ]
@@ -222,14 +306,44 @@ main = do
         && length halters == 16894
 
   -- AX5: derived capacity constants
-  let haltMax = maximum [ size t | (es, _) <- halters, (_, t) <- es ]
+  let haltMax = maximum [ size t | (es, _) <- halters, (_, _, t) <- es ]
       nfMax   = maximum [ size nf | (_, nf) <- halters ]
-      divMax  = maximum [ size t | es <- divergers, (_, t) <- es ]
+      divMax  = maximum [ size t | es <- divergers, (_, _, t) <- es ]
   g5 <- gate "AX5  capacity: halters ≤ 41 (= max NF), divergers reach 187 at unroll"
       $ haltMax == 41 && nfMax == 41 && divMax == 187
 
+  -- AX6/AX7: the rotation laws, exact on every event
+  let events    = [ ev | (_, es, _, _) <- corpus, ev <- es ]
+      lawHolds (r, pre, post) = predictHist pre r == appHist 0 post
+      sEvents   = [ ev | ev@(RS {}, _, _) <- events ]
+      kEvents   = [ ev | ev@(RK {}, _, _) <- events ]
+  g6 <- gate "AX6  S rotation law exact on all S-events (z +1 twice, x −1, y 0)"
+      $ all lawHolds sEvents
+        && length sEvents == 3988 + 2995 + 1454
+  g7 <- gate "AX7  K rotation law exact on all K-events (kept subtree rotates +1)"
+      $ all lawHolds kEvents
+        && length kEvents == 7441 + 6892 + 4649
+
+  -- AX8: chirality is charged — keep-right only as composite K·(SKK)
+  let i'        = App (App S K) K                    -- I = SKK
+      keepRight = App K i'                            -- K̃ = K·I, size 4
+      apply2 p a b = App (App p a) b
+      mirrorRun a b = traj (apply2 keepRight a b)
+      mirrorOK (a, b) =
+        let (es, final, halted) = mirrorRun a b
+        in halted && final == b
+           && map (symOf . (\(r,_,_) -> r)) es == [SymK, SymS, SymK]
+      probes = [ (K, S), (S, K), (App S K, App K K) ]
+      directK (a, b) =
+        let (es, final, halted) = traj (apply2 K a b)
+        in halted && final == a && length es == 1
+  g8 <- gate "AX8  K(y,x) not primitive: keep-right = K·(SKK), 3 steps [K,S,K] vs 1"
+      $ size keepRight == 4 && size K == 1
+        && all mirrorOK probes
+        && all directK probes
+
   putStrLn ""
-  let results = [g1, g2, g3, g4, g5]
+  let results = [g1, g2, g3, g4, g5, g6, g7, g8]
   putStrLn $ "  " ++ show (length (filter id results)) ++ "/"
            ++ show (length results) ++ " gates green"
   putStrLn ""
