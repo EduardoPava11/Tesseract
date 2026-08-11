@@ -25,8 +25,19 @@
 -- the binomial background — see §6; the solid-255 collapse of
 -- v1/v2 is superseded).
 --
--- Gamut law: when a complement (or shell sample) leaves sRGB, it
--- is clamped by scaling chroma alone — L and hue are never moved.
+-- v5-W (THE WADA GROUND, 2026-08-10): the DISPLAYED σ half is no
+-- longer the raw gamut-max complement — it is the Wada ground:
+-- hue-mirrored (σ = tritone survives), chroma-muted by the
+-- dictionary's power law, L-shifted as an ensemble to the
+-- dictionary's ground lightness. See § 3b. comp itself (negation)
+-- is untouched: it remains the ASSIGNMENT geometry (one-search
+-- σ-mirror, DY3) and the staging space of § 6c. The table law is
+-- now T[σ(i)] = groundOf cL (T[i]) with cL read from T[0] — still
+-- byte-exact, still verifiable from the table alone.
+--
+-- Gamut law: when a generated color (ground or shell sample)
+-- leaves sRGB, it is clamped by scaling chroma alone — L and hue
+-- are never moved.
 -- ════════════════════════════════════════════════════════════════
 
 module DyadPalette where
@@ -131,9 +142,69 @@ chromaClamp lab@(l, a, b)
 clampL :: Lab -> Lab
 clampL (l, a, b) = (max 0 (min 1 l), a, b)
 
--- | The generation law for complements, byte to byte.
-complementOf :: RGB8 -> RGB8
-complementOf = oklabToSrgb8 . chromaClamp . comp . srgb8ToOklab
+-- ════════════════════════════════════════════════════════════════
+-- § 3b. THE WADA GROUND LAW (v5-W, 2026-08-10)
+--
+-- North star (Daniel): Sanzo Wada, "A Dictionary of Colour
+-- Combinations" (配色総鑑, 1933–34) — 348 combinations over 159
+-- colors, digitized in scripts/wada/colors.json. Every constant
+-- below is a MOMENT OF THE DICTIONARY (scripts/wada/derive.py —
+-- no naked thresholds). Measured in OKLab over all 1128
+-- in-combination pairs, each ordered by chroma into FIGURE (more
+-- chromatic — our face) and GROUND (less — our background):
+--
+--   hue     |Δh| is near-uniform on [0°,180°]: Wada does not
+--           constrain the hue interval, so σ = hue+180° stays —
+--           the involution, the tritone, and the one-search
+--           ANE mirror assignment are all preserved.
+--   chroma  ln C_G = wadaAlphaC + wadaBetaC · ln C_S (r = +0.30):
+--           a power law. The ground is muted (≈ 0.46× at skin
+--           chroma — the v4 gamut-max blue glare is un-Wada) yet
+--           keeps ~75% of the figure's chroma structure in log
+--           space: the mirrored shells stay a structured field.
+--   light   L_G ⊥ L_S (r = −0.03): the ground's lightness is
+--           drawn about wadaGroundL REGARDLESS of the figure.
+--           Deterministic reading: shift the whole mirrored
+--           ensemble so its center (T[0]'s partner, index 255)
+--           lands at wadaGroundL, within-ensemble L offsets
+--           preserved exactly. v4's ΔL = 0 (comp preserves L) is
+--           precisely what read as a translucent "layer"; Wada's
+--           median pair contrast is |ΔL| ≈ 0.20.
+-- ════════════════════════════════════════════════════════════════
+
+wadaGroundL :: Double
+wadaGroundL = 0.6170482164370319    -- mean ground L over 1128 pairs
+
+wadaAlphaC, wadaBetaC :: Double
+wadaAlphaC = -1.3176036044137163    -- ln-chroma intercept
+wadaBetaC  =  0.7469411483195036    -- ln-chroma slope (power law)
+
+-- | The ground law in OKLab, parameterized by the figure-centroid
+--   lightness cL. The ground ROLE is defined as the less chromatic
+--   member of the pair, so the law never exceeds the figure's
+--   chroma (the identity cap — the power law crosses identity only
+--   below C ≈ 0.0055). Achromatic figures keep achromatic grounds,
+--   exactly, at the shifted L.
+groundLab :: Double -> Lab -> Lab
+groundLab cL (l, a, b) =
+  let c2 = a * a + b * b
+      l' = l + (wadaGroundL - cL)
+  in if c2 <= 0 then (l', 0, 0)
+     else let c  = sqrt c2
+              c' = min c (exp (wadaAlphaC + wadaBetaC * log c))
+              s  = c' / c
+          in (l', negate (a * s), negate (b * s))
+
+-- | The generation law for the σ half, byte to byte. cL is the L
+--   of the BYTE centroid T[0], so the table law stays verifiable
+--   from table bytes alone — the table is self-describing.
+groundOf :: Double -> RGB8 -> RGB8
+groundOf cL = oklabToSrgb8 . chromaClamp . clampL . groundLab cL . srgb8ToOklab
+
+-- | The figure-centroid lightness of a primary list (or full
+--   table): L of the first entry, which IS the centroid (level 0).
+centroidL :: [RGB8] -> Double
+centroidL tbl = let (l, _, _) = srgb8ToOklab (head tbl) in l
 
 -- ════════════════════════════════════════════════════════════════
 -- § 4. STATISTICS — centroid, covariance, Jacobi PCA in OKLab
@@ -270,10 +341,10 @@ primaries :: Stats -> [RGB8]
 primaries st =
   [ oklabToSrgb8 (chromaClamp (clampL p)) | k <- [0 .. nLevels - 1], p <- shellRaw st k ]
 
--- | The full DYAD table: primaries then generated complements,
---   laid out so that T[255−i] = complementOf T[i].
+-- | The full DYAD table: primaries then generated Wada grounds,
+--   laid out so that T[255−i] = groundOf (centroidL T) T[i].
 buildDyadFrom :: Stats -> [RGB8]
-buildDyadFrom st = prims ++ map complementOf (reverse prims)
+buildDyadFrom st = prims ++ map (groundOf (centroidL prims)) (reverse prims)
   where prims = primaries st
 
 buildDyad :: [RGB8] -> [RGB8]
@@ -522,14 +593,15 @@ axiom_DY1 =
   && all (\i -> partner (partner i) == i) [0 .. 255]
   && all (\i -> partner i >= 128 && partner i <= 255) [0 .. 127]
 
--- (DY2) The involution law: in EVERY generated table (including
+-- (DY2) The table law: in EVERY generated table (including
 --       degenerate inputs and EMA blends), T[255−i] is byte-exactly
---       the complement of T[i].
+--       the Wada ground of T[i], with cL read from T[0] — the law
+--       is checkable from table bytes alone.
 axiom_DY2 :: Bool
 axiom_DY2 = all lawful allTables
   where
     lawful t = length t == 256
-            && all (\i -> t !! partner i == complementOf (t !! i)) [0 .. 127]
+            && all (\i -> t !! partner i == groundOf (centroidL t) (t !! i)) [0 .. 127]
 
 -- (DY3) Comp preserves L exactly and flips hue exactly: the clamped
 --       complement is (L, −s·a, −s·b) with s ∈ (0, 1] — colinear
@@ -735,7 +807,7 @@ axiom_DY12 = deterministic && lawfulTables && centroidStable
     deterministic = tblAt 0.3 == tblAt 0.3
     lawfulTables = all involutionExact [ tblAt s | s <- [0, 0.25, 0.5, 0.75, 1] ]
     involutionExact t = length t == 256
-        && all (\i -> t !! partner i == complementOf (t !! i)) [0 .. 127]
+        && all (\i -> t !! partner i == groundOf (centroidL t) (t !! i)) [0 .. 127]
     centroidStable = and
       [ dLab2 (srgb8ToOklab (head (tblAt s1))) (srgb8ToOklab (head (tblAt s2))) < 0.01
       | (s1, s2) <- zip ss (tail ss) ]
@@ -781,6 +853,57 @@ axiom_DY8 = all canonical (statsList ++ blends) && all flipFixed probes
     triples (a : b : c : rest) = (a, b, c) : triples rest
     triples _ = []
 
+-- (DY13) THE GROUND ROLE LAW: the ground is never more chromatic
+--        than its figure (exact, pre-clamp — the identity cap IS
+--        the role definition), ground chroma is monotone in figure
+--        chroma (the power law preserves shell chroma ordering),
+--        and achromatic figures yield exactly achromatic grounds
+--        at the shifted lightness.
+axiom_DY13 :: Bool
+axiom_DY13 = all roleOK probeColors && monotoneC && achromatic
+  where
+    chromaOf (_, a, b) = sqrt (a * a + b * b)
+    roleOK c = and
+      [ chromaOf (groundLab cL lab) <= chromaOf lab + 1e-12
+      | cL <- [0.3, wadaGroundL, 0.8] ]
+      where lab = srgb8ToOklab c
+    monotoneC = and
+      [ chromaOf (groundLab 0.6 (0.6, x1, 0))
+          <= chromaOf (groundLab 0.6 (0.6, x2, 0)) + 1e-12
+      | (x1, x2) <- zip grid (tail grid) ]
+      where grid = [fromIntegral n / 200 | n <- [0 .. 60 :: Int]]
+    achromatic = all
+      (\l -> groundLab 0.7 (l, 0, 0) == (l + (wadaGroundL - 0.7), 0, 0))
+      [0, 0.25, 0.5, 0.75, 1]
+
+-- (DY14) THE σ SURVIVES: the generated ground is anti-colinear
+--        with its figure in the (a,b) plane — hue+180° exactly,
+--        never off-hue — through the ground law AND both clamps.
+axiom_DY14 :: Bool
+axiom_DY14 = all ok probeColors
+  where
+    ok c =
+      let lab@(_, a, b) = srgb8ToOklab c
+          (_, a', b') = chromaClamp (clampL (groundLab 0.65 lab))
+          cross = a' * b - b' * a
+          dotC  = a' * a + b' * b
+      in (a * a + b * b < 1e-12) || (dotC <= 0 && abs cross <= 1e-9)
+
+-- (DY15) THE ENSEMBLE SHIFT: the L-shift is rigid — within-ensemble
+--        lightness offsets are preserved exactly (pre-clamp) — and
+--        in every generated table the centroid's ground lands at
+--        wadaGroundL exactly: T[255] carries the dictionary's
+--        ground lightness whatever the face's key.
+axiom_DY15 :: Bool
+axiom_DY15 = rigidity && all landOK allTables
+  where
+    lOf cL c = let (l, _, _) = groundLab cL (srgb8ToOklab c) in l
+    rawL c = let (l, _, _) = srgb8ToOklab c in l
+    rigidity = and
+      [ abs ((lOf cL c1 - lOf cL c2) - (rawL c1 - rawL c2)) <= 1e-12
+      | (c1, c2) <- zip probeColors (tail probeColors), cL <- [0.4, 0.7] ]
+    landOK t = abs (lOf (centroidL t) (head t) - wadaGroundL) <= 1e-12
+
 -- ════════════════════════════════════════════════════════════════
 -- § 9. VISUALIZATION
 -- ════════════════════════════════════════════════════════════════
@@ -810,7 +933,7 @@ main :: IO ()
 main = do
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn " DyadPalette: DYAD-256 — 128 colors and a group action"
-  putStrLn " σ(i) = 255−i, T[σ(i)] = comp(T[i]), comp = (L,−a,−b)"
+  putStrLn " σ(i) = 255−i,  T[σ(i)] = groundOf cL (T[i])  (v5-W, Wada)"
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
 
@@ -833,7 +956,7 @@ main = do
         ++ "   L=" ++ showF l ++ "  hue=" ++ padL 8 (showF (hueDeg lab)) ++ "°"
   mapM_ (putStrLn . showEntry) [0, 1, 64, 127, 128, 191, 254, 255]
   putStrLn ""
-  putStrLn $ "  face centroid → T[0];  background = T[255] = comp(T[0])"
+  putStrLn $ "  face centroid → T[0];  background = T[255] = ground(T[0])"
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════"
@@ -841,7 +964,7 @@ main = do
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
   check "DY1 ladder: Σ=128, doubling, σ involution onto [128..255]" [axiom_DY1]
-  check "DY2 involution law: T[255−i] = comp(T[i]) byte-exact"      [axiom_DY2]
+  check "DY2 table law: T[255−i] = groundOf cL (T[i]) byte-exact"   [axiom_DY2]
   check "DY3 comp: L exact, hue flipped exact, chroma-only clamp"   [axiom_DY3]
   check "DY4 shells: sizes = ladder, whitened radius = ρ_k, PC3=0"  [axiom_DY4]
   check "DY5 totality + determinism on all sample sets"             [axiom_DY5]
@@ -852,6 +975,9 @@ main = do
   check "DY10 seam-death: pair t-free, 1-Lipschitz, face-compat"    [axiom_DY10]
   check "DY11 aerial occupancy: σ-half spread, chroma octave, R4"   [axiom_DY11]
   check "DY12 stats-on-ŷ: single-valued, involution, stable"        [axiom_DY12]
+  check "DY13 ground role: muted, monotone, achromatic-exact"       [axiom_DY13]
+  check "DY14 σ survives: ground anti-colinear, hue+180° exact"     [axiom_DY14]
+  check "DY15 ensemble shift: rigid L, T[255] lands at wadaGroundL" [axiom_DY15]
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════"
@@ -861,10 +987,12 @@ main = do
   putStrLn "  ladder = [1,1,2,4,8,16,32,64]  Σ = 128;  ×2 by σ = 256."
   putStrLn ""
   putStrLn "  Only 128 colors are ever DESIGNED. The involution"
-  putStrLn "  σ(i) = 255−i generates the rest, because hue+180° in"
-  putStrLn "  OKLab is linear: comp(L,a,b) = (L,−a,−b). L and chroma"
-  putStrLn "  survive; only hue flips. Gamut escapes are clamped by"
-  putStrLn "  scaling chroma alone — never L, never hue."
+  putStrLn "  σ(i) = 255−i generates the rest as WADA GROUNDS:"
+  putStrLn "  hue+180° (assignment still searches comp = negation),"
+  putStrLn "  chroma muted by the dictionary's power law, lightness"
+  putStrLn "  shifted as an ensemble to the dictionary's ground"
+  putStrLn "  level. Gamut escapes are clamped by scaling chroma"
+  putStrLn "  alone — never L, never hue."
   putStrLn ""
   putStrLn "  The primaries tile the face's OKLab distribution as a"
   putStrLn "  polar binomial disk: 8 concentric PC1×PC2 shells with"
@@ -876,7 +1004,8 @@ main = do
   putStrLn "  Faces own the primaries. The background is the face's"
   putStrLn "  σ-mirror: each pixel pulled hard toward the centroid,"
   putStrLn "  assigned partner(nearestPrimary) — a harsh bleed that"
-  putStrLn "  terminates, by construction, at 255 = comp(centroid)."
+  putStrLn "  terminates, by construction, at 255 = ground(centroid):"
+  putStrLn "  the dictionary's ground, not the gamut-max complement."
   putStrLn "══════════════════════════════════════════════════════════"
 
 -- Helpers (no-scientific-notation formatter: integer math, 3 dp)

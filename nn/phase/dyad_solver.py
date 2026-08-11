@@ -103,8 +103,36 @@ def clamp_l(lab):
     return (max(0.0, min(1.0, lab[0])), lab[1], lab[2])
 
 
-def complement_of(rgb):
-    return oklab_to_srgb8(chroma_clamp(comp(srgb8_to_oklab(rgb))))
+# Wada ground law (v5-W) — constants are moments of Sanzo Wada's
+# dictionary, derivation: scripts/wada/derive.py.
+# NOTE (2026-08-11): this port implements the PRIOR path only (the
+# path the fixtures exercise — analyze() has no depth, so tables are
+# single-phase). The app's live path fits these three parameters per
+# capture from background moments (ruling R2, DYAD STATS v2 trace);
+# extend here only when fixtures grow a moments column.
+WADA_GROUND_L = 0.6170482164370319
+WADA_ALPHA_C = -1.3176036044137163
+WADA_BETA_C = 0.7469411483195036
+
+
+def ground_lab(c_l, lab):
+    l, a, b = lab
+    c2 = a * a + b * b
+    l2 = l + (WADA_GROUND_L - c_l)
+    if c2 <= 0:
+        return (l2, 0.0, 0.0)
+    c = math.sqrt(c2)
+    cg = min(c, math.exp(WADA_ALPHA_C + WADA_BETA_C * math.log(c)))
+    s = cg / c
+    return (l2, -a * s, -b * s)
+
+
+def ground_of(c_l, rgb):
+    return oklab_to_srgb8(chroma_clamp(clamp_l(ground_lab(c_l, srgb8_to_oklab(rgb)))))
+
+
+def centroid_l(prims):
+    return srgb8_to_oklab(prims[0])[0]
 
 
 # ── statistics (incl. DY8 canonDir) ───────────────────────────────
@@ -228,7 +256,8 @@ def primaries(stats):
 
 def build_dyad(samples):
     prims = primaries(analyze(samples))
-    return prims + [complement_of(p) for p in reversed(prims)]
+    c_l = centroid_l(prims)
+    return prims + [ground_of(c_l, p) for p in reversed(prims)]
 
 
 def table_hex(table):

@@ -83,6 +83,14 @@ enum CameraConfig {
     // Every export is 256×256: fat voxels via index replication (256/S per axis).
     static let exportSide = 256
     static var exportUpscale: Int { exportSide / outputSize }
+
+    // ★PHASE-CHAOS LOOP (ruling R3, docs/ane-loop-design.md L3):
+    // the fixed-K exchange loop refining the far background's index
+    // arrangement by descent on F. ADDITIVE and flag-gated beside
+    // the shipped v4 far law — default OFF; flip for the on-device
+    // comparison. Internal flag by design: no settings-cover surface
+    // without Daniel's ruling (simplicity decree).
+    static let phaseChaosLoop = false
 }
 
 @MainActor

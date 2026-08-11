@@ -67,16 +67,24 @@ final class DyadPipelineTests: XCTestCase {
         }
     }
 
-    func testEveryTableSatisfiesTheInvolution() throws {
+    func testEveryTableSatisfiesTheGroundLaw() throws {
         let frames = (0..<frameCount).map { makeFrame(index: $0) }
         let out = try XCTUnwrap(DyadPipeline.process(frames: frames))
-        for table in out.tables {
+        XCTAssertEqual(out.groundMoments.count, out.tables.count)
+        for (f, table) in out.tables.enumerated() {
             XCTAssertEqual(table.count, 768)
             func entry(_ i: Int) -> (UInt8, UInt8, UInt8) {
                 (table[3 * i], table[3 * i + 1], table[3 * i + 2])
             }
+            // Ruling R2: the σ half regenerates from the frame's own
+            // fitted moments (scene fit on two-phase captures; the
+            // Wada prior only when no background evidence exists).
+            let gm = out.groundMoments[f]
+            if out.twoPhase {
+                XCTAssertFalse(gm.capped, "scene-fit moments are uncapped")
+            }
             for i in 0..<128 {
-                XCTAssertTrue(entry(255 - i) == DyadPalette.complement(of: entry(i)))
+                XCTAssertTrue(entry(255 - i) == DyadPalette.ground(gm, of: entry(i)))
             }
         }
     }

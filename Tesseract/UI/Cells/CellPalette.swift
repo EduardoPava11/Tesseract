@@ -5,9 +5,9 @@ import simd
 /// palette made visible (Daniel, 2026-08-10: "I want to see the color
 /// palette creation as we create the GIF"). Row-major by palette index,
 /// so the DYAD structure reads directly: primaries fill the top half
-/// (binomial shells outward from the centroid at index 0), complements
-/// mirror them in the bottom half — T[255−i] = comp(T[i]) is literally
-/// visible as a 180° rotation of the swatch.
+/// (binomial shells outward from the centroid at index 0), Wada grounds
+/// mirror them in the bottom half — T[255−i] = ground(T[i]): hue+180°,
+/// dictionary-muted chroma, ensemble-shifted lightness (v5-W).
 struct CellPalette: View {
     /// 768 bytes: 256 × RGB. Short/absent data renders the checker.
     let table: Data?

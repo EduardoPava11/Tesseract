@@ -83,23 +83,30 @@ final class DyadPaletteTests: XCTestCase {
         }
     }
 
-    // MARK: - DY2: the involution law, byte-exact, on every table
+    // MARK: - DY2: the table law (Wada ground), byte-exact, on every table
 
-    func testInvolutionLawByteExact() {
+    func testGroundLawByteExact() {
         for table in Self.allTables {
             XCTAssertEqual(table.count, 256)
+            let cL = DyadPalette.centroidL(table)
             for i in 0..<128 {
                 let generated = table[DyadPalette.partner(i)]
-                let recomputed = DyadPalette.complement(of: table[i])
+                let recomputed = DyadPalette.ground(centroidL: cL, of: table[i])
                 XCTAssertTrue(generated == recomputed,
-                              "T[\(DyadPalette.partner(i))] must equal complement(T[\(i)])")
+                              "T[\(DyadPalette.partner(i))] must equal ground(T[\(i)])")
             }
         }
     }
 
-    func testBackgroundIsComplementOfCentroid() {
+    func testBackgroundIsGroundOfCentroid() {
         for table in Self.allTables {
-            XCTAssertTrue(table[255] == DyadPalette.complement(of: table[0]))
+            let cL = DyadPalette.centroidL(table)
+            XCTAssertTrue(table[255] == DyadPalette.ground(centroidL: cL, of: table[0]))
+            // DY15 (prior path): the centroid's ground lands at the
+            // dictionary's ground lightness, whatever the face's key.
+            let landed = DyadPalette.groundLab(DyadPalette.priorMoments(centroidL: cL),
+                                               DyadPalette.oklab(fromSRGB8: table[0])).l
+            XCTAssertEqual(landed, DyadPalette.wadaGroundL, accuracy: 1e-12)
         }
     }
 
@@ -204,8 +211,9 @@ final class DyadPaletteTests: XCTestCase {
             // A blended distribution must still build a lawful table.
             let table = DyadPalette.table(stats: blend)
             XCTAssertEqual(table.count, 256)
+            let cL = DyadPalette.centroidL(table)
             for i in 0..<128 {
-                XCTAssertTrue(table[255 - i] == DyadPalette.complement(of: table[i]))
+                XCTAssertTrue(table[255 - i] == DyadPalette.ground(centroidL: cL, of: table[i]))
             }
         }
     }

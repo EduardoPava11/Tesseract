@@ -175,7 +175,7 @@ def mode_c(n_scales=10, n_seeds=12):
             # Real table via the byte-gated solver path (stats direct).
             stats = ds.mk_stats(tuple(c), cov.tolist())
             prims = ds.primaries(stats)
-            table = prims + [ds.complement_of(p) for p in reversed(prims)]
+            table = prims + [ds.ground_of(ds.centroid_l(prims), p) for p in reversed(prims)]
             # Temperature-like variable: the PRE-CLAMP closed-form
             # variance component of E_pal (PhaseEnergy PE1), exact in
             # the stats — immune to the clamp-loss and u8 noise (~±0.4)

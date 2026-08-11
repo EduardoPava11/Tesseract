@@ -89,8 +89,28 @@ chromaClamp lab@(l, a, b)
 clampL :: Lab -> Lab
 clampL (l, a, b) = (max 0 (min 1 l), a, b)
 
-complementOf :: RGB8 -> RGB8
-complementOf = oklabToSrgb8 . chromaClamp . comp . srgb8ToOklab
+-- Wada ground law (v5-W) — constants are moments of Sanzo Wada's
+-- dictionary, derivation: scripts/wada/derive.py.
+wadaGroundL, wadaAlphaC, wadaBetaC :: Double
+wadaGroundL = 0.6170482164370319
+wadaAlphaC  = -1.3176036044137163
+wadaBetaC   =  0.7469411483195036
+
+groundLab :: Double -> Lab -> Lab
+groundLab cL (l, a, b) =
+  let c2 = a * a + b * b
+      l' = l + (wadaGroundL - cL)
+  in if c2 <= 0 then (l', 0, 0)
+     else let c  = sqrt c2
+              c' = min c (exp (wadaAlphaC + wadaBetaC * log c))
+              s  = c' / c
+          in (l', negate (a * s), negate (b * s))
+
+groundOf :: Double -> RGB8 -> RGB8
+groundOf cL = oklabToSrgb8 . chromaClamp . clampL . groundLab cL . srgb8ToOklab
+
+centroidL :: [RGB8] -> Double
+centroidL tbl = let (l, _, _) = srgb8ToOklab (head tbl) in l
 
 -- ── §4 statistics (copy, incl. DY8 canonDir) ────────────────────
 
@@ -197,7 +217,7 @@ primaries st =
   [ oklabToSrgb8 (chromaClamp (clampL p)) | k <- [0 .. nLevels - 1], p <- shellRaw st k ]
 
 buildDyadFrom :: Stats -> [RGB8]
-buildDyadFrom st = prims ++ map complementOf (reverse prims)
+buildDyadFrom st = prims ++ map (groundOf (centroidL prims)) (reverse prims)
   where prims = primaries st
 
 -- ── deterministic sample sets (copy of the spec's LCG inputs) ───

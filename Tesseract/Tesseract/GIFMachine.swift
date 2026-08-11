@@ -154,7 +154,8 @@ enum GIFMachine {
     /// solver a single-valued function of these, the STATS section
     /// rebuilds every palette byte: the GIF carries its own generator.
     static func dyadTrace(_ dyad: DyadPipeline.Output,
-                          settings: ExportSettings) -> String {
+                          settings: ExportSettings,
+                          frames: [QuantizedFrame] = []) -> String {
         let tables = dyad.tables, stats = dyad.stats, indexFrames = dyad.indexFrames
         var lines = [harmonyTrace(tables: tables)]
         lines.append("DYAD SETTINGS bleed=\(settings.bleed ? 1 : 0) mirror=\(settings.mirror ? 1 : 0)")
@@ -168,36 +169,68 @@ enum GIFMachine {
             dyad.twoPhase ? 2 : 1, m.muF, m.muB, m.piB, m.sigma,
             m.crossover, m.temperature,
             DepthMixture.metersOf(signal: m.crossover), dyad.alpha))
-        lines.append("DYAD STATS v1 frames=\(stats.count)")
-        for s in stats {
+        // v2 (phase-palette step 3, ruling R2): 9 stats numbers plus
+        // the frame's fitted ground moments (deltaL alphaC betaC cap)
+        // — 13 per line. The GIF still carries its full generator.
+        lines.append("DYAD STATS v2 frames=\(stats.count)")
+        for (s, gm) in zip(stats, dyad.groundMoments) {
             let c = s.covariance
             let nums = [s.centroid.l, s.centroid.a, s.centroid.b,
-                        c[0][0], c[0][1], c[0][2], c[1][1], c[1][2], c[2][2]]
-            lines.append(nums.map { "\($0)" }.joined(separator: " "))
+                        c[0][0], c[0][1], c[0][2], c[1][1], c[1][2], c[2][2],
+                        gm.deltaL, gm.alphaC, gm.betaC]
+            lines.append((nums.map { "\($0)" } + [gm.capped ? "1" : "0"])
+                            .joined(separator: " "))
         }
         lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
+        // PHASE F (step 2, measurement only — docs/phase-palette-design.md):
+        // the three reads' distortions, the Haar band energies with the
+        // PP1 identity witness, and the chaos entropy bill Σ log W.
+        // Basis = the emitted (unmirrored) cube against the record
+        // path's rawRGB; absent rawRGB, the line is simply absent.
+        if frames.count == indexFrames.count,
+           frames.allSatisfy({ $0.rawRGB != nil }),
+           let phase = PhaseTelemetry.measure(
+               indexFrames: indexFrames, tables: tables,
+               sourceRGB: frames.map { $0.rawRGB! },
+               side: QuantizedFrame.size) {
+            lines.append(PhaseTelemetry.trace(phase))
+        }
         return lines.joined(separator: "\n")
     }
 
-    /// Inverse of the STATS section: parse 9 doubles per frame and
-    /// re-solve the tables. The provenance law (tested): the rebuilt
-    /// tables byte-equal the LCTs embedded in the same GIF.
+    /// Inverse of the STATS section: parse the per-frame generating
+    /// state and re-solve the tables. v2 lines carry 13 numbers
+    /// (9 stats + deltaL alphaC betaC cap); v1 lines carry 9 and
+    /// rebuild through the prior path — the library's older GIFs
+    /// stay self-reproducing. The provenance law (tested): the
+    /// rebuilt tables byte-equal the LCTs embedded in the same GIF.
     static func rebuildTables(fromTrace trace: String) -> [Data]? {
         let lines = trace.split(separator: "\n", omittingEmptySubsequences: false)
-        guard let header = lines.firstIndex(where: { $0.hasPrefix("DYAD STATS v1") })
+        guard let header = lines.firstIndex(where: {
+            $0.hasPrefix("DYAD STATS v1") || $0.hasPrefix("DYAD STATS v2") })
         else { return nil }
+        let isV2 = lines[header].hasPrefix("DYAD STATS v2")
+        let want = isV2 ? 13 : 9
         var out: [Data] = []
         for line in lines[(header + 1)...] {
             let parts = line.split(separator: " ")
-            guard parts.count == 9 else { break }
+            guard parts.count == want else { break }
             let v = parts.compactMap { Double($0) }
-            guard v.count == 9 else { return nil }
+            guard v.count == want else { return nil }
             let cov = [[v[3], v[4], v[5]],
                        [v[4], v[6], v[7]],
                        [v[5], v[7], v[8]]]
             let stats = DyadPalette.makeStats(
                 centroid: OKLabColor(l: v[0], a: v[1], b: v[2]), covariance: cov)
-            out.append(DyadPalette.gifColorTable(DyadPalette.table(stats: stats)))
+            let table: [(UInt8, UInt8, UInt8)]
+            if isV2 {
+                let gm = DyadPalette.GroundMoments(
+                    deltaL: v[9], alphaC: v[10], betaC: v[11], capped: v[12] != 0)
+                table = DyadPalette.table(stats: stats, moments: gm)
+            } else {
+                table = DyadPalette.table(stats: stats)
+            }
+            out.append(DyadPalette.gifColorTable(table))
         }
         return out.isEmpty ? nil : out
     }
@@ -223,6 +256,7 @@ enum GIFMachine {
             // process() can still decline at runtime (defensive); the
             // chain continues exactly as eligibility would have.
             if let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed,
+                                               chaosLoop: CameraConfig.phaseChaosLoop,
                                                onFrameTable: onFrameTable),
                let data = GIFEncoder.encode(
                    indexFrames: settings.mirror
@@ -231,7 +265,7 @@ enum GIFMachine {
                    side: QuantizedFrame.size,
                    measure: measure, upscale: CameraConfig.exportUpscale,
                    perFrameTables: dyad.tables,
-                   trace: dyadTrace(dyad, settings: settings)) {
+                   trace: dyadTrace(dyad, settings: settings, frames: frames)) {
                 return data
             }
             var fallback = settings

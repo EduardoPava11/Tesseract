@@ -5,7 +5,8 @@
 // Color Table mode. Forked from GIFOutputContractTests, which locks
 // the lattice mode's single-GCT stream; this file locks the DYAD
 // stream: LCT flag 0x87 on every frame, 768 LCT bytes per frame,
-// GCT = frame 0's table, and the involution law T[255−i] = comp(T[i])
+// GCT = frame 0's table, and the Wada ground law
+// T[255−i] = ground(centroidL: L(T[0]), of: T[i])
 // holding byte-exactly inside EVERY embedded table.
 
 import XCTest
@@ -102,15 +103,17 @@ final class DyadGIFContractTests: XCTestCase {
                 let lct = Data(b[(pos + 10)..<(pos + 10 + 768)])
                 XCTAssertEqual(lct, Self.tables[frameIndex], "LCT bytes, frame \(frameIndex)")
 
-                // …and satisfies the involution law internally.
+                // …and satisfies the Wada ground law internally — the
+                // table is self-describing: cL is read from T[0]'s bytes.
                 func entry(_ i: Int) -> (UInt8, UInt8, UInt8) {
                     (lct[lct.startIndex + 3 * i],
                      lct[lct.startIndex + 3 * i + 1],
                      lct[lct.startIndex + 3 * i + 2])
                 }
+                let cL = DyadPalette.oklab(fromSRGB8: entry(0)).l
                 for i in 0..<128 {
-                    XCTAssertTrue(entry(255 - i) == DyadPalette.complement(of: entry(i)),
-                                  "involution broken at frame \(frameIndex), index \(i)")
+                    XCTAssertTrue(entry(255 - i) == DyadPalette.ground(centroidL: cL, of: entry(i)),
+                                  "ground law broken at frame \(frameIndex), index \(i)")
                 }
 
                 frameIndex += 1

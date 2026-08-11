@@ -44,6 +44,11 @@ enum DyadPipeline {
         let twoPhase: Bool
         /// Derived EMA gain (R2) actually used for the warm start.
         let alpha: Double
+        /// The per-frame ground-law parameters (phase-palette step 3,
+        /// ruling R2): scene-fit on two-phase captures, the Wada
+        /// dictionary prior on single-phase. Together with `stats`
+        /// these regenerate every table byte (DYAD STATS v2).
+        let groundMoments: [DyadPalette.GroundMoments]
     }
 
     /// Standard Bayer 4×4 thresholds, normalized to the midpoints
@@ -103,7 +108,11 @@ enum DyadPipeline {
     /// `onFrameTable` (palette-creation visibility, 2026-08-10): called
     /// once per frame as its warm-started table is solved, BEFORE
     /// assignment — the UI shows the palette being created.
+    /// `chaosLoop` (ruling R3, flag-gated, default OFF): after the
+    /// band post-pass, fully-far blocks are rearranged by the ANE
+    /// exchange loop (descent on F; face/band bytes untouched).
     static func process(frames: [QuantizedFrame], bleed: Bool = true,
+                        chaosLoop: Bool = false,
                         onFrameTable: ((Int, Data) -> Void)? = nil) -> Output? {
         guard !frames.isEmpty,
               frames.allSatisfy({ $0.rawRGB != nil }) else { return nil }
@@ -160,6 +169,7 @@ enum DyadPipeline {
         // pixels on the σ side because t > every threshold.
         var tables: [Data] = []
         var frameStats: [DyadPalette.Stats] = []
+        var frameMoments: [DyadPalette.GroundMoments] = []
         var labPrimaries: [[OKLabColor]] = []
         var labs: [[OKLabColor]] = []
         var masks: [[Bool]] = []
@@ -168,32 +178,53 @@ enum DyadPipeline {
         tables.reserveCapacity(frames.count)
 
         var smoothed: DyadPalette.Stats?
+        // Ground-law state (ruling R2): the background's (mean L,
+        // mean lnC, sd lnC) triple, EMA'd with the SAME derived gain
+        // as the stats — one smoothing law for all generating state.
+        // Frames without background mass carry the smoothed triple;
+        // before any exists (or single-phase), the Wada prior rules.
+        var smoothedBg: (meanL: Double, meanLnC: Double, sdLnC: Double)?
         for (f, raw) in rawStats.enumerated() {
             let warm = smoothed.map { DyadPalette.ema(alpha: alpha, raw, $0) } ?? raw
             smoothed = warm
 
-            let table = DyadPalette.table(stats: warm)
+            let stagedLabs = stagedAll[f].map { DyadPalette.oklab(fromSRGB8: $0) }
+            if twoPhase,
+               let rb = DyadPalette.backgroundMoments(labs: stagedLabs,
+                                                      weights: tsAll[f]) {
+                smoothedBg = smoothedBg.map { prev in
+                    ( alpha * rb.meanL + (1 - alpha) * prev.meanL
+                    , alpha * rb.meanLnC + (1 - alpha) * prev.meanLnC
+                    , alpha * rb.sdLnC + (1 - alpha) * prev.sdLnC )
+                } ?? rb
+            }
+
+            let prims8 = DyadPalette.primaries(stats: warm)
+            let prims = prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
+            let cL = DyadPalette.centroidL(prims8)
+            let gm = smoothedBg.map {
+                DyadPalette.groundMoments(centroidL: cL, primsLab: prims,
+                                          background: $0)
+            } ?? DyadPalette.priorMoments(centroidL: cL)
+            frameMoments.append(gm)
+
+            let table = DyadPalette.table(stats: warm, moments: gm)
             tables.append(DyadPalette.gifColorTable(table))
             onFrameTable?(f, tables[f])
             frameStats.append(warm)
-            let prims = (0..<DyadPalette.primaryCount).map {
-                DyadPalette.oklab(fromSRGB8: table[$0])
-            }
             labPrimaries.append(prims)
 
-            var frameLabs = [OKLabColor]()
             var frameMask = [Bool]()
             var frameFar = [Bool]()
             var framePull = [Float]()
-            frameLabs.reserveCapacity(stagedAll[f].count)
-            for (p, rgb) in stagedAll[f].enumerated() {
+            frameMask.reserveCapacity(stagedAll[f].count)
+            for p in 0..<stagedAll[f].count {
                 let t = tsAll[f][p]
                 frameMask.append(t < coverageFloor)   // solid-face side
                 frameFar.append(false)                 // v5: no short-circuit
                 framePull.append(Float(t))
-                frameLabs.append(DyadPalette.oklab(fromSRGB8: rgb))  // ŷ
             }
-            labs.append(frameLabs)
+            labs.append(stagedLabs)                    // ŷ, converted once
             masks.append(frameMask)
             fars.append(frameFar)
             pulls.append(framePull)
@@ -218,20 +249,31 @@ enum DyadPipeline {
             }
         }
 
+        // ── Chaos post-pass (R3, flag-gated): fully-far blocks only,
+        // descent on F; the shipped v4 far law is the flag-off path.
+        func chaosRefine(_ dithered: [[UInt8]]) -> [[UInt8]] {
+            guard chaosLoop, twoPhase else { return dithered }
+            return ANELoop.refineFarBlocks(
+                indexFrames: dithered, labs: labs, pulls: pulls,
+                tables: tables, coverageCeil: coverageCeil)
+        }
+
         // ── Stage 2: assignment — ANE whole-capture, CPU otherwise ──
         if let ane = DyadANE.assign(labs: labs, primaries: labPrimaries,
                                     masks: masks, fars: fars) {
-            return Output(indexFrames: pairDither(ane), tables: tables,
+            return Output(indexFrames: chaosRefine(pairDither(ane)), tables: tables,
                           stats: frameStats, mixture: mixture,
-                          twoPhase: twoPhase, alpha: alpha)
+                          twoPhase: twoPhase, alpha: alpha,
+                          groundMoments: frameMoments)
         }
         let cpu = (0..<frames.count).map { f in
             assignRoles(labs: labs[f], mask: masks[f], far: fars[f],
                         labPrimaries: labPrimaries[f])
         }
-        return Output(indexFrames: pairDither(cpu), tables: tables,
+        return Output(indexFrames: chaosRefine(pairDither(cpu)), tables: tables,
                       stats: frameStats, mixture: mixture,
-                      twoPhase: twoPhase, alpha: alpha)
+                      twoPhase: twoPhase, alpha: alpha,
+                      groundMoments: frameMoments)
     }
 
     /// Exact CPU assignment on staged labs: face → nearest primary

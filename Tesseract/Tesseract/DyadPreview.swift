@@ -48,6 +48,9 @@ final class DyadPreview {
     private var cFStage = OKLabColor(l: 0.5, a: 0, b: 0)
     private var history: [[Double]] = []          // staged stat 9-vectors, ≤ 16
     private var smoothed: DyadPalette.Stats?
+    // Ground-law state (step 3, R2): the background moment triple,
+    // EMA'd like the stats; nil until background evidence exists.
+    private var smoothedBg: (meanL: Double, meanLnC: Double, sdLnC: Double)?
     private(set) var table: [(UInt8, UInt8, UInt8)] = []
     private var prims: [OKLabColor] = []
 
@@ -109,10 +112,30 @@ final class DyadPreview {
         let alpha = DepthMixture.localLevelAlpha(history)
         let warm = smoothed.map { DyadPalette.ema(alpha: alpha, raw, $0) } ?? raw
         smoothed = warm
-        table = DyadPalette.table(stats: warm)
-        prims = (0..<DyadPalette.primaryCount).map {
-            DyadPalette.oklab(fromSRGB8: table[$0])
+
+        // Ground law (step 3, ruling R2) — preview through the export
+        // fit: background moments on the staged labs with σ weights,
+        // EMA'd with the same gain; prior until evidence exists.
+        let prims8 = DyadPalette.primaries(stats: warm)
+        let cL = DyadPalette.centroidL(prims8)
+        let primsLab = prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
+        if twoPhase {
+            let ts = depths.map { fit.pull(Double($0)) }
+            let stagedLabs = staged.map { DyadPalette.oklab(fromSRGB8: $0) }
+            if let rb = DyadPalette.backgroundMoments(labs: stagedLabs, weights: ts) {
+                smoothedBg = smoothedBg.map { prev in
+                    ( alpha * rb.meanL + (1 - alpha) * prev.meanL
+                    , alpha * rb.meanLnC + (1 - alpha) * prev.meanLnC
+                    , alpha * rb.sdLnC + (1 - alpha) * prev.sdLnC )
+                } ?? rb
+            }
         }
+        let gm = smoothedBg.map {
+            DyadPalette.groundMoments(centroidL: cL, primsLab: primsLab,
+                                      background: $0)
+        } ?? DyadPalette.priorMoments(centroidL: cL)
+        table = DyadPalette.table(stats: warm, moments: gm)
+        prims = primsLab
     }
 
     // MARK: - The 20 Hz assignment (CPU reference; GPU twin in Metal)

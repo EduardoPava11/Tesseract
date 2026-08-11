@@ -23,7 +23,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/CentroidRefine.hs \
                quantization/DyadPalette.hs \
                quantization/PairPermutations.hs \
-               quantization/SpectralPalette.hs
+               quantization/SpectralPalette.hs \
+               quantization/PhasePalette.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -53,7 +54,8 @@ STATISTICS = statistics/BinomialCube.hs \
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
 NEURAL = neural/BayerResidual.hs \
-         neural/MapElites.hs
+         neural/MapElites.hs \
+         neural/ANELoop.hs
 
 UI = ui/CellMechanics.hs
 

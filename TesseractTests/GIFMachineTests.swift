@@ -243,7 +243,7 @@ final class GIFMachineTests: XCTestCase {
             }
         }
 
-        let trace = try XCTUnwrap(comments.first(where: { $0.contains("DYAD STATS v1") }),
+        let trace = try XCTUnwrap(comments.first(where: { $0.contains("DYAD STATS v2") }),
                                   "the provenance comment must be in the stream")
         XCTAssertTrue(trace.contains("DYAD HARMONY"), "harmony rides the same comment")
         XCTAssertTrue(trace.contains("DYAD SETTINGS bleed=1 mirror=0"))
