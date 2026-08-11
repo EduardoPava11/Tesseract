@@ -170,4 +170,30 @@ enum DepthMixture {
         let x = (lam + (lam * lam + 4 * lam).squareRoot()) / 2
         return x / (x + 1)
     }
+
+    // MARK: - The mixture local-level law (MS, ruled 2026-08-11)
+
+    /// Per-frame fits filtered by the derived local-level gain —
+    /// ruling R2's own law applied to the mixture state
+    /// θ = (μF, μB, logit πB, log σ). Drift is followed (α → 1),
+    /// flicker is frozen (α → 0); the domain transform keeps every
+    /// filtered state a valid mixture, and μF > μB survives by
+    /// convexity. Spec: temporal/MixtureStability.hs MS1–MS7.
+    static func filtered(_ fits: [Fit]) -> (fits: [Fit], gain: Double) {
+        guard fits.count > 1 else { return (fits, 1) }
+        func state(_ f: Fit) -> [Double] {
+            [f.muF, f.muB, log(f.piB / (1 - f.piB)), log(f.sigma)]
+        }
+        let states = fits.map(state)
+        let a = localLevelAlpha(states)
+        var out: [Fit] = [fits[0]]
+        var prev = states[0]
+        for cur in states.dropFirst() {
+            prev = zip(prev, cur).map { $0 + a * ($1 - $0) }
+            out.append(Fit(muF: prev[0], muB: prev[1],
+                           piB: 1 / (1 + exp(-prev[2])),
+                           sigma: exp(prev[3])))
+        }
+        return (out, a)
+    }
 }

@@ -3,8 +3,8 @@
 //
 // DYAD-256 export path: per-frame depth-masked OKLab statistics →
 // EMA warm start → paired 256-entry table per frame → role-law
-// index assignment under THE AERIAL MIRROR LAW (spec §6c v5,
-// comp-halo default pending ruling R4): every pixel is γ-staged
+// index assignment under THE AERIAL MIRROR LAW (spec §5 v6,
+// ★R4 RULED faithful-hue 2026-08-11): every pixel is γ-staged
 // ŷ = c_F + γ(s)·(y − c_F) with γ(s) = 1/(2−s) — the chroma octave
 // that pays for the temporal octave (σ(s)·γ(s) = σ_base) — then ONE
 // search gives q and the posterior t routes coverage between q and
@@ -44,6 +44,8 @@ enum DyadPipeline {
         let twoPhase: Bool
         /// Derived EMA gain (R2) actually used for the warm start.
         let alpha: Double
+        /// Derived MS gain: the mixture local-level filter's α.
+        let msGain: Double
         /// The per-frame ground-law parameters (phase-palette step 3,
         /// ruling R2): scene-fit on two-phase captures, the Wada
         /// dictionary prior on single-phase. Together with `stats`
@@ -94,9 +96,9 @@ enum DyadPipeline {
     /// returns nil otherwise so callers keep the lattice output.
     ///
     /// Stages, split on the law boundary (ExportMethods XP1–XP2):
-    /// stage 0 solves the role law (one pooled mixture fit per
-    /// capture — the crossover must not flicker across frames, the
-    /// DepthSignal fixed-map rationale); stage 1 (CPU, exact) solves
+    /// stage 0 solves the role law (pooled fit for R3/provenance +
+    /// per-frame fits filtered by the MS local-level law — drift
+    /// followed, flicker frozen); stage 1 (CPU, exact) solves
     /// statistics → derived-α EMA → tables; stage 2 (assignment) runs
     /// on the ANE in one dispatch for full 64-frame captures, and
     /// falls back to the identical CPU search otherwise — near-tie
@@ -122,11 +124,23 @@ enum DyadPipeline {
         let mixture = DepthMixture.fit(pooled)
         let twoPhase = DepthMixture.isTwoPhase(pooled, fit: mixture)
 
-        // Coverage of the σ side per pixel. Single-phase ⇒ all-face
-        // (R3). Bleed off ⇒ v1: MAP classes, no band.
-        func coverage(_ d: Float) -> Double {
+        // ★MS — the mixture local-level law (spec MixtureStability.hs
+        // MS1–MS7, ruled 2026-08-11 on the first 17 Pro export): the
+        // pooled crossover froze while the per-frame depth signal
+        // drifted, and the σ class died mid-loop (φ 0.34 → 0.00 at
+        // frame ~45). Per-frame fits follow drift by construction;
+        // the derived gain (R2's law on the mixture state) freezes
+        // flicker. R3's capture-level two-phase decision and the
+        // pooled provenance fit are unchanged.
+        let (msFits, msGain) = DepthMixture.filtered(
+            frames.map { DepthMixture.fit($0.depths.map { Double($0) }) })
+
+        // Coverage of the σ side per pixel, from the FILTERED
+        // per-frame state. Single-phase ⇒ all-face (R3). Bleed off
+        // ⇒ v1: MAP classes, no band.
+        func coverage(_ d: Float, _ f: Int) -> Double {
             guard twoPhase else { return 0 }
-            let t = mixture.pull(Double(d))
+            let t = msFits[f].pull(Double(d))
             return bleed ? t : (t < 0.5 ? 0 : 1)
         }
 
@@ -141,9 +155,9 @@ enum DyadPipeline {
         var tsAll: [[Double]] = []
         var rawStats: [DyadPalette.Stats] = []
         stagedAll.reserveCapacity(frames.count)
-        for frame in frames {
+        for (fi, frame) in frames.enumerated() {
             let samples = frame.rawRGB!.map { srgb8(from: $0) }
-            let ts = frame.depths.map { coverage($0) }
+            let ts = frame.depths.map { coverage($0, fi) }
             let weights = ts.map { 1 - $0 }
             let cF = DyadPalette.analyze(samples, weights: weights).centroid
             let staged = zip(samples, frame.depths).map { rgb, d in
@@ -277,7 +291,7 @@ enum DyadPipeline {
             return Output(indexFrames: chaosRefine(pairDither(ane)), tables: tables,
                           stats: frameStats, mixture: mixture,
                           twoPhase: twoPhase, alpha: alpha,
-                          groundMoments: frameMoments)
+                          msGain: msGain, groundMoments: frameMoments)
         }
         let cpu = (0..<frames.count).map { f in
             assignRoles(labs: labs[f], mask: masks[f], far: fars[f],
@@ -286,7 +300,7 @@ enum DyadPipeline {
         return Output(indexFrames: chaosRefine(pairDither(cpu)), tables: tables,
                       stats: frameStats, mixture: mixture,
                       twoPhase: twoPhase, alpha: alpha,
-                      groundMoments: frameMoments)
+                      msGain: msGain, groundMoments: frameMoments)
     }
 
     /// Exact CPU assignment on staged labs: face → nearest primary

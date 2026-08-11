@@ -35,7 +35,8 @@ TEMPORAL = temporal/ContinuousDepthCadence.hs \
            temporal/FaceCadence.hs \
            temporal/DepthBinomial.hs \
            temporal/TemporalBinomial.hs \
-           temporal/TemporalLoop.hs
+           temporal/TemporalLoop.hs \
+           temporal/MixtureStability.hs
 
 SPATIAL = spatial/TesseractGo.hs
 

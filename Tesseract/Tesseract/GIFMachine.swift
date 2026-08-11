@@ -165,10 +165,11 @@ enum GIFMachine {
         let m = dyad.mixture
         lines.append(String(
             format: "DYAD MIXTURE phases=%d muF=%.6g muB=%.6g piB=%.6g sigma=%.6g "
-                  + "sStar=%.6g tau=%.6g mStar=%.4gm alpha=%.6g",
+                  + "sStar=%.6g tau=%.6g mStar=%.4gm alpha=%.6g msAlpha=%.6g",
             dyad.twoPhase ? 2 : 1, m.muF, m.muB, m.piB, m.sigma,
             m.crossover, m.temperature,
-            DepthMixture.metersOf(signal: m.crossover), dyad.alpha))
+            DepthMixture.metersOf(signal: m.crossover), dyad.alpha,
+            dyad.msGain))
         // v2 (phase-palette step 3, ruling R2): 9 stats numbers plus
         // the frame's fitted ground moments (deltaL alphaC betaC cap)
         // — 13 per line. The GIF still carries its full generator.
