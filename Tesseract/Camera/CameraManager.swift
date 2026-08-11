@@ -95,9 +95,11 @@ enum CameraConfig {
     // ★SK GENES (docs/sk-gene-calculus-2026-08-11.md §14, placement
     // ruling 2026-08-11): the grounded gene machine — measurement
     // only, one "SK GENES v1" provenance line in the GIF comment;
-    // no image byte depends on it. Internal flag by design (no
+    // no image byte depends on it. DEFAULT ON like the other
+    // measurement channels (TriScale, Dissonance): comment bytes
+    // are provenance, not look. Internal flag by design (no
     // settings-cover surface without a ruling; simplicity decree).
-    static let skGenes = false
+    static let skGenes = true
 }
 
 @MainActor

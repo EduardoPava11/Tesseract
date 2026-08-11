@@ -212,12 +212,26 @@ def sk_codec(x0, lev, palette):
         return mb.add(x=mu, y=mb.exp(x=logs))
 
     def mask(v):
-        # DIFFERENCE form: a codeword's row is exactly zero in fp16
+        # DIFFERENCE form: a codeword's row is exactly zero in fp16.
+        # The min over 256 entries is a PAIRWISE-MINIMUM TREE, not
+        # reduce_min: the A19 ANE lowers reduce_min to batched TopK
+        # whose DHNW product (4096×128) exceeds the 65,536 limit
+        # (device log 2026-08-11: ANECCompile FAILED). Eight rounds
+        # of elementwise minimum are ANE-legal and exactness-
+        # preserving — a codeword's exact 0 survives every round.
         vx = mb.expand_dims(x=v, axes=[1])               # [B,1,3]
         diff = mb.sub(x=vx, y=pal)                       # [B,256,3]
         d2f = mb.reduce_sum(x=mb.mul(x=diff, y=diff), axes=[-1],
                             keep_dims=False)             # [B,256]
-        return mb.reduce_min(x=d2f, axes=[-1], keep_dims=True)  # [B,1]
+        cur, width = d2f, 256
+        while width > 1:
+            half = width // 2
+            a = mb.slice_by_index(x=cur, begin=[0, 0], end=[B, half])
+            b_ = mb.slice_by_index(x=cur, begin=[0, half],
+                                   end=[B, width])
+            cur = mb.minimum(x=a, y=b_)
+            width = half
+        return cur                                       # [B,1]
 
     nodes = [(x0, mb.mul(x=x0, y=np.float32(0.0)))]      # (value, ctx)
     for _ in range(3):
