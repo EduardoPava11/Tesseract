@@ -18,7 +18,8 @@
 //           SOLID / BAND / FACE (PE11).
 //
 // Pure; computable from an index frame and a table alone. No capture
-// dependencies. The phase-diagram sweep lives in nn/phase/sweep.py.
+// dependencies. (The phase-diagram sweep tool was retired in the
+// 2026-08-11 unification; git history has nn/phase/sweep.py.)
 
 import Foundation
 

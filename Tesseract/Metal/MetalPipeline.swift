@@ -337,7 +337,7 @@ final class MetalPipeline {
     // MARK: - Texture Readback (for CPU perfect pass)
 
     /// Read back the downsampled 64×64 RGB texture after GPU processing.
-    /// Call only after processFrame() succeeds (textures are filled).
+    /// Call only after a downsample pass succeeds (textures are filled).
     func readbackRGB() -> [(Float, Float, Float)]? {
         guard let tex = rgb64Texture else { return nil }
         let size = CameraConfig.outputSize  // 64

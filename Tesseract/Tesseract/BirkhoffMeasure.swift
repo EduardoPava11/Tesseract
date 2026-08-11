@@ -89,25 +89,3 @@ struct BirkhoffMeasure {
 }
 
 // MARK: - Frame Deviation (per-color breakdown)
-
-/// Per-frame deviation analysis
-struct FrameDeviation {
-    let frame: Int
-    let counts: [Int]  // 256 entries
-    let measure: BirkhoffMeasure
-
-    /// Per-color deviations: (paletteIndex, count, delta)
-    var topDeviations: [(index: Int, count: Int, delta: Float)] {
-        let expected = Float(4096) / 256.0
-        return counts.enumerated()
-            .map { (index: $0.offset, count: $0.element, delta: Float($0.element) - expected) }
-            .sorted { abs($0.delta) > abs($1.delta) }
-    }
-
-    /// Zero-sum axiom: Σ δ_i = 0
-    var zeroSumHolds: Bool {
-        let total = counts.reduce(0, +)
-        let expectedTotal = Int(BirkhoffMeasure.binomialExpected) * 256
-        return total == expectedTotal || total == 4096
-    }
-}

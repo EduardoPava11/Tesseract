@@ -158,12 +158,10 @@ func evaluateBoard(_ board: GoBoard) -> BoardEval {
                      libertyWhite: libW, complexity: cmplx)
 }
 
-/// Full evaluation of all 3 boards in a block.
-/// Memory: 3 × 80 + 16 = 256 bytes.
+/// Block evaluation: only the two consumed reads survive the
+/// 2026-08-11 unification (the per-board BoardEval triple was
+/// carried but never read — git history keeps it).
 struct BlockEval {
-    let rg: BoardEval
-    let gb: BoardEval
-    let br: BoardEval
     let complexity: Float     // average of 3 boards
     let ditherBudget: Int     // total liberties across all boards
 }
@@ -176,8 +174,7 @@ func evaluateBlock(_ boards: GoBoards) -> BlockEval {
     let totalLibs = eRG.libertyBlack + eRG.libertyWhite
                   + eGB.libertyBlack + eGB.libertyWhite
                   + eBR.libertyBlack + eBR.libertyWhite
-    return BlockEval(rg: eRG, gb: eGB, br: eBR,
-                     complexity: avgCmplx, ditherBudget: totalLibs)
+    return BlockEval(complexity: avgCmplx, ditherBudget: totalLibs)
 }
 
 // needsNNEval removed — KataGo deprecated.

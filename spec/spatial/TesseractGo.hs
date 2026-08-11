@@ -16,7 +16,8 @@
 --   - A Go board (361 intersections with territory/influence)
 --
 -- Three boards per block capture all pairwise channel relationships.
--- KataGo-style evaluation gives: territory, influence, boundaries.
+-- Go-style evaluation gives: territory, influence, boundaries
+-- (KataGo itself deprecated 2026-04-15; GoBoard.swift is the port).
 -- These inform WHICH pixels to dither and HOW.
 -- ════════════════════════════════════════════════════════════════
 
@@ -225,7 +226,7 @@ evaluateBlock (ColorBoards rg gb br) =
 -- Three boards (R/G, G/B, B/R) = complete pairwise decomposition
 -- of the 3D sRGB cube into 2D slices.
 --
--- KataGo NN could evaluate these positions, but simpler territory
+-- A Go NN could evaluate these positions, but simpler territory
 -- analysis already gives us what we need for quantization.
 -- ════════════════════════════════════════════════════════════════
 

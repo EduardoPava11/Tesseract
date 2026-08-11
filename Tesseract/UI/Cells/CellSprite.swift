@@ -138,15 +138,6 @@ extension CellIcon {
         }
     }
 
-    /// The contact-sheet glyph: a 3×3 grid of square dots (the elite map).
-    static func grid3x3(box: Int = 12, ink: SIMD3<UInt8> = Ink.ink,
-                        cellPt: CGFloat = Lattice.pt(1)) -> CellIcon {
-        CellIcon(box: box, ink: ink, cellPt: cellPt) { c, r, _, _ in
-            func band(_ v: Int) -> Bool { let m = v % 4; return (m == 1 || m == 2) && v >= 1 && v <= box - 2 }
-            return band(c) && band(r)
-        }
-    }
-
     /// The Retake glyph: a near-closed circular arrow with a head.
     static func retake(box: Int = 12, ink: SIMD3<UInt8> = Ink.ink,
                        cellPt: CGFloat = Lattice.pt(1)) -> CellIcon {
@@ -168,14 +159,4 @@ extension CellIcon {
         }
     }
 
-    /// The warning glyph: a filled upward triangle.
-    static func warn(box: Int = 12, ink: SIMD3<UInt8> = Ink.ink,
-                     cellPt: CGFloat = Lattice.pt(1)) -> CellIcon {
-        CellIcon(box: box, ink: ink, cellPt: cellPt) { c, r, cx, _ in
-            guard r >= 1 && r <= box - 2 else { return false }
-            let t = Double(r - 1) / Double(box - 3)
-            let halfW = t * (Double(box) / 2 - 1)
-            return abs(Double(c) + 0.5 - cx) <= halfW
-        }
-    }
 }

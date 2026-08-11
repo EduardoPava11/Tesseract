@@ -23,9 +23,11 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (36 files green
-  as of 2026-08-10, incl. temporal/DepthMixture.hs newly enrolled; the
-  tally must stay at zero failures).
+- `spec/` — runghc axiom suite: `cd spec && make test` (41 files green
+  as of 2026-08-11 post-unification; the tally must stay at zero
+  failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+  MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
+  keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
 - The app is a 64³ GIF MACHINE (spec/output/ExportMethods.hs): every
   export is 64 frames of 64×64 indices; METHODS (tesseract | refined |
@@ -217,7 +219,7 @@ widened. SECOND PASS same day: the whole TypeRows registry grew
   is load-bearing.
 - Camera code is COMPILE-ONLY off-device (simulator has no camera). Pure
   logic suites run on simulator: FaceMeshSignal, GIFUpscale,
-  GIFOutputContract, WassersteinCoordinates.
+  GIFOutputContract, MixtureStability, SKGene.
 - Submission (2026-08-10): PrivacyInfo.xcprivacy declares the
   required-reason APIs (UserDefaults → CA92.1; the only covered API in
   use) — ITMS-91053 closed. TrueDepth has NO capability key: the

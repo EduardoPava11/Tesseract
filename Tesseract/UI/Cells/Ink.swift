@@ -17,15 +17,12 @@ enum Ink {
     /// Selection accent (borders of selected cells, slider knobs).
     static let accent = SIMD3<UInt8>(96, 165, 250)
 
-    /// Channel tints for the R/G/B/D preview thumbs (opaque, no `.opacity`).
+    /// Channel tints (opaque, no `.opacity`) — now serving the Go
+    /// board rendering in ProcessingStateView.
     static let chanR = SIMD3<UInt8>(220, 60, 60)
     static let chanG = SIMD3<UInt8>(70, 200, 90)
     static let chanB = SIMD3<UInt8>(96, 165, 250)
-    static let chanD = SIMD3<UInt8>(235, 235, 235)
 
-    /// Gene tints in dual explore (was `.cyan` / `.orange` with opacity).
-    static let tintA = SIMD3<UInt8>(80, 200, 220)
-    static let tintB = SIMD3<UInt8>(235, 160, 60)
 
     /// The 1pt frame around content grids (pixelFrame): opaque, never alpha.
     static let frameStroke = ledGhost

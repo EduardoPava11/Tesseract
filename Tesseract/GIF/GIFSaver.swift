@@ -47,7 +47,7 @@ enum GIFSaver {
 
         guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let root = scene.keyWindow?.rootViewController else { return }
-        // Present on top of whatever is frontmost (e.g. the elite map cover).
+        // Present on top of whatever is frontmost.
         var top = root
         while let presented = top.presentedViewController { top = presented }
         top.present(controller, animated: true)

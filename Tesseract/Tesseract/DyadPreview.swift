@@ -196,14 +196,4 @@ final class DyadPreview {
             twoPhase: twoPhase)
     }
 
-    /// Fresh capture, fresh state.
-    func reset() {
-        counter = 0
-        mixture = nil
-        twoPhase = false
-        history.removeAll()
-        smoothed = nil
-        table = []
-        prims = []
-    }
 }

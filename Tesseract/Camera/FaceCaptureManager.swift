@@ -182,7 +182,6 @@ final class FaceCaptureManager: NSObject, ObservableObject {
                 index: frameIdx,
                 rgb: rgb,
                 depths: signalGrid,
-                blockEvals: nil,
                 timestamp: timestamp
             )
             if let count = frameBuffer.addCapturedFrame(captured) {

@@ -39,7 +39,7 @@ enum CameraState: Equatable {
 }
 
 /// Two cubes: Training 64³, Inference 128³. S = K (cube invariant).
-/// From spec/algebra/Block.hs — verified by 14 axioms.
+/// Verified by LevelTests (spec retired in the 2026-08-11 unification).
 enum CubeMode: Int, CaseIterable {
     case training  = 64   // 64×64×64    (S=K=64,  step=12, native=Coarse)
     case inference = 128  // 128×128×128 (S=K=128, step=6,  native=Medium)
@@ -67,8 +67,9 @@ enum CameraConfig {
     // allocates its textures once at 64 with no reallocation path, so
     // flipping to .inference dispatched 128-sized grids into 64-sized
     // textures and killed the app on device (2026-08-03). The two-cube
-    // algebra (Block.hs, LevelTests) stays verified; revisit 128³ only
-    // with a full pipeline reallocation design.
+    // algebra stays verified by LevelTests (its Block.hs spec retired
+    // in the 2026-08-11 unification — git history keeps it); revisit
+    // 128³ only with a full pipeline reallocation design.
     static let mode: CubeMode = .training
     static var outputSize: Int { mode.spatialSide }
     static var totalFrames: Int { mode.frameCount }
@@ -148,7 +149,6 @@ final class CameraManager: NSObject, ObservableObject {
     /// Preview/export unification v1: the DYAD preview engine. Touched
     /// ONLY on processingQueue (serial) — no locking.
     nonisolated(unsafe) private let dyadPreview = DyadPreview()
-    // GoEvaluator removed — territory analysis in GoBoard.swift is sufficient
     nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
@@ -431,7 +431,6 @@ final class CameraManager: NSObject, ObservableObject {
                         index: frameIdx,
                         rgb: result.rgb,
                         depths: result.depth,
-                        blockEvals: nil,  // computed during processing phase
                         timestamp: now
                     )
                     let count = frameBuffer.addCapturedFrame(captured)
@@ -510,7 +509,6 @@ final class CameraManager: NSObject, ObservableObject {
         if frameBuffer.frameCount < CameraConfig.totalFrames {
             let captured = CapturedFrame(
                 index: frameIdx, rgb: pixels, depths: depths,
-                blockEvals: nil,
                 timestamp: timestamp
             )
             let count = frameBuffer.addCapturedFrame(captured)
@@ -783,62 +781,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Full-Resolution Block Analysis
 
-    /// Read step×step blocks from the FULL CVPixelBuffer and compute Go analysis per block.
-    /// Uses universal 768 crop centered in whatever the sensor gives.
-    /// Returns outputSize² BlockEvals — one per output pixel position.
-    nonisolated func analyzeBlocks(rgbBuffer: CVPixelBuffer) -> [BlockEval] {
-        let rgbW = CVPixelBufferGetWidth(rgbBuffer)
-        let rgbH = CVPixelBufferGetHeight(rgbBuffer)
-        let outSize = CameraConfig.outputSize
-        let cropSize = CameraConfig.rgbCrop  // 768, forced
-        let cropX = (rgbW - cropSize) / 2
-        let cropY = (rgbH - cropSize) / 2
-        let step = CameraConfig.rgbStep     // 768 / outSize, integer
-
-        CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(rgbBuffer, .readOnly) }
-
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(rgbBuffer)
-        guard let baseAddr = CVPixelBufferGetBaseAddress(rgbBuffer) else {
-            return []
-        }
-        let buffer = baseAddr.assumingMemoryBound(to: UInt8.self)
-
-        var evals = [BlockEval]()
-        evals.reserveCapacity(outSize * outSize)
-
-        for by in 0..<outSize {
-            for bx in 0..<outSize {
-                // Read step×step pixels from this block (with 90° CCW rotation)
-                var blockPixels = [(Float, Float, Float)]()
-                blockPixels.reserveCapacity(step * step)
-
-                for dy in 0..<step {
-                    for dx in 0..<step {
-                        // Same rotation as downsample kernel: output (x,y) → source (y, 63-x)
-                        let srcX = cropX + by * step + dy
-                        let srcY = cropY + (outSize - 1 - bx) * step + dx
-                        guard srcX < rgbW && srcY < rgbH else {
-                            blockPixels.append((0, 0, 0))
-                            continue
-                        }
-                        let off = srcY * bytesPerRow + srcX * 4
-                        let b = Float(buffer[off]) / 255.0
-                        let g = Float(buffer[off + 1]) / 255.0
-                        let r = Float(buffer[off + 2]) / 255.0
-                        blockPixels.append((r, g, b))
-                    }
-                }
-
-                // Compute 3 Go boards from block pixels → evaluate
-                let boards = blockToGoBoards(pixels: blockPixels)
-                let eval = evaluateBlock(boards)
-                evals.append(eval)
-            }
-        }
-
-        return evals
-    }
 }
 
 // MARK: - AVCaptureDataOutputSynchronizerDelegate

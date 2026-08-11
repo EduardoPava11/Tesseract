@@ -28,28 +28,6 @@ struct PerfectQuantizer {
 
     // MARK: - Global Quantize (capture-then-compute)
 
-    /// Process ALL captured frames globally → QuantizedFrames for GIF.
-    /// This is the main entry point after capture completes.
-    static func quantizeGlobal(frames: [CapturedFrame]) -> [QuantizedFrame] {
-        return frames.map { frame in
-            let indices = quantizeFrame(
-                frameIndex: frame.index,
-                rgb: frame.rgb,
-                depths: frame.depths
-            )
-            return QuantizedFrame(
-                index: frame.index,
-                paletteIndices: indices,
-                rawRGB: frame.rgb,
-                depths: frame.depths,
-                measure: BirkhoffMeasure(paletteIndices: indices),
-                subjectAnalysis: analyzeSubject(depths: frame.depths),
-                anchorTrace: findAnchors(indices: indices),
-                timestamp: frame.timestamp
-            )
-        }
-    }
-
     // MARK: - Per-Frame Quantization
 
     /// Quantize one frame using histogram-based bin assignment + epoch threading.

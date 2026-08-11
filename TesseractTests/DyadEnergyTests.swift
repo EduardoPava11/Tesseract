@@ -83,10 +83,24 @@ final class DyadEnergyTests: XCTestCase {
         }
         let stats = DyadPalette.analyze(samples)
         let closed = DyadEnergy.palette(stats: stats)
-        let table = DyadEnergy.palette(table: DyadPalette.table(stats: stats))
+        // PE1's closed form models the PURE comp mirror. Since the
+        // v5-W Wada ground law, `table(stats:)` mutes the σ half —
+        // a third loss the old assertion never accounted for (latent
+        // failure, repaired in the 2026-08-11 unification). Test the
+        // closed form against the IDENTITY ground (ΔL=0, αC=0, βC=1
+        // ⇒ ground = comp exactly), and assert the shipped ground
+        // only REMOVES energy (muting is one-directional).
+        let identity = DyadPalette.GroundMoments(deltaL: 0, alphaC: 0,
+                                                 betaC: 1, capped: false)
+        let mirror = DyadEnergy.palette(
+            table: DyadPalette.table(stats: stats, moments: identity))
         XCTAssertGreaterThan(closed, 0)
-        XCTAssertEqual(table, closed, accuracy: 0.25 * closed + 0.02,
-                       "table energy tracks the closed form (quantization + clamp)")
+        XCTAssertEqual(mirror, closed, accuracy: 0.25 * closed + 0.02,
+                       "mirror-table energy tracks the closed form "
+                       + "(quantization + clamp)")
+        let grounded = DyadEnergy.palette(table: DyadPalette.table(stats: stats))
+        XCTAssertLessThanOrEqual(grounded, mirror + 1e-9,
+                                 "the Wada ground only removes palette energy")
     }
 
     // PE13: the trace section round-trips and is recomputable.

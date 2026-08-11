@@ -79,11 +79,6 @@ func valueToBin(_ v: Float) -> Int {
     min(13, max(0, Int(v * 14.0)))
 }
 
-/// Bin center value [0,1].
-func binCenterValue(_ bin: Int) -> Float {
-    (Float(bin) + 0.5) / 14.0
-}
-
 // ════════════════════════════════════════════════════════════════
 // § 3. COMPOSED COLOR: Product of 3 orthogonal bins
 //
@@ -115,20 +110,6 @@ struct ComposedColor: Hashable {
 // Ared + Egreen + Nblue == [(3,5), 2]
 // 3D Color ↔ 2D Space + 1D Time
 // ════════════════════════════════════════════════════════════════
-
-/// A composed color at a specific spatial-temporal position.
-/// The block at (x,y) supplies the color bins.
-/// Frame z supplies the temporal epoch.
-struct Addressed {
-    let color: ComposedColor
-    let x: Int            // column in 64×64 grid
-    let y: Int            // row in 64×64 grid
-    let frame: Int        // frame z in 0..63
-    let depth: Float      // depth [0,1], 1=near
-
-    /// Pixel index in the 4096-element array
-    var pixelIndex: Int { y * 64 + x }
-}
 
 // ════════════════════════════════════════════════════════════════
 // § 5. TESS INDEX: The final palette entry (color × epoch)

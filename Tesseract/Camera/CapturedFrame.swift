@@ -22,7 +22,6 @@ struct CapturedFrame {
 
     /// Per-block Go evaluation from FULL camera resolution.
     /// outputSize² entries, each from a step×step block of source pixels.
-    let blockEvals: [BlockEval]?
 
     /// Capture timestamp
     let timestamp: TimeInterval

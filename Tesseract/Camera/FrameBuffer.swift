@@ -29,7 +29,6 @@ struct QuantizedFrame {
 final class FrameBuffer: @unchecked Sendable {
 
     private let lock = NSLock()
-    private var frames: [QuantizedFrame] = []
     private var capturedFrames: [CapturedFrame] = []
     private var isRecording = false
 
@@ -40,17 +39,9 @@ final class FrameBuffer: @unchecked Sendable {
 
     func startRecording() {
         lock.lock()
-        frames.removeAll()
-        frames.reserveCapacity(capacity)
         capturedFrames.removeAll()
         capturedFrames.reserveCapacity(capacity)
         isRecording = true
-        lock.unlock()
-    }
-
-    func stopRecording() {
-        lock.lock()
-        isRecording = false
         lock.unlock()
     }
 
@@ -80,8 +71,7 @@ final class FrameBuffer: @unchecked Sendable {
     var frameCount: Int {
         lock.lock()
         defer { lock.unlock() }
-        // Use captured frames count during recording (capture-then-compute)
-        return max(capturedFrames.count, frames.count)
+        return capturedFrames.count
     }
 
     var isFull: Bool {
@@ -90,10 +80,4 @@ final class FrameBuffer: @unchecked Sendable {
 
     // MARK: - Export
 
-    /// Get the recorded quantized frames.
-    func exportFrames() -> [QuantizedFrame] {
-        lock.lock()
-        defer { lock.unlock() }
-        return frames
-    }
 }

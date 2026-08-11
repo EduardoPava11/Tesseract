@@ -55,7 +55,6 @@ STATISTICS = statistics/BinomialCube.hs \
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
 
 NEURAL = neural/BayerResidual.hs \
-         neural/MapElites.hs \
          neural/ANELoop.hs \
          neural/SKGeneCalculus.hs \
          neural/SKGeneSemantics.hs \
