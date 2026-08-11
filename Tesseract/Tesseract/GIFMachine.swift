@@ -204,7 +204,8 @@ enum GIFMachine {
            frames.allSatisfy({ $0.rawRGB != nil }),
            let sk = SKGene.trace(sourceRGB: frames.map { $0.rawRGB! },
                                  side: QuantizedFrame.size) {
-            print("SKGene: \(sk) (passer=\(SKGene.isPasserAvailable ? 1 : 0) "
+            print("SKGene: \(sk) (ground=\(SKGene.isGroundAvailable ? 1 : 0) "
+                  + "passer=\(SKGene.isPasserAvailable ? 1 : 0) "
                   + "codec=\(SKGene.isCodecAvailable ? 1 : 0))")
             lines.append(sk)
         }

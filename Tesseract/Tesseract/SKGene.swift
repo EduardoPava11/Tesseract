@@ -131,6 +131,14 @@ enum SKGene {
 
     // MARK: - Fused graphs (bundled; the one-dispatch path)
 
+    // SKGeneGroundModel is THE CORE as a model: the grounding
+    // encoder E, 512 blocks per dispatch. Its contract is the
+    // DyadAssign lesson — inputs are PRE-STANDARDIZED float32
+    // features (Haar characters + level, centered/scaled on CPU);
+    // standardizing inside the fp16 graph amplifies rounding by
+    // 1/σ and was measured at O(1) error before this contract.
+    nonisolated(unsafe) private static let groundModel: MLModel? =
+        loadModel("SKGeneGroundModel")
     nonisolated(unsafe) private static let passerModel: MLModel? =
         loadModel("SKGenePasserModel")
     nonisolated(unsafe) private static let codecModel: MLModel? =
@@ -145,6 +153,7 @@ enum SKGene {
         return try? MLModel(contentsOf: url, configuration: config)
     }
 
+    static var isGroundAvailable: Bool { groundModel != nil }
     static var isPasserAvailable: Bool { passerModel != nil }
     static var isCodecAvailable: Bool { codecModel != nil }
 

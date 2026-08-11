@@ -12,9 +12,14 @@
     "recon_bound": 0.0078125,
     "offbook_parity": 0.00065243940992743
   },
+  "ground": {
+    "e_max_abs": 0.004322409629821777,
+    "rollout_agreement": 0.982421875
+  },
   "gates": {
     "F1": true,
     "F2": true,
-    "F3": true
+    "F3": true,
+    "F5": true
   }
 }

@@ -70,12 +70,21 @@ import data as sampler                      # noqa: E402
 import dyad_solver                          # noqa: E402
 
 B, D, T, HID, LEVELS = 4096, 24, 16, 48, 3
+BG = 512                                    # rung-16 blocks per capture
 LOGEPS = 1e-4                               # fp16-safe (train_codec.py)
 LN10 = math.log(10.0)
 
 PW = {k: v for k, v in np.load(os.path.join(HERE, "weights.npz")).items()}
 CW = {k: v for k, v in
       np.load(os.path.join(HERE, "codec_weights.npz")).items()}
+GRW = {k: v for k, v in
+       np.load(os.path.join(HERE, "ground_weights.npz")).items()}
+
+# Haar character matrix, leaf order ε=(t,y,x) → idx = 4t+2y+x
+H8 = np.zeros((8, 8), np.float32)
+for w in range(8):
+    for e in range(8):
+        H8[w, e] = (-1) ** bin(w & e).count("1") / 8.0
 
 
 # ── float64 term encoder (the passer's compile-time half) ───────────
@@ -246,6 +255,38 @@ def sk_codec(x0, lev, palette):
     return mb.reshape(x=leaves, shape=[B, 8, 3])
 
 
+@mb.program(input_specs=[mb.TensorSpec(shape=(BG, 27))])
+def sk_ground(feats):
+    """THE CORE as a model: the grounding encoder E (doc §14).
+    CONTRACT = the DyadAssign lesson: the input is the PRE-
+    STANDARDIZED feature vector (Haar characters + level, centered
+    and scaled in float32 on the CPU). Standardizing inside the
+    fp16 graph divides fp16-rounded near-equal values by tiny σ
+    and amplifies rounding to O(1) — measured E error 2.23 before
+    this contract, ~1e-2 after. The engine runs the MLP only."""
+    gw1 = GRW["w1"].astype(np.float32); gb1 = GRW["b1"].astype(np.float32)
+    gw2 = GRW["w2"].astype(np.float32); gb2 = GRW["b2"].astype(np.float32)
+    gw3 = GRW["w3"].astype(np.float32); gb3 = GRW["b3"].astype(np.float32)
+    h = mb.relu(x=mb.add(x=mb.matmul(x=feats, y=gw1), y=gb1))
+    h = mb.relu(x=mb.add(x=mb.matmul(x=h, y=gw2), y=gb2))
+    return mb.add(x=mb.matmul(x=h, y=gw3), y=gb3)
+
+
+def ground_feats32(blocks, lev_oh):
+    """The CPU half of the contract: float32 standardized features."""
+    coef = np.einsum("we,nec->nwc", H8, blocks.astype(np.float32))
+    feat = np.concatenate([coef.reshape(len(blocks), 24),
+                           lev_oh.astype(np.float32)], axis=1)
+    return ((feat - GRW["fmean"]) / GRW["fstd"]).astype(np.float32)
+
+
+def ground_law32(feats):
+    """float32 reference MLP (the SKGeneFixtures discipline)."""
+    h = np.maximum(feats @ GRW["w1"] + GRW["b1"], 0).astype(np.float32)
+    h = np.maximum(h @ GRW["w2"] + GRW["b2"], 0).astype(np.float32)
+    return (h @ GRW["w3"] + GRW["b3"]).astype(np.float32)
+
+
 # ── float64 codec law (the gate reference) ──────────────────────────
 
 def codec_law64(x0, lev_oh, C):
@@ -292,7 +333,13 @@ def main():
                        compute_units=ct.ComputeUnit.ALL,
                        minimum_deployment_target=ct.target.iOS17)
     codec.save(os.path.join(HERE, "SKGeneCodec.mlpackage"))
-    print(f"converted + saved in {time.time()-t0:.1f}s")
+    ground = ct.convert(sk_ground, convert_to="mlprogram",
+                        compute_precision=ct.precision.FLOAT16,
+                        compute_units=ct.ComputeUnit.ALL,
+                        minimum_deployment_target=ct.target.iOS17)
+    ground.save(os.path.join(HERE, "SKGeneGround.mlpackage"))
+    print(f"converted + saved in {time.time()-t0:.1f}s "
+          f"(+ SKGeneGround: THE CORE as a model, {BG} blocks/dispatch)")
 
     # ── F1: passer parity on the held-out genes (XP2 near-tie law) ──
     held = [g for g in range(len(z0g))
@@ -375,6 +422,46 @@ def main():
     print(f"F4 ~ codec parity vs float64 law (off-codebook): "
           f"max abs {par:.2e} (reported; fp16 engine precision)")
 
+    # ── F5: THE CORE model — E parity + rollout decisions ───────────
+    cube = el["frames"].astype(np.float64)
+    for _ in range(2):                       # 64³ → 16³ (level 2)
+        s = cube.shape
+        cube = cube.reshape(s[0] // 2, 2, s[1] // 2, 2,
+                            s[2] // 2, 2, 3).mean(axis=(1, 3, 5))
+    R = cube.reshape(8, 2, 8, 2, 8, 2, 3)
+    gblocks = R.transpose(0, 2, 4, 1, 3, 5, 6).reshape(BG, 8, 3)
+    glev = np.zeros((BG, LEVELS), np.float32); glev[:, 2] = 1
+    gfeats = ground_feats32(gblocks, glev)
+    out = ground.predict({"feats": gfeats})
+    z_cml = next(iter(out.values()))
+    z_law = ground_law32(gfeats)
+
+    gid = int(np.argmax(halt))               # the longest halter's schedule
+    def roll32(zs):
+        z = zs.astype(np.float32)
+        for t in range(T):
+            if act[gid][t] > 0:
+                tokv = PW["tok"][int(toks[gid][t])].astype(np.float32)
+                x = np.concatenate([z, np.tile(tokv, (len(z), 1))], axis=1)
+                h = np.maximum(x @ PW["pw1"] + PW["pb1"], 0)
+                z = (z + h @ PW["pw2"] + PW["pb2"]).astype(np.float32)
+        return z
+    d_cml, m_cml = decide(normed(roll32(z_cml).astype(np.float64)))
+    d_law, m_law = decide(normed(roll32(z_law).astype(np.float64)))
+    pert5 = np.linalg.norm(normed(roll32(z_cml).astype(np.float64))
+                           - normed(roll32(z_law).astype(np.float64)),
+                           axis=1)
+    dis5 = d_cml != d_law
+    # guard against vacuous near-tie passes: the typical perturbation
+    # must be small against the typical margin (both measured)
+    sane = float(np.median(pert5)) < float(np.median(m_law)) / 4
+    ok5f = bool(np.all(~dis5 | (m_law < 4 * pert5))) and sane
+    print(f"F5 {'✓' if ok5f else '✗'} ground (THE CORE) parity: E max abs "
+          f"{float(np.max(np.abs(z_cml - z_law))):.2e}; rollout decisions "
+          f"{1 - dis5.mean():.2%} agree on {BG} real blocks "
+          f"(median ‖Δzn‖ {np.median(pert5):.1e} ≪ median margin "
+          f"{np.median(m_law):.2f}); flips all near-ties")
+
     results = {
         "passer": {"agreement": float(agree), "held": n_h,
                    "flips": int(dis.sum()),
@@ -382,14 +469,16 @@ def main():
                    "pert_max": float(pert.max())},
         "codec": {"classicality_exact": ok2, "recon_err": recon_err,
                   "recon_bound": bound, "offbook_parity": par},
-        "gates": {"F1": ok1, "F2": ok2, "F3": ok3},
+        "ground": {"e_max_abs": float(np.max(np.abs(z_cml - z_law))),
+                   "rollout_agreement": float(1 - dis5.mean())},
+        "gates": {"F1": ok1, "F2": ok2, "F3": ok3, "F5": ok5f},
     }
     with open(os.path.join(HERE, "fold_results.json"), "w") as f:
         json.dump(results, f, indent=2)
     n_green = sum(results["gates"].values())
-    print(f"\n  {n_green}/3 gates green (+F4 reported) → "
-          f"SKGenePasser.mlpackage, SKGeneCodec.mlpackage, gene_table.npz")
-    if n_green < 3:
+    print(f"\n  {n_green}/4 gates green (+F4 reported) → SKGeneGround + "
+          f"SKGenePasser + SKGeneCodec mlpackages, gene_table.npz")
+    if n_green < 4:
         raise SystemExit(1)
 
 
