@@ -23,9 +23,9 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (35 files green
-  as of 2026-08-10, incl. neural/MapElites.hs newly enrolled; the tally
-  must stay at zero failures).
+- `spec/` — runghc axiom suite: `cd spec && make test` (36 files green
+  as of 2026-08-10, incl. temporal/DepthMixture.hs newly enrolled; the
+  tally must stay at zero failures).
   New mechanisms get a spec with axioms BEFORE the Swift port.
 - The app is a 64³ GIF MACHINE (spec/output/ExportMethods.hs): every
   export is 64 frames of 64×64 indices; METHODS (tesseract | refined |
@@ -33,7 +33,14 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   persisted ExportSettings and resolved by eligibility. DYAD-256
   (spec/quantization/DyadPalette.hs): paired per-frame palettes,
   T[255−i] = comp(T[i]) in OKLab, face → primaries, background →
-  σ-mirror pair-dither bleeding to 255. Assignment runs on the ANE
+  σ-mirror pair-dither bleeding to 255. The role split is
+  CONSTANT-FREE (spec/temporal/DepthMixture.hs, 2026-08-10 decree:
+  no naked thresholds): pull t = posterior of a tied-variance
+  two-phase mixture fit on the capture's own pooled depth field;
+  solid/band boundaries = the Bayer extrema {1/32, 31/32}; analyze
+  weights = 1−t; stats EMA α = derived Kalman gain (localLevelAlpha);
+  BIC single-phase ⇒ all-face. The crossover is REPORTED in meters
+  in the "DYAD MIXTURE" provenance comment. Assignment runs on the ANE
   (Tesseract/ML/DyadAssign.mlpackage, authored in nn/dyad-assign/,
   exact CPU fallback; placement laws XP1/XP2).
 - The 16/32/64 ladder (spec/output/TriScaleLadder.hs →
@@ -86,9 +93,60 @@ score over all frames).
 Launch = loading screen until the first preview frame, then ONE
 surface: preview + record + SET. All choices live in the settings
 cover (CAMERA live/face, LOOK dyad/refine/tess, BLEED, MIRROR — all
-persisted via ExportSettings). No mode chrome, no menus. The A/B
-dual-explore step and the elite-map entry are deprecated (modules
-compiled but unreachable).
+persisted via ExportSettings). No mode chrome, no menus.
+
+EXCISED 2026-08-10 (submission cleanup): the A/B dual-explore /
+compose / refine arc, MAP-Elites gallery, gene NN (GeneNN/GeneModule/
+GeneTrainer/SobolExplorer/Gene.metal, MLX-gated code that never
+compiled), VoxelCube/CubeAnimator/GIFStats, BlockPyramid/Decision/
+ResidualPipeline/EntropyMeasure, channel-preview thumbs, and the
+dormant GPU quantize path (MetalPipeline.processFrame +
+quantizeWithDepth — the raw-meters landmine; Quantize.metal is
+downsample-only now). CameraState is the simple arc: idle →
+previewing → recording → processing → done | error.
+
+BUTTONS UPSCALED 2026-08-10 (form follows function: the atom IS the
+GIF pixel; growth = MORE atoms, never a bigger atom): shutter 18→22
+cells (88 pt), action rows 11→13 cells (52 pt,
+TesseractLattice.buttonRowCells), settings/result/error buttons
+widened. SECOND PASS same day: the whole TypeRows registry grew
+(micro 4 / label 7 / body 9 / counter 11 / display 16 cells — 8 to
+32 pt glyphs). Lattice laws gate in CI (LatticeLawTests).
+
+2026-08-10 EVENING BATCH (Daniel's rulings):
+- BINOMIAL BACKGROUND (spec DyadPalette §6 v4, DY6 farLaw/farSpread):
+  far pixels take the σ-mirror of their OWN nearest primary — the
+  background occupies the mirrored binomial shells; the solid
+  comp(centroid) fill is dead. Known blemish: chroma seam at
+  t = 31/32 (band pulled, far raw) — dissolves under the AERIAL
+  MIRROR LAW, see docs/depth-color-scales.md.
+- PREVIEW/EXPORT UNIFICATION v1 (DyadPreview.swift): LOOK=dyad
+  previews through the export law — assignment at 20 Hz on 64²,
+  mixture/stats/derived-α/table at the 5 Hz rung-16 cadence (TL8/9).
+  FACE preview still lattice quick-quantize (v1 scope).
+- PALETTE-CREATION VISIBILITY: DyadPipeline.process(onFrameTable:) →
+  liveTable on both managers → CellPalette swatch (16×16 entries) in
+  the processing scene. CellPalette is a Cells primitive.
+- GIF LIBRARY (GIFLibrary.swift + Views/LibraryView.swift, scene
+  "library"): every successful export auto-archives to
+  Documents/Library; settings cover → LIBRARY → 3×3 still tiles,
+  detail = playing GIF + 256-entry palette (GCT) + DYAD MIXTURE
+  provenance + SHARE/DELETE. No sidecar DB — the GIF is
+  self-describing.
+- AERIAL MIRROR LAW (docs/depth-color-scales.md): σ(s)·γ(s) =
+  σ_base(K), γ = 1/(2−s) — chroma buys the temporal octave. SPEC
+  (DY9–DY12, DM11/DM12) AND SWIFT+METAL PORT DONE (Daniel's go,
+  2026-08-10 late, comp-halo default): DyadPipeline γ-stages every
+  pixel + stats-on-ŷ (no band pull, no t=31/32 seam; ANE untouched);
+  DepthMixture.fitLifted (τ-lift); DyadPreview = τ-lifted rung-16
+  fit + γ-staged assignment, FACE unified (CPU); Metal aerialPreview
+  kernel = the 20 Hz GPU assignment twin (meters→signal in-kernel,
+  anchors from DepthSignal; optional state, CPU fallback). OPEN:
+  ruling R4 (comp-halo vs faithful-hue — DY11 measured faithful as
+  aggregate-closer to ŷ; localized swap when ruled), R5
+  (PerfectQuantizer naked constants), R6 (γ vs chroma-gain slots),
+  workflow steps 4/5/8/9/10 (Mac census, synthetic harness,
+  mirror-histogram provenance, byte gate, device pass).
 
 ## Build
 
@@ -99,7 +157,13 @@ compiled but unreachable).
 - Camera code is COMPILE-ONLY off-device (simulator has no camera). Pure
   logic suites run on simulator: FaceMeshSignal, GIFUpscale,
   GIFOutputContract, WassersteinCoordinates.
+- Submission (2026-08-10): PrivacyInfo.xcprivacy declares the
+  required-reason APIs (UserDefaults → CA92.1; the only covered API in
+  use) — ITMS-91053 closed. TrueDepth has NO capability key: the
+  runtime NO-TRUEDEPTH gate is the ship mechanism (terminal error
+  state, no dead RETRY). The 4 latent AxiomTests failures are fixed
+  (PQ5 re-pinned to the round+F-S law; Dissonance seam fixture used a
+  zero-mass far half).
 - Known open items: first on-device FACE run (mirroring unverified);
-  4 latent AxiomTests failures (AxiomTests.swift:467–554, test-vs-semantics
-  question predating the pivot); DEBUG `FRONT-RAW PROBE` log line answers
-  whether this device exposes any front RAW to third-party apps.
+  DEBUG `FRONT-RAW PROBE` log line answers whether this device exposes
+  any front RAW to third-party apps.

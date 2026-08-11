@@ -129,7 +129,10 @@ struct CellFrameButton: View {
             HStack(spacing: Lattice.pt(2)) {
                 if let icon { icon }
                 if let symbol { CellSymbol(systemName: symbol, ink: Color(srgb8: ink)) }
-                if let title { CellText(title, rows: TypeRows.label, ink: Color(srgb8: ink)) }
+                // Button labels read at the body register (2026-08-10
+                // upscale): the label register is for captions, not
+                // touch targets.
+                if let title { CellText(title, rows: TypeRows.body, ink: Color(srgb8: ink)) }
             }
         }
         .frame(width: Lattice.gif(cols), height: Lattice.gif(rows))

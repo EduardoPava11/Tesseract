@@ -39,13 +39,8 @@ Tesseract/Views/States/ProcessingStateView.swift
 Tesseract/Views/States/ErrorStateView.swift
 Tesseract/Views/States/ResultStateView.swift
 Tesseract/Views/States/LivePreviewStateView.swift
-Tesseract/Views/States/DualExploreStateView.swift
-Tesseract/Views/States/DualExplorePanels.swift
-Tesseract/Views/States/RefiningStateView.swift
 Tesseract/Views/States/FacePreviewStateView.swift
-Tesseract/Views/States/BirkhoffGauge.swift
-Tesseract/Views/PaletteSwatchView.swift
-Tesseract/Views/EliteMapView.swift
+Tesseract/Views/LibraryView.swift
 "
 
 note() { echo "  ✗ $1"; FAIL=1; }

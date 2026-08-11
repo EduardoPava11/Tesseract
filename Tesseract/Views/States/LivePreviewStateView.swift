@@ -33,7 +33,7 @@ struct LivePreviewStateView: View {
                              rows: GridLayout.settingsButton.h,
                              state: 0, tick: clock.tick,
                              reduceMotion: clock.reduceMotion)
-                CellText("SET", rows: TypeRows.label,
+                CellText("SET", rows: TypeRows.body,
                          ink: Color(srgb8: Ink.ledGhost))
             }
             .frame(width: Lattice.gif(GridLayout.settingsButton.w),
@@ -67,48 +67,7 @@ struct LivePreviewStateView: View {
         .pixelFrame()
     }
 
-    // MARK: - R, G, B, D Channel Previews (4 × 12 cells + 3 × 2-cell gutters = 54)
-
-    private var channelPreviews: some View {
-        HStack(spacing: Lattice.gif(2)) {
-            channelThumb(image: camera.previewR, label: "R", tint: Ink.chanR)
-            channelThumb(image: camera.previewG, label: "G", tint: Ink.chanG)
-            channelThumb(image: camera.previewB, label: "B", tint: Ink.chanB)
-            channelThumb(image: camera.previewD, label: "D", tint: Ink.chanD)
-        }
-    }
-
-    private func channelThumb(image: CGImage?, label: String, tint: SIMD3<UInt8>) -> some View {
-        VStack(spacing: Lattice.pt(1)) {
-            Group {
-                if let img = image {
-                    Image(decorative: img, scale: 1.0)
-                        .interpolation(.none)
-                        .resizable()
-                } else {
-                    Color(srgb8: CellChecker.dark)
-                }
-            }
-            .frame(width: Lattice.gif(TesseractLattice.channelCells),
-                   height: Lattice.gif(TesseractLattice.channelCells))
-            .border(Color(srgb8: tint), width: 1)
-
-            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: tint))
-        }
-    }
-
-    // MARK: - Capture Info
-
-    private var captureInfoLine: some View {
-        let mode = CameraConfig.mode
-        let step = CameraConfig.rgbCrop / mode.spatialSide
-        return CellText(
-            "\(mode.frameCount) frames  \(String(format: "%.1f", Double(mode.frameCount) / Double(CameraConfig.targetFPS)))s  \(step * step) px/blk",
-            rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost)
-        )
-    }
-
-    // MARK: - Record Button (18-cell footprint, 14-cell disc, BEAT ring)
+    // MARK: - Record Button (BEAT ring; footprint = TesseractLattice.recordCells)
 
     // The ring band is the control's FACE: ghost between beats, lit ink
     // for 1 tick in 4 (CellMechanics BEAT) — suppressed under

@@ -48,7 +48,7 @@ struct FacePreviewStateView: View {
                              rows: GridLayout.settingsButton.h,
                              state: 0, tick: clock.tick,
                              reduceMotion: clock.reduceMotion)
-                CellText("SET", rows: TypeRows.label,
+                CellText("SET", rows: TypeRows.body,
                          ink: Color(srgb8: Ink.ledGhost))
             }
             .frame(width: Lattice.gif(GridLayout.settingsButton.w),

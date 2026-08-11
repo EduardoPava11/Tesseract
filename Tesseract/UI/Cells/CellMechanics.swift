@@ -53,11 +53,6 @@ enum CellMechanics {
     /// where the control's content is an image (never obscure a content
     /// pixel); everything solid wears "frame".
     static let controlFaces: [String: String] = [
-        // Chrome
-        "modeBar": "frame",        // DEPRECATED with the pre-split bar
-        "modeLive": "frame",
-        "modeFace": "frame",
-        "eliteButton": "frame",
         // Capture / face preview (record's frame IS the CellButton ring)
         "record": "frame",
         "settingsButton": "frame",
@@ -69,13 +64,15 @@ enum CellMechanics {
         "lookTess": "frame",
         "toggleBleed": "frame",
         "toggleMirror": "frame",
+        "setLibrary": "frame",
         "setClose": "frame",
-        // Dual explore
-        "panelA": "brackets",
-        "panelB": "brackets",
-        "scrubber": "frame",
-        // Refining
-        "refineGif": "brackets",
+        // Library (tiles show GIF content → brackets; actions solid)
+        "libCell0": "brackets", "libCell1": "brackets", "libCell2": "brackets",
+        "libCell3": "brackets", "libCell4": "brackets", "libCell5": "brackets",
+        "libCell6": "brackets", "libCell7": "brackets", "libCell8": "brackets",
+        "libShare": "frame",
+        "libDelete": "frame",
+        "libClose": "frame",
         // Result
         "resultShare": "frame",
         "resultKeep": "frame",
@@ -83,13 +80,6 @@ enum CellMechanics {
         // Error
         "errRetry": "frame",
         "errSettings": "frame",
-        // Elite map
-        "eliteCell0": "brackets", "eliteCell1": "brackets", "eliteCell2": "brackets",
-        "eliteCell3": "brackets", "eliteCell4": "brackets", "eliteCell5": "brackets",
-        "eliteCell6": "brackets", "eliteCell7": "brackets", "eliteCell8": "brackets",
-        "eliteShare": "frame",
-        "eliteKeep": "frame",
-        "eliteClose": "frame",
     ]
 
     /// DEBUG init-time law check (run alongside the lattice selfChecks).

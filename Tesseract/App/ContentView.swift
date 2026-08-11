@@ -14,9 +14,6 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @StateObject private var faceCamera = FaceCaptureManager()
-    @StateObject private var dualAnimator = DualCubeAnimator(
-        cubeA: VoxelCube(), cubeB: VoxelCube()
-    )
     /// THE one 20Hz chrome clock — drives every BEAT and heartbeat.
     @State private var clock = SurfaceClock()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -95,7 +92,7 @@ struct ContentView: View {
         switch appMode {
         case .live:
             switch camera.state {
-            case .recording, .processing, .composing: return false
+            case .recording, .processing: return false
             default: return true
             }
         case .face:
@@ -134,29 +131,8 @@ struct ContentView: View {
             case .processing:
                 ProcessingStateView(progress: camera.processProgress,
                                     phase: camera.processPhase,
-                                    boards: camera.processBoards)
-
-            case .dualExplore(let gen):
-                DualExploreStateView(
-                    camera: camera,
-                    animator: dualAnimator,
-                    generation: gen,
-                    clock: clock
-                )
-
-            case .composing:
-                // Flash state — immediately transitions to refining
-                CellText("COMPOSING…", rows: TypeRows.label,
-                         ink: Color(srgb8: Ink.ledGhost))
-
-            case .refining(let alpha):
-                RefiningStateView(
-                    camera: camera,
-                    animator: dualAnimator,
-                    alpha: alpha,
-                    clock: clock,
-                    onExport: { GIFSaver.presentShareSheet($0) }
-                )
+                                    boards: camera.processBoards,
+                                    table: camera.liveTable)
 
             case .done:
                 if let gifData = camera.gifData, let measure = camera.gifMeasure {
@@ -255,7 +231,8 @@ struct ContentView: View {
             case .processing:
                 ProcessingStateView(progress: faceCamera.processProgress,
                                     phase: faceCamera.processPhase,
-                                    boards: nil)
+                                    boards: nil,
+                                    table: faceCamera.liveTable)
 
             case .done:
                 if let gifData = faceCamera.gifData, let measure = faceCamera.gifMeasure {
@@ -276,9 +253,6 @@ struct ContentView: View {
             }
         }
     }
-
-    // Elite-map gallery: parked with the A/B deprecation — EliteMapView
-    // stays compiled but has no entry point on the simple surface.
 
     // Share path: GIFSaver.presentShareSheet is the ONE implementation
     // (walks to the topmost presenter — covers the settings cover too).

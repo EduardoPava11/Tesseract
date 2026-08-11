@@ -103,7 +103,9 @@ struct ResultStateView: View {
         case .idle: return "KEEP"
         case .saving: return "…"
         case .saved: return "KEPT"
-        case .denied: return "SETTINGS"
+        // "ALLOW" (not "SETTINGS"): fits the body register in the
+        // 22-cell button; the resultNote line explains it opens Settings.
+        case .denied: return "ALLOW"
         case .failed: return "RETRY"
         }
     }

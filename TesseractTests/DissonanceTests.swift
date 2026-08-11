@@ -100,9 +100,13 @@ final class DissonanceTests: XCTestCase {
         XCTAssertEqual(flat.sliceTunings.count, 16)
         XCTAssertEqual(flat.voxelUrgency.count, 4096)
 
-        // Left half near (d=1), right half far (d=0): the seam beats.
+        // Left half near (d=1), right half mid (d=0.5): the seam beats.
+        // NOT d=0 for the far side: mass is the depth signal, so a
+        // zero-depth half has zero amplitude and every bond into it is
+        // silent by the kernel (w→0 ⇒ roughness→0) — the original
+        // fixture lawfully produced Ū = 0 and failed its own intent.
         let split = try XCTUnwrap(DissonanceField.telemetry(
-            frames: makeFrames(depth: { _, p in (p % 64) < 32 ? 1 : 0 })))
+            frames: makeFrames(depth: { _, p in (p % 64) < 32 ? 1 : 0.5 })))
         XCTAssertGreaterThan(split.urgencyTotal, 0)
 
         // Partial bursts are refused.

@@ -19,40 +19,26 @@ final class MetalPipeline {
 
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let quantizeState: MTLComputePipelineState
     private let downsampleRGBState: MTLComputePipelineState
     private let downsampleDepthState: MTLComputePipelineState
-    private let geneForwardState: MTLComputePipelineState?  // Gene NN kernel (optional — may not exist in lib)
+    /// The 20 Hz preview assignment under the Aerial Mirror Law —
+    /// optional: absent kernel ⇒ CPU fallback (DyadPreview.assignCPU).
+    private let aerialState: MTLComputePipelineState?
 
     // MARK: - Textures (64×64 working buffers)
 
     private var rgb64Texture: MTLTexture?
     private var depth64Texture: MTLTexture?
 
-    // MARK: - Output Buffer
-
-    /// 4096 palette indices (64×64)
-    private var outputBuffer: MTLBuffer?
-
-    // MARK: - Debug Buffers
-
-    /// 4 epoch counters (atomic uint per epoch)
-    private var epochCountsBuffer: MTLBuffer?
-    /// 32-bin sigma histogram
-    private var sigmaHistBuffer: MTLBuffer?
-
     // MARK: - Params
 
-    private var paramsBuffer: MTLBuffer?
     private var downsampleParamsBuffer: MTLBuffer?
     private var downsampleDepthParamsBuffer: MTLBuffer?
 
-    // Gene NN buffers (for geneForward kernel)
-    private var geneHistogramBuffer: MTLBuffer?   // 126 floats × S² pixels
-    private var geneWeightsBuffer: MTLBuffer?     // 4581 floats (gene weights)
-    private var geneMetaBuffer: MTLBuffer?        // GeneMetaParams (48 bytes)
-    private var geneOutputBuffer: MTLBuffer?      // S² UInt8 palette indices
-    private var geneGlobalBuffer: MTLBuffer?      // S² Float global weights
+    // Aerial preview buffers (128 primaries + params + 4096 indices)
+    private var aerialPrimsBuffer: MTLBuffer?
+    private var aerialParamsBuffer: MTLBuffer?
+    private var aerialOutBuffer: MTLBuffer?
 
     // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
 
@@ -92,13 +78,6 @@ final class MetalPipeline {
 
         // Create compute pipeline states
         do {
-            guard let quantizeFn = library.makeFunction(name: "quantizeWithDepth") else {
-                logger.error("MetalPipeline: function 'quantizeWithDepth' not found")
-                return nil
-            }
-            self.quantizeState = try device.makeComputePipelineState(function: quantizeFn)
-            logger.info("MetalPipeline: quantizeWithDepth pipeline created (maxThreads=\(self.quantizeState.maxTotalThreadsPerThreadgroup))")
-
             guard let downsampleRGBFn = library.makeFunction(name: "downsampleRGB") else {
                 logger.error("MetalPipeline: function 'downsampleRGB' not found")
                 return nil
@@ -111,13 +90,13 @@ final class MetalPipeline {
             }
             self.downsampleDepthState = try device.makeComputePipelineState(function: downsampleDepthFn)
 
-            // Gene NN kernel (optional — graceful if missing)
-            if let geneForwardFn = library.makeFunction(name: "geneForward") {
-                self.geneForwardState = try device.makeComputePipelineState(function: geneForwardFn)
-                logger.info("MetalPipeline: geneForward pipeline created")
+            // Aerial preview kernel (optional — CPU fallback if absent)
+            if let aerialFn = library.makeFunction(name: "aerialPreview") {
+                self.aerialState = try device.makeComputePipelineState(function: aerialFn)
+                logger.info("MetalPipeline: aerialPreview pipeline created")
             } else {
-                self.geneForwardState = nil
-                logger.warning("MetalPipeline: geneForward not found — GPU NN disabled, CPU fallback")
+                self.aerialState = nil
+                logger.warning("MetalPipeline: aerialPreview not found — preview assignment on CPU")
             }
 
             logger.info("MetalPipeline: all pipeline states created")
@@ -132,14 +111,8 @@ final class MetalPipeline {
         }
 
         // Verify struct alignment matches Metal expectations
-        let qSize = MemoryLayout<QuantizeParamsSwift>.stride
-        let qStride = MemoryLayout<QuantizeParamsSwift>.stride
         let dsSize = MemoryLayout<DownsampleParamsSwift>.stride
-        logger.info("MetalPipeline: QuantizeParams size=\(qSize) stride=\(qStride) (Metal expects 48)")
         logger.info("MetalPipeline: DownsampleParams size=\(dsSize)")
-        if qStride < 48 {
-            logger.error("MetalPipeline: QuantizeParams stride \(qStride) < 48 — ALIGNMENT MISMATCH")
-        }
 
         isReady = true
         logger.info("MetalPipeline: ready ✓")
@@ -167,37 +140,16 @@ final class MetalPipeline {
         }
         logger.info("MetalPipeline: 64×64 working textures allocated")
 
-        // Output: 4096 bytes
-        outputBuffer = device.makeBuffer(length: size * size, options: .storageModeShared)
-        guard outputBuffer != nil else {
-            logger.error("MetalPipeline: failed to create output buffer")
-            return false
-        }
-
-        // Debug: epoch counts (4 × UInt32)
-        epochCountsBuffer = device.makeBuffer(length: 4 * MemoryLayout<UInt32>.size, options: .storageModeShared)
-
-        // Debug: sigma histogram (32 × UInt32)
-        sigmaHistBuffer = device.makeBuffer(length: 32 * MemoryLayout<UInt32>.size, options: .storageModeShared)
-
         // Params buffers — use STRIDE not size to match Metal alignment
-        paramsBuffer = device.makeBuffer(length: MemoryLayout<QuantizeParamsSwift>.stride, options: .storageModeShared)
         downsampleParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
         downsampleDepthParamsBuffer = device.makeBuffer(length: MemoryLayout<DownsampleParamsSwift>.stride, options: .storageModeShared)
 
-        // Gene NN buffers (for geneForward kernel)
-        let pixelCount = size * size
-        geneHistogramBuffer = device.makeBuffer(length: pixelCount * 126 * MemoryLayout<Float>.size, options: .storageModeShared)
-        geneWeightsBuffer = device.makeBuffer(length: GeneWeights.totalCount * MemoryLayout<Float>.size, options: .storageModeShared)
-        geneMetaBuffer = device.makeBuffer(length: MemoryLayout<GeneMetaParams>.stride, options: .storageModeShared)
-        geneOutputBuffer = device.makeBuffer(length: pixelCount, options: .storageModeShared)
-        geneGlobalBuffer = device.makeBuffer(length: pixelCount * MemoryLayout<Float>.size, options: .storageModeShared)
-
-        if geneHistogramBuffer != nil && geneWeightsBuffer != nil {
-            logger.info("MetalPipeline: gene NN buffers allocated (hist=\(pixelCount * 126 * 4) bytes, weights=\(GeneWeights.totalCount * 4) bytes)")
-        } else {
-            logger.warning("MetalPipeline: gene NN buffer allocation failed — GPU NN disabled")
-        }
+        // Aerial preview: 128 float4 primaries + 48-byte params + indices
+        aerialPrimsBuffer = device.makeBuffer(
+            length: 128 * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared)
+        aerialParamsBuffer = device.makeBuffer(
+            length: MemoryLayout<AerialParamsSwift>.stride, options: .storageModeShared)
+        aerialOutBuffer = device.makeBuffer(length: size * size, options: .storageModeShared)
 
         // Texture cache for CVPixelBuffer → MTLTexture conversion
         var cache: CVMetalTextureCache?
@@ -252,169 +204,6 @@ final class MetalPipeline {
         let fmt = CVPixelBufferGetPixelFormatType(pixelBuffer)
         let metalFmt: MTLPixelFormat = (fmt == kCVPixelFormatType_DepthFloat16) ? .r16Float : .r32Float
         return makeTexture(from: pixelBuffer, pixelFormat: metalFmt)
-    }
-
-    // MARK: - Process One Frame
-
-    /// Process a camera frame: downsample + quantize → palette indices.
-    /// Returns nil on failure with error logged.
-    ///
-    /// ⚠️ DORMANT PATH — CameraManager uses downsampleFrame + CPU
-    /// PerfectQuantizer instead. Quantize.metal reads depth64Texture and
-    /// expects the [0,1] 1=near SIGNAL, but the downsample kernel writes
-    /// raw TrueDepth METERS: reviving this path requires applying
-    /// spec/temporal/DepthSignal.hs in the kernel (the CPU-side fix in
-    /// readbackDepth does not cover it).
-    func processFrame(
-        rgbTexture: MTLTexture,
-        depthTexture: MTLTexture?,
-        frameIndex: Int,
-        seed: UInt32 = 42
-    ) -> [UInt8]? {
-        guard isReady else {
-            logger.error("MetalPipeline: processFrame called but pipeline not ready")
-            return nil
-        }
-
-        frameCount += 1
-        let logThisFrame = (frameCount % 20 == 0)  // log every 20th frame
-
-        if logThisFrame {
-            logger.debug("MetalPipeline: frame \(frameIndex), src RGB=\(rgbTexture.width)×\(rgbTexture.height)")
-        }
-
-        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
-            logger.error("MetalPipeline: failed to create command buffer at frame \(frameIndex)")
-            return nil
-        }
-
-        // ── Step 1: Downsample RGB to 64×64 ──
-
-        guard let rgb64 = rgb64Texture, let depth64 = depth64Texture else {
-            logger.error("MetalPipeline: working textures are nil at frame \(frameIndex)")
-            return nil
-        }
-
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            // Downsample RGB
-            // Dynamic crop from actual buffer dimensions
-            let srcW = rgbTexture.width
-            let srcH = rgbTexture.height
-            var dsParams = DownsampleParamsSwift.fromRGBBuffer(width: srcW, height: srcH)
-            downsampleParamsBuffer?.contents().copyMemory(
-                from: &dsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
-            )
-
-            encoder.setComputePipelineState(downsampleRGBState)
-            encoder.setTexture(rgbTexture, index: 0)
-            encoder.setTexture(rgb64, index: 1)
-            encoder.setBuffer(downsampleParamsBuffer, offset: 0, index: 0)
-
-            let gridSize = MTLSize(width: CameraConfig.outputSize, height: CameraConfig.outputSize, depth: 1)
-            let groupSize = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
-
-            // Downsample Depth (if available)
-            if let depthTex = depthTexture {
-                let depthW = depthTex.width
-                let depthH = depthTex.height
-                let _ = min(depthW, depthH)
-
-                // Dynamic crop for depth
-                var ddsParams = DownsampleParamsSwift.fromDepthBuffer(width: depthW, height: depthH)
-                downsampleParamsBuffer?.contents().copyMemory(
-                    from: &ddsParams, byteCount: MemoryLayout<DownsampleParamsSwift>.stride
-                )
-
-                encoder.setComputePipelineState(downsampleDepthState)
-                encoder.setTexture(depthTex, index: 0)
-                encoder.setTexture(depth64, index: 1)
-                encoder.setBuffer(downsampleParamsBuffer, offset: 0, index: 0)
-                encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
-
-                if logThisFrame {
-                    logger.debug("MetalPipeline: depth texture \(depthW)×\(depthH) → 64×64")
-                }
-            } else {
-                // No depth: fill with 0.5 (mid-range)
-                if logThisFrame {
-                    logger.debug("MetalPipeline: no depth texture, using default d=0.5")
-                }
-            }
-
-            encoder.endEncoding()
-        } else {
-            logger.error("MetalPipeline: failed to create downsample encoder at frame \(frameIndex)")
-            return nil
-        }
-
-        // ── Step 2: Quantize with depth-driven SNR ──
-
-        // Clear debug counters
-        if let buf = epochCountsBuffer {
-            memset(buf.contents(), 0, buf.length)
-        }
-        if let buf = sigmaHistBuffer {
-            memset(buf.contents(), 0, buf.length)
-        }
-
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            var params = QuantizeParamsSwift(
-                epochCenters: BinomialCadence.centers,
-                sigmaBase: BinomialCadence.sigmaBase,
-                frameIndex: UInt32(frameIndex),
-                seed: seed,
-                width: UInt32(CameraConfig.outputSize),
-                height: UInt32(CameraConfig.outputSize),
-                debugFlags: logThisFrame ? 1 : 0
-            )
-
-            paramsBuffer?.contents().copyMemory(
-                from: &params, byteCount: MemoryLayout<QuantizeParamsSwift>.stride
-            )
-
-            encoder.setComputePipelineState(quantizeState)
-            encoder.setTexture(rgb64, index: 0)
-            encoder.setTexture(depth64, index: 1)
-            encoder.setBuffer(outputBuffer, offset: 0, index: 0)
-            encoder.setBuffer(paramsBuffer, offset: 0, index: 1)
-            encoder.setBuffer(epochCountsBuffer, offset: 0, index: 2)
-            encoder.setBuffer(sigmaHistBuffer, offset: 0, index: 3)
-
-            let gridSize = MTLSize(width: CameraConfig.outputSize, height: CameraConfig.outputSize, depth: 1)
-            let groupSize = MTLSize(width: 8, height: 8, depth: 1)
-            encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
-            encoder.endEncoding()
-        } else {
-            logger.error("MetalPipeline: failed to create quantize encoder at frame \(frameIndex)")
-            return nil
-        }
-
-        // ── Submit and wait ──
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-
-        if let error = commandBuffer.error {
-            logger.error("MetalPipeline: GPU error at frame \(frameIndex): \(error.localizedDescription)")
-            lastError = error.localizedDescription
-            return nil
-        }
-
-        // ── Read output ──
-        guard let outBuf = outputBuffer else {
-            logger.error("MetalPipeline: output buffer nil at frame \(frameIndex)")
-            return nil
-        }
-
-        let ptr = outBuf.contents().bindMemory(to: UInt8.self, capacity: 4096)
-        let indices = Array(UnsafeBufferPointer(start: ptr, count: 4096))
-
-        // ── Debug logging ──
-        if logThisFrame {
-            logDebugCounters(frameIndex: frameIndex)
-        }
-
-        return indices
     }
 
     // MARK: - Downsample Only (consolidated path)
@@ -494,6 +283,57 @@ final class MetalPipeline {
         return (rgb: rgbData, depth: depthData)
     }
 
+    // MARK: - Aerial Preview Assignment (20 Hz GPU twin of assignCPU)
+
+    /// Run the aerialPreview kernel against the CURRENT rgb64/depth64
+    /// working textures (call immediately after downsampleFrame on the
+    /// same serial queue — the textures are that frame's). Returns the
+    /// 4096 palette indices, or nil (kernel absent / not ready) so the
+    /// caller falls back to the CPU reference. Preview-only: near-tie
+    /// fp32 flips vs the CPU are the only permitted difference.
+    func aerialAssign(state: DyadPreview.MetalState) -> [UInt8]? {
+        guard isReady,
+              let aerialState,
+              let rgb64 = rgb64Texture, let depth64 = depth64Texture,
+              let primsBuf = aerialPrimsBuffer,
+              let paramsBuf = aerialParamsBuffer,
+              let outBuf = aerialOutBuffer,
+              state.primaries.count == 128 else { return nil }
+
+        var prims = state.primaries
+        primsBuf.contents().copyMemory(
+            from: &prims, byteCount: 128 * MemoryLayout<SIMD4<Float>>.stride)
+        var params = AerialParamsSwift(
+            centroid: SIMD4<Float>(state.centroid.x, state.centroid.y,
+                                   state.centroid.z, 0),
+            scalars: SIMD4<Float>(state.sStar, state.tau,
+                                  1 / Float(DepthSignal.dNear),
+                                  1 / Float(DepthSignal.dFar)),
+            flags: SIMD4<UInt32>(state.twoPhase ? 1 : 0,
+                                 UInt32(CameraConfig.outputSize), 0, 0))
+        paramsBuf.contents().copyMemory(
+            from: &params, byteCount: MemoryLayout<AerialParamsSwift>.stride)
+
+        guard let commandBuffer = commandQueue.makeCommandBuffer(),
+              let encoder = commandBuffer.makeComputeCommandEncoder() else { return nil }
+        encoder.setComputePipelineState(aerialState)
+        encoder.setTexture(rgb64, index: 0)
+        encoder.setTexture(depth64, index: 1)
+        encoder.setBuffer(primsBuf, offset: 0, index: 0)
+        encoder.setBuffer(paramsBuf, offset: 0, index: 1)
+        encoder.setBuffer(outBuf, offset: 0, index: 2)
+        let side = CameraConfig.outputSize
+        encoder.dispatchThreads(MTLSize(width: side, height: side, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else { return nil }
+
+        let ptr = outBuf.contents().bindMemory(to: UInt8.self, capacity: side * side)
+        return Array(UnsafeBufferPointer(start: ptr, count: side * side))
+    }
+
     // MARK: - Texture Readback (for CPU perfect pass)
 
     /// Read back the downsampled 64×64 RGB texture after GPU processing.
@@ -544,118 +384,15 @@ final class MetalPipeline {
         }
     }
 
-    // MARK: - Debug Logging
-
-    private func logDebugCounters(frameIndex: Int) {
-        // Epoch distribution
-        if let buf = epochCountsBuffer {
-            let ptr = buf.contents().bindMemory(to: UInt32.self, capacity: 4)
-            let counts = (0..<4).map { ptr[$0] }
-            logger.info("MetalPipeline: frame \(frameIndex) epochs: [\(counts[0]), \(counts[1]), \(counts[2]), \(counts[3])]")
-        }
-
-        // Sigma histogram (summary: min, max, peak)
-        if let buf = sigmaHistBuffer {
-            let ptr = buf.contents().bindMemory(to: UInt32.self, capacity: 32)
-            let hist = (0..<32).map { ptr[$0] }
-            let total = hist.reduce(0, +)
-            if total > 0 {
-                let minBin = hist.firstIndex(where: { $0 > 0 }) ?? 0
-                let maxBin = hist.lastIndex(where: { $0 > 0 }) ?? 31
-                let peakBin = hist.enumerated().max(by: { $0.element < $1.element })?.offset ?? 0
-                let sigmaMin = 7.0 + Float(minBin) * 9.0 / 32.0
-                let sigmaMax = 7.0 + Float(maxBin) * 9.0 / 32.0
-                let sigmaPeak = 7.0 + Float(peakBin) * 9.0 / 32.0
-                logger.info("MetalPipeline: frame \(frameIndex) σ range: [\(String(format: "%.1f", sigmaMin)), \(String(format: "%.1f", sigmaMax))], peak=\(String(format: "%.1f", sigmaPeak))")
-            }
-        }
-    }
-
-    // MARK: - Gene NN GPU Dispatch
-
-    /// Run the geneForward kernel on GPU.
-    /// Inputs: pre-computed histogram data + depths + gene weights + metadata.
-    /// Outputs: palette indices + global weights.
-    func processWithGene(
-        histograms: [Float],    // 126 × S² floats (pre-flattened BlockPyramid histograms)
-        depths: [Float],        // S² depth values
-        weights: GeneWeights,   // gene weights (4581 floats)
-        meta: GeneMetaParams    // frame metadata
-    ) -> (indices: [UInt8], globalWeights: [Float])? {
-        guard let pso = geneForwardState,
-              let histBuf = geneHistogramBuffer,
-              let depthBuf = geneOutputBuffer,  // reuse for depth input
-              let wBuf = geneWeightsBuffer,
-              let metaBuf = geneMetaBuffer,
-              let outBuf = geneOutputBuffer,
-              let gBuf = geneGlobalBuffer,
-              let cmdBuf = commandQueue.makeCommandBuffer()
-        else {
-            logger.warning("MetalPipeline: gene GPU dispatch unavailable — PSO or buffers nil")
-            return nil
-        }
-
-        let s = Int(meta.width)
-        let pixelCount = s * s
-
-        // Upload histogram data
-        histBuf.contents().copyMemory(from: histograms, byteCount: min(histograms.count * 4, histBuf.length))
-
-        // Upload depths into a separate section or use a dedicated buffer
-        // For now: depths are passed via the gene meta or a dedicated buffer
-        // TODO: allocate separate depth input buffer for geneForward
-
-        // Upload weights
-        wBuf.contents().copyMemory(from: weights.weights, byteCount: min(weights.weights.count * 4, wBuf.length))
-
-        // Upload metadata
-        var metaCopy = meta
-        metaBuf.contents().copyMemory(from: &metaCopy, byteCount: MemoryLayout<GeneMetaParams>.stride)
-
-        // Dispatch
-        guard let encoder = cmdBuf.makeComputeCommandEncoder() else { return nil }
-        encoder.setComputePipelineState(pso)
-        encoder.setBuffer(histBuf, offset: 0, index: 0)   // histograms
-        // depths at index 1 — need dedicated buffer (TODO)
-        encoder.setBuffer(outBuf, offset: 0, index: 2)    // output indices
-        encoder.setBuffer(gBuf, offset: 0, index: 3)      // global weights
-        encoder.setBuffer(wBuf, offset: 0, index: 4)      // gene weights
-        encoder.setBuffer(metaBuf, offset: 0, index: 5)   // metadata
-
-        let gridSize = MTLSize(width: s, height: s, depth: 1)
-        let groupSize = MTLSize(width: 8, height: 8, depth: 1)
-        encoder.dispatchThreads(gridSize, threadsPerThreadgroup: groupSize)
-        encoder.endEncoding()
-
-        cmdBuf.commit()
-        cmdBuf.waitUntilCompleted()
-
-        // Read back results
-        let indexPtr = outBuf.contents().bindMemory(to: UInt8.self, capacity: pixelCount)
-        let indices = Array(UnsafeBufferPointer(start: indexPtr, count: pixelCount))
-
-        let globalPtr = gBuf.contents().bindMemory(to: Float.self, capacity: pixelCount)
-        let globals = Array(UnsafeBufferPointer(start: globalPtr, count: pixelCount))
-
-        logger.info("MetalPipeline: geneForward dispatched \(s)×\(s) → \(indices.filter { $0 > 0 }.count) non-zero indices")
-
-        return (indices, globals)
-    }
 }
 
 // MARK: - Param Structs (must match Metal struct layout)
 
-// Must match Metal struct QuantizeParams layout exactly (48 bytes).
-// float4 first to avoid 16-byte alignment padding.
-struct QuantizeParamsSwift {
-    var epochCenters: SIMD4<Float>  // offset 0  (16 bytes)
-    var sigmaBase: Float            // offset 16 (4 bytes)
-    var frameIndex: UInt32          // offset 20
-    var seed: UInt32                // offset 24
-    var width: UInt32               // offset 28
-    var height: UInt32              // offset 32
-    var debugFlags: UInt32          // offset 36
-    var _pad: UInt32 = 0            // offset 40 (pad to 48)
+// Must match Metal AerialParams (three 16-byte rows, 48 bytes).
+struct AerialParamsSwift {
+    var centroid: SIMD4<Float>   // xyz = OKLab c_F
+    var scalars: SIMD4<Float>    // s*, τ, 1/dNear, 1/dFar
+    var flags: SIMD4<UInt32>     // twoPhase, side
 }
 
 // Must match Metal DownsampleParams (24 bytes: 6 × UInt32)

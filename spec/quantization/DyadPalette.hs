@@ -21,7 +21,9 @@
 -- binomial sampling. Complements are generated, never designed.
 --
 -- Roles: face pixels quantize to primaries 0..127 ONLY; the
--- background collapses to the single index 255 = comp(centroid).
+-- background takes the σ-mirror of its own nearest primary (v4,
+-- the binomial background — see §6; the solid-255 collapse of
+-- v1/v2 is superseded).
 --
 -- Gamut law: when a complement (or shell sample) leaves sRGB, it
 -- is clamped by scaling chroma alone — L and hue are never moved.
@@ -295,20 +297,36 @@ buildDyad = buildDyadFrom . analyze
 -- pair by a Bayer 4×4 ordered threshold on the grid position:
 -- coverage t of each tile shows the σ side partner(q), the rest
 -- shows the primary side q, where q = nearestPrimary(pulled) is
--- the v2 search unchanged. Endpoints are continuous BY
--- CONSTRUCTION: at t = 0 the whole tile is the primary side (the
--- face's own colors continue past the silhouette — no hue snap);
--- as t → 1 the pull has collapsed the pixel to the centroid, so
--- q → 0 and partner(q) → 255; t ≥ 1 stays the exact far select.
+-- the v2 search unchanged.
+--
+-- v4 (THE BINOMIAL BACKGROUND — Daniel, 2026-08-10: "go back to the
+-- binomial distribution", rejecting the solid comp fill): the far
+-- select is NO LONGER the constant 255. A fully pulled pixel keeps
+-- its OWN Lab and takes the σ-MIRROR of its own nearest primary:
+-- far → partner(nearestPrimary(lc)), unpulled. The background
+-- therefore OCCUPIES the mirrored binomial shells (DY1: 1,1,2,4,8,
+-- 16,32,64) — real spatial structure in complement space, involution
+-- intact, one search shared with the face. The band still pulls
+-- (face colors continue past the silhouette — no hue snap); the
+-- centroid solid survives only as the limit for a pixel that IS the
+-- centroid color.
 -- ════════════════════════════════════════════════════════════════
 
+-- ⊘ SUPERSEDED AS THE LIVE PRODUCER OF t (Daniel, 2026-08-10: no
+-- naked constants). The pull coverage t is now SOLVED from the
+-- capture's own depth field by temporal/DepthMixture.hs (posterior
+-- of a tied-variance two-phase mixture; crossover = equal free
+-- energy; band width = τ·ln 81, emergent). tau/bleedWidth/bleedGamma
+-- remain here ONLY as a deterministic legacy t-GENERATOR for the §6
+-- mechanism axioms below — the mechanism (pre-pull, σ-mirror,
+-- Bayer coverage, terminal solid 255) is t-generic and unchanged.
 tau, bleedWidth, bleedGamma :: Double
-tau        = 0.6    -- face threshold on the depth signal
-bleedWidth = 0.15   -- depth band over which the background collapses
-bleedGamma = 0.5    -- < 1 = harsher initial jump off the silhouette
+tau        = 0.6    -- ⊘ legacy generator only — see DepthMixture.hs
+bleedWidth = 0.15   -- ⊘ legacy generator only
+bleedGamma = 0.5    -- ⊘ legacy generator only
 
--- | Pull toward the centroid: 0 at the silhouette, hard 1 at and
---   beyond tau − bleedWidth. Monotone nonincreasing in depth.
+-- | Legacy v2 pull curve (⊘ generator for the axioms; the live t is
+--   DepthMixture's posterior). Monotone nonincreasing in depth.
 pull :: Double -> Double
 pull d | d >= tau  = 0
        | otherwise = min 1 ((tau - d) / bleedWidth) ** bleedGamma
@@ -336,13 +354,14 @@ nearestPrimaryLab tbl lc =
 nearestPrimary :: [RGB8] -> RGB8 -> Int
 nearestPrimary tbl = nearestPrimaryLab tbl . srgb8ToOklab
 
--- | v3 assignment at a grid position: face → nearest primary;
---   far (t ≥ 1) → exactly 255; band → pair dither between q and
+-- | v4 assignment at a grid position: face → nearest primary;
+--   far (t ≥ 1) → σ-mirror of the pixel's OWN nearest primary
+--   (binomial background); band → pair dither between q and
 --   partner(q) with coverage t under the Bayer threshold.
 quantizeDyadAt :: [RGB8] -> Double -> (Int, Int) -> RGB8 -> Int
 quantizeDyadAt tbl d (x, y) c
   | d > tau   = nearestPrimaryLab tbl lc
-  | t >= 1    = 255
+  | t >= 1    = partner (nearestPrimaryLab tbl lc)
   | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner q
   | otherwise = q
   where
@@ -356,6 +375,84 @@ quantizeDyadAt tbl d (x, y) c
 --   threshold 0.5/16 keeps the σ side for any t above it.
 quantizeDyad :: [RGB8] -> Double -> RGB8 -> Int
 quantizeDyad tbl d = quantizeDyadAt tbl d (0, 0)
+
+-- ════════════════════════════════════════════════════════════════
+-- § 6c. v5 — THE AERIAL MIRROR LAW (2026-08-10, SPEC PHASE)
+--
+-- Ruled by Daniel from the depth↔color investigation
+-- (docs/depth-color-scales.md). NOT the shipped Swift law yet:
+-- v4 above ships; v5 ports only after these axioms are green AND
+-- ruling R4 (comp-halo vs faithful-hue) is decided on renders.
+--
+-- THE INVARIANT:  σ(s) · γ(s) = σ_base(K)   at every depth s and
+-- every rung K ∈ {64, 32, 16} — a pixel buys its temporal octave
+-- with a chroma octave. σ(s) = σ_base·(2−s) is the shipped cadence
+-- (near/far = exact octave), so γ is FORCED:
+--
+--     γ(s) = 1 / (2 − s)  ∈  [1/2, 1]
+--
+-- Zero new constants: the 2 is the cadence octave itself.
+--
+-- Staging: ŷ = c_F + γ(s)·(y − c_F) — chroma compresses toward the
+-- face centroid with distance (aerial perspective as law), applied
+-- to ALL roles. This deletes v4's band pre-pull AND v4's chroma
+-- seam at t = 31/32 (band labs pulled by t, far labs raw — a real
+-- discontinuity): under v5 the staged lab is continuous in s and
+-- INDEPENDENT of t.
+--
+-- Routing: the posterior t does COVERAGE ONLY. One search on ŷ
+-- gives q; the Bayer threshold picks q vs partner(q). The emitted
+-- pair {q, 255−q} is a function of s alone (seam-death), so the
+-- involution and the GIF contract are untouched by construction.
+--
+-- R4 fork (BOTH spec'd, neither chosen): default = comp-halo (the
+-- shipped v4 aesthetic — far shows the complement of its own staged
+-- color); variant = faithful-hue (σ side ≈ the pixel's own hue via
+-- double-comp routing; costs a second search — ANE rebuild).
+-- ════════════════════════════════════════════════════════════════
+
+-- Exact-rational forms for the invariant (DY9 checks exactly).
+gammaAerialR :: Rational -> Rational
+gammaAerialR s = 1 / (2 - s)
+
+sigmaCadenceR :: Int -> Rational -> Rational
+sigmaCadenceR k s = sigmaBaseR k * (2 - s)
+
+sigmaBaseR :: Int -> Rational
+sigmaBaseR k = fromIntegral (k - 1) / 8
+
+-- Double staging (the geometry consumers use).
+gammaAerial :: Double -> Double
+gammaAerial s = 1 / (2 - s)
+
+-- | ŷ = c_F + γ(s)·(y − c_F): compress chroma about the centroid.
+stageAerial :: Lab -> Double -> Lab -> Lab
+stageAerial (cl, ca, cb) s (l, a, b) =
+  let g = gammaAerial s
+  in (cl + g * (l - cl), ca + g * (a - ca), cb + g * (b - cb))
+
+-- | The staged pair's primary: ONE search, a function of s only.
+aerialPrimary :: [RGB8] -> Double -> RGB8 -> Int
+aerialPrimary tbl s c =
+  nearestPrimaryLab tbl (stageAerial (srgb8ToOklab (head tbl)) s (srgb8ToOklab c))
+
+-- | v5 DEFAULT (comp-halo): γ staging + σ-routing at coverage t.
+quantizeAerialAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
+quantizeAerialAt tbl s t (x, y) c
+  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner q
+  | otherwise                                = q
+  where q = aerialPrimary tbl s c
+
+-- | R4 VARIANT (faithful-hue): the σ side routes through comp so the
+--   displayed color ≈ ŷ itself (comp∘comp = id up to gamut clamp).
+--   Two searches — kept in spec for the Mac render comparison only.
+quantizeAerialFaithfulAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
+quantizeAerialFaithfulAt tbl s t (x, y) c
+  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner qc
+  | otherwise                                = aerialPrimary tbl s c
+  where
+    cF = srgb8ToOklab (head tbl)
+    qc = nearestPrimaryLab tbl (comp (stageAerial cF s (srgb8ToOklab c)))
 
 -- ════════════════════════════════════════════════════════════════
 -- § 7. DETERMINISTIC TEST INPUTS (no System.Random)
@@ -483,27 +580,42 @@ axiom_DY5 = all valid allTables && map buildDyad sampleSets == map buildDyad sam
     valid t = length t == 256 && all inRange t
     inRange (r, g, b) = all (\c -> c >= 0 && c <= 255) [r, g, b]
 
--- (DY6) Role law with the pair-dither band: face pixels land in
+-- (DY6) Role law with the pair-dither band (v4): face pixels land in
 --       primaries 0..127; a band pixel is ALWAYS one of the two
 --       sides {q, partner q} of its own pair; over a full 4×4 tile
 --       the σ-side count equals the number of Bayer thresholds
---       below t — monotone in t, 0 at t = 0, 16 at t ≥ 1; fully
---       pulled background is exactly 255; the pull is monotone in
---       depth and saturates at tau − bleedWidth.
+--       below t — monotone in t, 0 at t = 0, 16 at t ≥ 1; the far
+--       background is the σ-mirror of the pixel's OWN nearest
+--       primary (≥ 128, involution-exact) and OCCUPIES the mirrored
+--       binomial shells — varied colors spread over many indices,
+--       never one solid; the pull is monotone in depth and saturates
+--       at tau − bleedWidth.
 axiom_DY6 :: Bool
 axiom_DY6 =
      all (< primaryCount) faceIdx
   && pairLaw
   && tileLaw
-  && all (== 255) farIdx
+  && farLaw
+  && farSpread
   && monotonePull
   where
     tbl = buildDyad (skinColors 1 324)
     posGrid = [ (x, y) | x <- [0 .. 7], y <- [0 .. 7] ]
     faceIdx = [ quantizeDyadAt tbl 0.9 xy c
               | c <- skinColors 2 25, xy <- [(0, 0), (1, 2), (3, 3), (7, 5)] ]
+    farColors = randColors8 33 25
     farIdx  = [ quantizeDyadAt tbl 0.2 xy c
-              | c <- randColors8 33 25, xy <- [(0, 0), (1, 2), (3, 3), (7, 5)] ]
+              | c <- farColors, xy <- [(0, 0), (1, 2), (3, 3), (7, 5)] ]
+    -- v4: far = involution-exact mirror of the pixel's own primary.
+    farLaw = and
+      [ quantizeDyadAt tbl 0.2 (0, 0) c
+          == partner (nearestPrimaryLab tbl (srgb8ToOklab c))
+      | c <- farColors ]
+      && all (>= 128) farIdx
+    -- Binomial occupancy: 25 varied colors must spread over the
+    -- mirrored shells, never collapse to one solid index.
+    farSpread = length (foldr (\i acc -> if i `elem` acc then acc else i : acc)
+                              [] farIdx) >= 4
     -- (a) Band indices are the pair of the v2 search, nothing else.
     pairLaw = and
       [ idx == q || idx == partner q
@@ -535,6 +647,99 @@ axiom_DY6 =
       && pull (tau - bleedWidth) >= 1
       && pull tau == 0
       where ps = [pull (fromIntegral k / 100) | k <- [0 .. 100 :: Int]]
+
+-- (DY9) THE AERIAL INVARIANT, EXACTLY: σ(s)·γ(s) = σ_base(K) in
+--       rational arithmetic at every depth for every rung
+--       K ∈ {64,32,16}; γ spans the octave [1/2, 1] monotonically
+--       with γ(0) = 1/2 and γ(1) = 1 exactly.
+axiom_DY9 :: Bool
+axiom_DY9 =
+     and [ sigmaCadenceR k s * gammaAerialR s == sigmaBaseR k
+         | k <- [64, 32, 16], s <- sGridR ]
+  && gammaAerialR 0 == 0.5
+  && gammaAerialR 1 == 1
+  && and (zipWith (<) (map gammaAerialR sGridR) (map gammaAerialR (tail sGridR)))
+  && all (\s -> let g = gammaAerialR s in g >= 0.5 && g <= 1) sGridR
+  where sGridR = [fromIntegral n / 20 | n <- [0 .. 20 :: Int]] :: [Rational]
+
+-- (DY10) SEAM-DEATH: the emitted pair {q, 255−q} is a function of s
+--        ONLY — for every coverage t and grid position the emission
+--        stays inside the s-pair (v4's t = 31/32 chroma seam cannot
+--        exist); the staging is 1-Lipschitz in s (γ' ≤ 1); and at
+--        s = 1 the law reduces EXACTLY to the raw nearest-primary
+--        face select (γ(1) = 1).
+axiom_DY10 :: Bool
+axiom_DY10 = pairTFree && lipschitz && faceCompat
+  where
+    tbl = buildDyad (skinColors 1 324)
+    cF = srgb8ToOklab (head tbl)
+    probes = randColors8 41 15 ++ skinColors 6 10
+    sGrid = [fromIntegral n / 20 | n <- [0 .. 20 :: Int]] :: [Double]
+    posGrid = [ (x, y) | x <- [0 .. 3], y <- [0 .. 3] ]
+    stageOf s c = stageAerial cF s (srgb8ToOklab c)
+    pairTFree = and
+      [ idx == q || idx == partner q
+      | c <- probes, s <- sGrid
+      , let q = aerialPrimary tbl s c
+      , t <- sGrid, xy <- posGrid
+      , let idx = quantizeAerialAt tbl s t xy c ]
+    lipschitz = and
+      [ dLab2 (stageOf s1 c) (stageOf s2 c)
+          <= d0 * (s2 - s1) * (s2 - s1) + 1e-12
+      | c <- probes, (s1, s2) <- zip sGrid (tail sGrid)
+      , let d0 = dLab2 (srgb8ToOklab c) cF ]
+    faceCompat = all
+      (\c -> aerialPrimary tbl 1 c == nearestPrimaryLab tbl (srgb8ToOklab c))
+      probes
+
+-- (DY11) AERIAL OCCUPANCY: at full coverage the far field lives in
+--        the σ half and SPREADS over the mirrored shells (no solid);
+--        the staged chroma radius at s = 0 is EXACTLY half the raw
+--        radius (the octave, in color); and the faithful-hue R4
+--        variant is (in aggregate) at least as close to the staged
+--        color on the σ side as the comp-halo default.
+axiom_DY11 :: Bool
+axiom_DY11 = farHalf && farSpreadV5 && chromaOctave && faithfulCloser
+  where
+    tbl = buildDyad (skinColors 1 324)
+    cF = srgb8ToOklab (head tbl)
+    farColors = randColors8 43 25
+    farIdx = [ quantizeAerialAt tbl 0.05 1 (0, 0) c | c <- farColors ]
+    farHalf = all (>= 128) farIdx
+    farSpreadV5 = length (nubInt farIdx) >= 4
+    nubInt = foldr (\i acc -> if i `elem` acc then acc else i : acc) []
+    chromaOctave = and
+      [ abs (sqrt (dLab2 (stageAerial cF 0 y) cF) - sqrt (dLab2 y cF) / 2) < 1e-9
+      | c <- farColors, let y = srgb8ToOklab c ]
+    labOf i = srgb8ToOklab (tbl !! i)
+    faithfulCloser = sum (map dist faithful) <= sum (map dist halo) + 1e-9
+      where
+        yhats = [ stageAerial cF 0.05 (srgb8ToOklab c) | c <- farColors ]
+        faithful = zip yhats
+          [ quantizeAerialFaithfulAt tbl 0.05 1 (0, 0) c | c <- farColors ]
+        halo = zip yhats (map (\c -> quantizeAerialAt tbl 0.05 1 (0, 0) c) farColors)
+        dist (yhat, i) = sqrt (dLab2 (labOf i) yhat)
+
+-- (DY12) STATS-ON-ŷ (the coherence clause): analyzing STAGED samples
+--        keeps the solver single-valued (determinism), every staged
+--        table satisfies the involution byte-exactly, and the staged
+--        centroid is stable across adjacent depths (no PCA flips or
+--        table churn from the γ transform).
+axiom_DY12 :: Bool
+axiom_DY12 = deterministic && lawfulTables && centroidStable
+  where
+    field = skinColors 5 324
+    cF0 = stCentroid (analyze field)
+    staged s = map (oklabToSrgb8 . stageAerial cF0 s . srgb8ToOklab) field
+    tblAt s = buildDyad (staged s)
+    deterministic = tblAt 0.3 == tblAt 0.3
+    lawfulTables = all involutionExact [ tblAt s | s <- [0, 0.25, 0.5, 0.75, 1] ]
+    involutionExact t = length t == 256
+        && all (\i -> t !! partner i == complementOf (t !! i)) [0 .. 127]
+    centroidStable = and
+      [ dLab2 (srgb8ToOklab (head (tblAt s1))) (srgb8ToOklab (head (tblAt s2))) < 0.01
+      | (s1, s2) <- zip ss (tail ss) ]
+      where ss = [fromIntegral n / 10 | n <- [0 .. 10 :: Int]] :: [Double]
 
 -- (DY7) EMA convexity: blending statistics keeps the centroid an
 --       exact convex combination and the covariance positive
@@ -640,9 +845,13 @@ main = do
   check "DY3 comp: L exact, hue flipped exact, chroma-only clamp"   [axiom_DY3]
   check "DY4 shells: sizes = ladder, whitened radius = ρ_k, PC3=0"  [axiom_DY4]
   check "DY5 totality + determinism on all sample sets"             [axiom_DY5]
-  check "DY6 roles: face → 0..127, band pair-dither, 255 far"       [axiom_DY6]
+  check "DY6 roles: face → 0..127, band pair-dither, binomial far"       [axiom_DY6]
   check "DY7 EMA warm start: convex centroid, PSD covariance"       [axiom_DY7]
   check "DY8 canonical PCA signs: no shell flips between frames"    [axiom_DY8]
+  check "DY9 aerial invariant σ·γ = σ_base(K) exact, octave [½,1]"  [axiom_DY9]
+  check "DY10 seam-death: pair t-free, 1-Lipschitz, face-compat"    [axiom_DY10]
+  check "DY11 aerial occupancy: σ-half spread, chroma octave, R4"   [axiom_DY11]
+  check "DY12 stats-on-ŷ: single-valued, involution, stable"        [axiom_DY12]
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════"

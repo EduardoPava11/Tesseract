@@ -41,6 +41,9 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_NSCameraUsageDescription: "Tesseract uses the front TrueDepth camera to make GIFs: depth drives the LIVE cadence, the ARKit face mesh drives the FACE cadence."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Tesseract saves the GIFs you keep to your photo library."
+        # Export compliance: no non-exempt encryption (on-device image
+        # processing only) — skips the App Store Connect prompt.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_CFBundleDisplayName: "Tesseract"

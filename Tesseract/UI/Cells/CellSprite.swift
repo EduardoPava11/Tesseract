@@ -69,11 +69,12 @@ enum CellGeom {
 
 // MARK: - The record button
 
-/// The record button as an 18×18-cell block at the gifPx atom (72pt): a
-/// 2-cell ring band directly abutting a filled disc. Closure law:
-/// disc(r=7)·2 + ring(t=2)·2 = 18 = `TesseractLattice.recordCells`
-/// (disc 14 = `recordDiscCells`). States are cell transforms only:
-/// idle · busy (reject red) · disabled (2×2 checker).
+/// The record button as a 22×22-cell block at the gifPx atom (88pt —
+/// upscaled 2026-08-10): a 2-cell ring band directly abutting a filled
+/// disc. Closure law: disc(r=9)·2 + ring(t=2)·2 = 22 =
+/// `TesseractLattice.recordCells` (disc 18 = `recordDiscCells`). States
+/// are cell transforms only: idle · busy (reject red) · disabled (2×2
+/// checker). All geometry derives from the lattice constants.
 struct CellButton: View {
     enum State { case idle, busy, disabled }
     var state: State = .idle

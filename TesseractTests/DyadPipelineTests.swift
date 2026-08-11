@@ -60,7 +60,8 @@ final class DyadPipelineTests: XCTestCase {
                 if inFace {
                     XCTAssertLessThan(indices[p], 128, "face pixels use primaries only")
                 } else {
-                    XCTAssertEqual(indices[p], 255, "background collapses to index 255")
+                    XCTAssertGreaterThanOrEqual(indices[p], 128,
+                        "background lives in the σ-mirror half (v4 binomial background)")
                 }
             }
         }
@@ -91,8 +92,9 @@ final class DyadPipelineTests: XCTestCase {
     }
 
     func testHarshBleedBand() throws {
-        // Three depth zones: face disk (0.9), bleed ring (0.55 — pull
-        // t ≈ 0.58, inside the band), far field (0.1 — fully pulled).
+        // Three depth zones: face disk (0.9), ring (0.5 — the cluster
+        // midpoint, so the FITTED mixture must put it in the band),
+        // far field (0.1 — solid mirror).
         let n = side * side
         let c = Double(side - 1) / 2
         var rgb = [(Float, Float, Float)](repeating: (0.1, 0.9, 0.1), count: n)
@@ -103,7 +105,7 @@ final class DyadPipelineTests: XCTestCase {
             if r2 <= 20 * 20 {
                 rgb[p] = (0.65, 0.5, 0.4); depths[p] = 0.9
             } else if r2 <= 27 * 27 {
-                depths[p] = 0.55
+                depths[p] = 0.5
             }
         }
         let indices = [UInt8](repeating: 0, count: n)
@@ -113,20 +115,27 @@ final class DyadPipelineTests: XCTestCase {
             subjectAnalysis: nil, anchorTrace: nil, timestamp: 0)
         let out = try XCTUnwrap(DyadPipeline.process(frames: [frame]))
 
+        // The fitted role law: face zone solid-face, ring in the band,
+        // far zone solid-mirror — boundaries are the Bayer extrema.
+        XCTAssertTrue(out.twoPhase, "three-zone field must read as two phases")
+        XCTAssertLessThan(out.mixture.pull(0.9), DyadPipeline.coverageFloor)
+        let tBand = out.mixture.pull(0.5)
+        XCTAssertTrue(tBand > DyadPipeline.coverageFloor && tBand < DyadPipeline.coverageCeil,
+                      "midpoint ring must sit in the band")
+        XCTAssertGreaterThan(out.mixture.pull(0.1), DyadPipeline.coverageCeil)
+
         // v3 pair dither: a band pixel shows the σ side of its pair
         // exactly when its Bayer threshold is below the coverage t;
         // otherwise the primary side. Flipping with 255 − i is the
         // other side of the same pair by the involution.
-        let tBand = DyadPipeline.pull(0.55)
-        XCTAssertTrue(tBand > 0 && tBand < 1, "ring depth must sit in the band")
         var sawSigma = false, sawPrimary = false
         for p in 0..<n {
             let idx = Int(out.indexFrames[0][p])
             switch depths[p] {
-            case let d where d > 0.6:
+            case 0.9:
                 XCTAssertLessThan(idx, 128, "face pixels use primaries")
-            case 0.55:
-                let sigmaSide = DyadPipeline.bayer4[(p / side) % 4][(p % side) % 4] < tBand
+            case 0.5:
+                let sigmaSide = DyadPipeline.bayer4[(p / side) % 4][(p % side) % 4] < Float(tBand)
                 if sigmaSide {
                     XCTAssertGreaterThanOrEqual(idx, 128, "below threshold = σ side")
                     XCTAssertLessThan(255 - idx, 128, "partner is the primary side")
@@ -137,17 +146,25 @@ final class DyadPipelineTests: XCTestCase {
                     sawPrimary = true
                 }
             default:
-                XCTAssertEqual(idx, 255, "fully pulled background is the solid")
+                XCTAssertGreaterThanOrEqual(idx, 128,
+                    "far background is the σ-mirror of its own primary (v4)")
             }
         }
         XCTAssertTrue(sawSigma && sawPrimary,
             "the band must dither: both sides of the pair appear")
 
-        // BLEED OFF: role law v1 — every background pixel is the solid.
+        // v4: the far field must NOT be one solid — the loud green far
+        // pixels and the (differently colored) uniform region still map
+        // through their OWN nearest primary; at minimum the σ half is
+        // occupied, and a uniform far field maps consistently.
+        let farIdx = Set((0..<n).filter { depths[$0] == 0.1 }.map { out.indexFrames[0][$0] })
+        XCTAssertTrue(farIdx.allSatisfy { $0 >= 128 }, "far occupies the mirrored shells")
+
+        // BLEED OFF: MAP classes, no band; background = hard σ-mirror.
         let flat = try XCTUnwrap(DyadPipeline.process(frames: [frame], bleed: false))
-        for p in 0..<n where depths[p] <= DyadPipeline.faceThreshold {
-            XCTAssertEqual(flat.indexFrames[0][p], 255,
-                           "bleed off collapses ALL background to 255")
+        for p in 0..<n where depths[p] == 0.1 {
+            XCTAssertGreaterThanOrEqual(flat.indexFrames[0][p], 128,
+                           "bleed off: far field is the hard σ-mirror, no band")
         }
     }
 

@@ -42,15 +42,19 @@ extension Color {
 
 /// The closed CellText size registry — glyph height in CELLS (2pt sub-atoms).
 /// Every text site names a register; ad-hoc rows are a lint smell.
+///
+/// Upscaled 2026-08-10 (Daniel: "small pixel words… use up more space to
+/// be legible"): every register grew; the pixel-font look is unchanged —
+/// glyphs are still rasterized AA-off at cell resolution, just taller.
 enum TypeRows {
-    /// Sparkline/stat labels, badges (was 7-8pt system).
-    static let micro = 3
-    /// Hints, phase text, captions, metric values (was 9-10pt / .caption).
-    static let label = 5
-    /// Button labels, headers (was .headline/.title3/.body).
-    static let body = 7
-    /// Counters, percentages (was .title2).
-    static let counter = 9
-    /// The idle wordmark (was .title).
-    static let display = 13
+    /// Sparkline/stat labels, badges.
+    static let micro = 4      // 8 pt  (was 3 = 6 pt)
+    /// Hints, phase text, captions, metric values.
+    static let label = 7      // 14 pt (was 5 = 10 pt)
+    /// Button labels, headers.
+    static let body = 9       // 18 pt (was 7 = 14 pt)
+    /// Counters, percentages.
+    static let counter = 11   // 22 pt (was 9)
+    /// The idle wordmark / cover titles.
+    static let display = 16   // 32 pt (was 13)
 }

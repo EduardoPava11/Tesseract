@@ -37,13 +37,14 @@ enum TesseractLattice {
     static let vBleedPt: Int = 2     // 874 − 872, split symmetrically
 
     // ── Widget footprints, in atoms ──
+    // Buttons upscaled 2026-08-10 (Daniel: more real estate, more legible):
+    // growth is always MORE atoms, never a bigger atom. The shutter went
+    // 18→22 cells (72→88 pt), action buttons 11→13 rows (44→52 pt).
     static let touchFloorCells: Int = 11   // 44 pt — HIG minimum hit target
+    static let buttonRowCells: Int = 13    // 52 pt — the standard action-button height
     static let previewCells: Int = 64      // the GIF itself: 64 atoms = 256 pt
-    static let channelCells: Int = 12      // 48 pt R/G/B/D thumbs
-    static let recordCells: Int = 18       // 72 pt shutter footprint
-    static let recordDiscCells: Int = 14   // 56 pt shutter inner disc
-    static let paletteCells: Int = 16      // 64 pt palette swatch (16×16 grid)
-    static let barCells: Int = 11          // 44 pt mode bar (a touch target)
+    static let recordCells: Int = 22       // 88 pt shutter footprint
+    static let recordDiscCells: Int = 18   // 72 pt shutter inner disc
 
     // ── Self-check: every law, re-asserted at runtime ──
 
@@ -72,7 +73,7 @@ enum TesseractLattice {
         // Widget sanity
         precondition(recordDiscCells < recordCells,
                      "shutter disc must fit its footprint")
-        precondition(barCells >= touchFloorCells,
-                     "mode bar hosts buttons — must meet the touch floor")
+        precondition(buttonRowCells >= touchFloorCells,
+                     "action buttons must meet the touch floor")
     }
 }

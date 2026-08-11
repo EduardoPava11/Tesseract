@@ -57,6 +57,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     @Published private(set) var dissonance: DissonanceTelemetry?
     @Published var processProgress: Float = 0
     @Published var processPhase: String = ""
+    /// Palette-creation visibility (Daniel, 2026-08-10): the current
+    /// frame's 768-byte DYAD table, published as each is solved.
+    @Published var liveTable: Data?
 
     // MARK: - ARKit Session
 
@@ -72,6 +75,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     nonisolated private static let minFrameSpacing: Double = 1.0 / 21.0
 
     private let frameBuffer = FrameBuffer()
+    /// Unified DYAD preview engine (CPU; ARKit frames have no Metal
+    /// pipeline). Touched ONLY on delegateQueue (serial) — no locking.
+    nonisolated(unsafe) private let dyadPreview = DyadPreview()
 
     // MARK: - Lifecycle
 
@@ -144,12 +150,24 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         }
         let hasFace = faceAnchor != nil
 
-        // 3. Preview: quick quantize with the anatomical cadence.
+        // 3. Preview — unified with the export for LOOK = dyad (the
+        // anatomical signal rides the depth slot, so γ staging and the
+        // mixture posterior apply unchanged); lattice quick-quantize
+        // otherwise. FACE has no Metal pipeline: CPU reference path.
         let frameIdx = frameBuffer.frameCount
-        let previewIndices = PerfectQuantizer.previewQuantize(
-            rgb: rgb, depths: signalGrid, frameIndex: frameIdx
-        )
-        let img = Self.buildPreviewImage(indices: previewIndices, size: outSize)
+        let previewIndices: [UInt8]
+        let previewTable: [(UInt8, UInt8, UInt8)]?
+        if ExportSettings.load().method == .dyad,
+           let dyadIdx = dyadPreview.process(rgb: rgb, depths: signalGrid) {
+            previewIndices = dyadIdx
+            previewTable = dyadPreview.table
+        } else {
+            previewIndices = PerfectQuantizer.previewQuantize(
+                rgb: rgb, depths: signalGrid, frameIndex: frameIdx)
+            previewTable = nil
+        }
+        let img = Self.buildPreviewImage(indices: previewIndices, size: outSize,
+                                         table: previewTable)
         let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
         Task { @MainActor in
@@ -363,7 +381,17 @@ final class FaceCaptureManager: NSObject, ObservableObject {
             // eligibility fallback. The anatomical signal rides the
             // depth slot, so DYAD's face mass = mesh weight here too.
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
-                                             settings: ExportSettings.load())
+                                             settings: ExportSettings.load(),
+                                             onFrameTable: { [frameTotal = quantizedFrames.count] f, table in
+                Task { @MainActor in
+                    self.liveTable = table
+                    self.processPhase = "Solving palette \(f + 1)/\(frameTotal)"
+                }
+            })
+
+            // Archive every successful export — the library reviews old
+            // GIFs + their palettes from the exact encoded bytes.
+            if let gifData { GIFLibrary.archive(gifData) }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).
@@ -392,10 +420,20 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     // MARK: - Preview Image (mirrors CameraManager.buildPreviewImage)
 
-    nonisolated private static func buildPreviewImage(indices: [UInt8], size: Int) -> CGImage? {
+    /// With a 256-entry `table`, colors come from the live DYAD table
+    /// (the unified preview); without, from the tesseract lattice.
+    nonisolated private static func buildPreviewImage(
+        indices: [UInt8], size: Int,
+        table: [(UInt8, UInt8, UInt8)]? = nil
+    ) -> CGImage? {
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<min(size * size, indices.count) {
-            let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
+            let (r, g, b): (UInt8, UInt8, UInt8)
+            if let table, table.count == 256 {
+                (r, g, b) = table[Int(indices[i])]
+            } else {
+                (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
+            }
             rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b
         }
         let cs = CGColorSpaceCreateDeviceRGB()

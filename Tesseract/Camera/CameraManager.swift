@@ -14,28 +14,16 @@ import CoreImage
 import CoreMedia
 import os.log
 
-#if canImport(MLX)
-import MLX
-#endif
-
 private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
-/// Camera state machine
-/// Composition order: which gene is the base?
-enum CompositionOrder: Equatable {
-    case aIntoB  // A is base, B is residual
-    case bIntoA  // B is base, A is residual
-}
-
-/// Three-phase state machine: Dual Explore → Compose → Refine
+/// Camera state machine — the SIMPLICITY arc (2026-08-09): capture goes
+/// straight to the result. (The three-phase A/B explore/compose/refine
+/// states were excised 2026-08-10 with the rest of the gene arc.)
 enum CameraState: Equatable {
     case idle
     case previewing
     case recording(Int)
     case processing
-    case dualExplore(Int)         // Phase 1: generation counter, two GIFs
-    case composing(CompositionOrder)  // Phase 2: instant, compute composite
-    case refining(Float)           // Phase 3: α ∈ [0,1], single composite GIF
     case done
     case error(String)
 
@@ -44,9 +32,6 @@ enum CameraState: Equatable {
         case (.idle, .idle), (.previewing, .previewing),
              (.processing, .processing), (.done, .done): return true
         case (.recording(let a), .recording(let b)): return a == b
-        case (.dualExplore(let a), .dualExplore(let b)): return a == b
-        case (.composing(let a), .composing(let b)): return a == b
-        case (.refining(let a), .refining(let b)): return a == b
         case (.error(let a), .error(let b)): return a == b
         default: return false
         }
@@ -107,10 +92,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     @Published var state: CameraState = .idle
     @Published var previewImage: CGImage?       // composite quantized preview
-    @Published var previewR: CGImage?            // R channel (outputSize² grayscale)
-    @Published var previewG: CGImage?            // G channel
-    @Published var previewB: CGImage?            // B channel
-    @Published var previewD: CGImage?            // Depth channel
     @Published var previewMeasure: BirkhoffMeasure?
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
@@ -127,34 +108,9 @@ final class CameraManager: NSObject, ObservableObject {
     @Published var processProgress: Float = 0        // 0.0 → 1.0
     @Published var processPhase: String = ""          // "Analyzing frame 12/64"
     @Published var processBoards: GoBoards?           // live Go board snapshot
-
-    // MARK: - Gene State (three-phase interaction)
-    @Published var geneA: GeneWeights = .defaultWeights()
-    @Published var geneB: GeneWeights = .defaultWeights()
-    @Published var compositeGene: GeneWeights = .defaultWeights()
-    @Published var compositeAlpha: Float = 0.5
-    @Published var generation: Int = 0
-
-    // MARK: - MAP-Elites Archive (3×3 rhythm × spread)
-    // Accumulates the best organism per behavioral cell across the whole
-    // app session — the in-app gallery/history. EliteMap is a plain class,
-    // so a version counter drives SwiftUI updates (cubeVersion pattern).
-    let eliteMap = EliteMap()
-    @Published var eliteVersion: Int = 0
-
-    /// Place an organism into the MAP-Elites archive (main-actor only).
-    func placeOrganism(gene: GeneWeights, beauty: Float, descriptor: Descriptor,
-                       gifData: Data, entropy: EntropyFeedback) {
-        if eliteMap.place(gene: gene, beauty: beauty, descriptor: descriptor,
-                          gifData: gifData, entropy: entropy) {
-            eliteVersion += 1
-        }
-    }
-    private var previousGeneA: GeneWeights = .defaultWeights()
-    private var previousGeneB: GeneWeights = .defaultWeights()
-    private var baseGene: GeneWeights = .defaultWeights()   // for composition
-    private var otherGene: GeneWeights = .defaultWeights()  // for composition
-    private var sobolExplorer = SobolExplorer()
+    /// Palette-creation visibility (Daniel, 2026-08-10): the current
+    /// frame's 768-byte DYAD table, published as each is solved.
+    @Published var liveTable: Data?
 
     // MARK: - Capture
 
@@ -172,6 +128,9 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let frameBuffer = FrameBuffer()
     nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
+    /// Preview/export unification v1: the DYAD preview engine. Touched
+    /// ONLY on processingQueue (serial) — no locking.
+    nonisolated(unsafe) private let dyadPreview = DyadPreview()
     // GoEvaluator removed — territory analysis in GoBoard.swift is sufficient
     nonisolated(unsafe) private static var _loggedOnce = false
 
@@ -239,305 +198,9 @@ final class CameraManager: NSObject, ObservableObject {
         guard state == .previewing else { return }
         gifData = nil
         gifMeasure = nil
+        liveTable = nil
         frameBuffer.startRecording()
         state = .recording(0)
-    }
-
-    // MARK: - Phase 1: Dual Exploration (↑↓←→ steer BOTH GIFs)
-
-    /// Swipe steers BOTH genes in the same direction.
-    /// They diverge because they started from different points.
-    func dualSwipe(_ direction: SwipeDirection) {
-        guard case .dualExplore = state else { return }
-        previousGeneA = geneA
-        previousGeneB = geneB
-
-        switch direction {
-        case .up:
-            geneA = perturbEpochAxis(geneA, scale: 0.03, increase: true)
-            geneB = perturbEpochAxis(geneB, scale: 0.03, increase: true)
-        case .down:
-            geneA = perturbEpochAxis(geneA, scale: 0.03, increase: false)
-            geneB = perturbEpochAxis(geneB, scale: 0.03, increase: false)
-        case .left:
-            geneA = sobolExplorer.perturb(geneA, scale: 0.05)
-            geneB = sobolExplorer.perturb(geneB, scale: 0.05)
-        case .right:
-            geneA = previousGeneA
-            geneB = previousGeneB
-        }
-        generation += 1
-        state = .dualExplore(generation)
-    }
-
-    // MARK: - Phase 2: Composition (irreversible)
-
-    /// TAP+HOLD drag A→B or B→A triggers composition.
-    /// This is IRREVERSIBLE. A and B are consumed.
-    func compose(order: CompositionOrder) {
-        guard case .dualExplore = state else { return }
-
-        switch order {
-        case .aIntoB:
-            baseGene = geneA
-            otherGene = geneB
-        case .bIntoA:
-            baseGene = geneB
-            otherGene = geneA
-        }
-
-        compositeAlpha = 0.5
-        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
-        state = .composing(order)
-
-        // Immediately transition to refining
-        state = .refining(compositeAlpha)
-        recomputeGIF()  // gifData must show the composite, not the teacher
-    }
-
-    /// Compose two genes: base + α × (other - base)
-    private func composeGenes(base: GeneWeights, other: GeneWeights, alpha: Float) -> GeneWeights {
-        var weights = [Float](repeating: 0, count: GeneWeights.totalCount)
-        for i in 0..<GeneWeights.attentionCount {
-            let residual = other.weights[i] - base.weights[i]
-            weights[i] = base.weights[i] + alpha * residual
-        }
-        for i in GeneWeights.attentionCount..<GeneWeights.totalCount {
-            weights[i] = base.weights[i]  // CORE from base
-        }
-        return GeneWeights(weights: weights)
-    }
-
-    // MARK: - Phase 3: Refinement (CW/CCW adjust α)
-
-    /// Clockwise: increase α (more of the other gene's influence)
-    func rotateCW(delta: Float = 0.05) {
-        guard case .refining(let alpha) = state else { return }
-        compositeAlpha = min(1, alpha + delta)
-        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
-        state = .refining(compositeAlpha)
-        recomputeGIF()  // Gap 4 fix: GIF updates when α changes
-    }
-
-    /// Counter-clockwise: decrease α (back toward base)
-    func rotateCCW(delta: Float = 0.05) {
-        guard case .refining(let alpha) = state else { return }
-        compositeAlpha = max(0, alpha - delta)
-        compositeGene = composeGenes(base: baseGene, other: otherGene, alpha: compositeAlpha)
-        state = .refining(compositeAlpha)
-        recomputeGIF()  // Gap 4 fix: GIF updates when α changes
-    }
-
-    /// TAP in refining = export the CURRENT composite: re-encode at the
-    /// gene/α on screen, then hand the fresh Data to the caller. The gene
-    /// is captured BEFORE the state flips to .done — the old flow read
-    /// `gifData` written once at initial processing, silently discarding
-    /// all steering (audit P0 #3).
-    func exportCurrent(_ completion: @escaping @MainActor (Data) -> Void) {
-        let gene: GeneWeights = if case .refining = state { compositeGene } else { geneA }
-        if case .refining = state {
-            // Gap 3: Train the NN on the user's final choice
-            trainOnFinalChoice()
-            state = .done
-        }
-        recomputeGIF(gene: gene, completion: completion)
-    }
-
-    // MARK: - Gap 3: Training from User Preferences
-
-    #if canImport(MLX)
-    private var geneTrainer: GeneTrainer?
-    #endif
-
-    /// Train the gene NN on the user's final composition choice.
-    /// Called when the user TAPs to export in Phase 3.
-    /// The composite gene at the chosen α is the PREFERRED output.
-    private func trainOnFinalChoice() {
-        #if canImport(MLX)
-        let capturedFrames = frameBuffer.exportCapturedFrames()
-        guard !capturedFrames.isEmpty else { return }
-
-        let finalGene = compositeGene
-
-        Task.detached(priority: .userInitiated) {
-            // 1. Compute real BlockPyramid inputs
-            let allPyramids = capturedFrames.flatMap { frame in
-                BlockPyramid.computeAll(
-                    rgb: frame.rgb,
-                    depths: frame.depths,
-                    frameIndex: frame.index,
-                    totalFrames: CameraConfig.totalFrames
-                )
-            }
-
-            // 2. Compute teacher targets (PerfectQuantizer output)
-            let allTeacherIndices = capturedFrames.flatMap { frame in
-                PerfectQuantizer.quantizeFrame(
-                    frameIndex: frame.index,
-                    rgb: frame.rgb,
-                    depths: frame.depths
-                )
-            }
-            let allDepths = capturedFrames.flatMap { $0.depths }
-            let targets = teacherTargets(
-                indices: allTeacherIndices,
-                depths: allDepths,
-                pyramids: allPyramids
-            )
-
-            // 3. Compute preferred output (residual with final gene)
-            let preferred: [[Float]] = allPyramids.enumerated().map { (i, pyr) in
-                let (idx, g) = finalGene.forward(pyr.flatten())
-                let d = Float(Int(idx) / 64)
-                let a = Float((Int(idx) % 64) / 16)
-                let b = Float((Int(idx) % 16) / 4)
-                let c = Float(Int(idx) % 4)
-                return [d, a, b, c, g]
-            }
-
-            // 4. Build confidence gates from histograms
-            let gates: [[Float]] = allPyramids.map { pyr in
-                let rConf = pyr.r.coarse.levelConfidence
-                let gConf = pyr.g.coarse.levelConfidence
-                let bConf = pyr.b.coarse.levelConfidence
-                let eConf: Float = 0.5  // epoch confidence from cadence
-                let gConf2 = TeacherDecision.globalWeight(
-                    histConfidence: (rConf + gConf + bConf) / 3,
-                    depth: pyr.depth
-                )
-                return [
-                    (1 - eConf) * 0.5,   // epoch gate
-                    (1 - rConf) * 0.5,   // R gate
-                    (1 - gConf) * 0.5,   // G gate
-                    (1 - bConf) * 0.5,   // B gate
-                    (1 - gConf2) * 0.3   // global gate
-                ]
-            }
-
-            // 5. Train (MLX arrays)
-            let inputArr = MLXArray(allPyramids.flatMap { $0.flatten() })
-                .reshaped([allPyramids.count, BlockPyramid.inputDim])
-            let teacherArr = MLXArray(targets.flatMap { $0 })
-                .reshaped([targets.count, 5])
-            let preferredArr = MLXArray(preferred.flatMap { $0 })
-                .reshaped([preferred.count, 5])
-            let gateArr = MLXArray(gates.flatMap { $0 })
-                .reshaped([gates.count, 5])
-
-            // Initialize trainer if needed
-            if await MainActor.run(body: { self.geneTrainer }) == nil {
-                let module = GeneModule()
-                module.importWeights(finalGene)
-                let trainer = GeneTrainer(model: module)
-                await MainActor.run { self.geneTrainer = trainer }
-            }
-
-            if let trainer = await MainActor.run(body: { self.geneTrainer }) {
-                let loss = trainer.trainFromInteraction(
-                    allInputs: inputArr,
-                    allTeacher: teacherArr,
-                    allConfidence: gateArr,
-                    allPreferred: preferredArr
-                )
-                logger.info("Gene training: loss=\(loss) steps=\(trainer.totalSteps)")
-            }
-        }
-        #endif
-    }
-
-    /// Build a VoxelCube from the last captured+quantized frames.
-    func buildVoxelCube() -> VoxelCube {
-        let capturedFrames = frameBuffer.exportCapturedFrames()
-        let paletteFrames: [[UInt8]] = capturedFrames.map { frame in
-            PerfectQuantizer.quantizeFrame(
-                frameIndex: frame.index,
-                rgb: frame.rgb,
-                depths: frame.depths
-            )
-        }
-        return VoxelCube(frames: paletteFrames)
-    }
-
-    /// Recompute GIF from stored capture using current gene (CPU path).
-    /// The gene's forward pass produces palette indices directly.
-    /// Each swipe produces a DIFFERENT GIF from the SAME capture.
-    private func recomputeGIF() {
-        // Phase 3 recomputes with the α-blended composite; Phase 1 with gene A.
-        let gene: GeneWeights = if case .refining = state { compositeGene } else { geneA }
-        recomputeGIF(gene: gene)
-    }
-
-    private func recomputeGIF(gene: GeneWeights, completion: (@MainActor (Data) -> Void)? = nil) {
-        let capturedFrames = frameBuffer.exportCapturedFrames()
-        guard !capturedFrames.isEmpty else { return }
-
-        Task.detached(priority: .userInitiated) {
-            var quantizedFrames: [QuantizedFrame] = []
-            let k = capturedFrames.count
-
-            for frame in capturedFrames {
-                // Build REAL BlockPyramids from captured RGB
-                let pyramids = BlockPyramid.computeAll(
-                    rgb: frame.rgb,
-                    depths: frame.depths,
-                    frameIndex: frame.index,
-                    totalFrames: k
-                )
-
-                // Run residual pipeline for each pixel
-                let n = frame.rgb.count
-                var indices = [UInt8](repeating: 0, count: n)
-                for i in 0..<min(n, pyramids.count) {
-                    let (idx, _) = residualQuantize(
-                        gene: gene, pyramid: pyramids[i],
-                        frameIndex: frame.index, mode: .training
-                    )
-                    indices[i] = idx
-                }
-
-                quantizedFrames.append(QuantizedFrame(
-                    index: frame.index,
-                    paletteIndices: indices,
-                    rawRGB: frame.rgb,
-                    depths: frame.depths,
-                    measure: BirkhoffMeasure(paletteIndices: indices),
-                    subjectAnalysis: nil,
-                    anchorTrace: nil,
-                    timestamp: frame.timestamp
-                ))
-            }
-
-            // Compute overall measure across all frames
-            let overallMeasure: BirkhoffMeasure? = quantizedFrames.isEmpty ? nil : {
-                var totalCounts = [Int](repeating: 0, count: 256)
-                for frame in quantizedFrames {
-                    for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
-                }
-                let perFrame = totalCounts.map { $0 / max(1, quantizedFrames.count) }
-                return BirkhoffMeasure(counts: perFrame)
-            }()
-
-            // Compute entropy for MAP-Elites placement
-            let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
-            let entropy = EntropyMeasure.compute(paletteIndices: allIndices)
-            let descriptor = Descriptor.from(entropy)
-            let beauty = overallMeasure?.beauty ?? 0
-
-            // Encode through the 64³ machine: the persisted method
-            // setting resolves by eligibility (dyad → refined →
-            // tesseract; spec/output/ExportMethods.hs).
-            let encoded = GIFMachine.makeGIF(frames: quantizedFrames, measure: overallMeasure,
-                                             settings: ExportSettings.load())
-            if let data = encoded {
-                await MainActor.run {
-                    self.gifData = data
-                    self.gifMeasure = overallMeasure
-                    self.placeOrganism(gene: gene, beauty: beauty, descriptor: descriptor,
-                                       gifData: data, entropy: entropy)
-                    completion?(data)
-                }
-            }
-        }
     }
 
     func stop() {
@@ -734,26 +397,14 @@ final class CameraManager: NSObject, ObservableObject {
             let depthTex = depthBuffer.flatMap { metal.makeDepthTexture(from: $0) }
 
             if let result = metal.downsampleFrame(rgbTexture: rgbTex, depthTexture: depthTex) {
-                // Preview: quick quantize + per-channel views (R, G, B, D)
-                let previewIndices = PerfectQuantizer.previewQuantize(
-                    rgb: result.rgb,
-                    depths: result.depth,
-                    frameIndex: frameIdx
-                )
-
-                let img = buildPreviewImage(indices: previewIndices)
-                let measure = BirkhoffMeasure(paletteIndices: previewIndices)
-                let rImg = buildChannelPreview(values: result.rgb.map(\.0))
-                let gImg = buildChannelPreview(values: result.rgb.map(\.1))
-                let bImg = buildChannelPreview(values: result.rgb.map(\.2))
-                let dImg = buildChannelPreview(values: result.depth)
+                let (img, measure) = makePreview(rgb: result.rgb,
+                                                 depths: result.depth,
+                                                 frameIndex: frameIdx,
+                                                 metal: metal,
+                                                 gpuTexturesReady: depthTex != nil)
 
                 Task { @MainActor in
                     self.previewImage = img
-                    self.previewR = rImg
-                    self.previewG = gImg
-                    self.previewB = bImg
-                    self.previewD = dImg
                     self.previewMeasure = measure
                 }
 
@@ -830,24 +481,11 @@ final class CameraManager: NSObject, ObservableObject {
 
         let depths = depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
 
-        // Preview: quick quantize + per-channel views
-        let previewIndices = PerfectQuantizer.previewQuantize(
-            rgb: pixels, depths: depths, frameIndex: frameIdx
-        )
-
-        let img = buildPreviewImage(indices: previewIndices)
-        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
-        let rImg = buildChannelPreview(values: pixels.map(\.0))
-        let gImg = buildChannelPreview(values: pixels.map(\.1))
-        let bImg = buildChannelPreview(values: pixels.map(\.2))
-        let dImg = buildChannelPreview(values: depths)
+        let (img, measure) = makePreview(rgb: pixels, depths: depths,
+                                         frameIndex: frameIdx)
 
         Task { @MainActor in
             self.previewImage = img
-            self.previewR = rImg
-            self.previewG = gImg
-            self.previewB = bImg
-            self.previewD = dImg
             self.previewMeasure = measure
         }
 
@@ -1012,8 +650,19 @@ final class CameraManager: NSObject, ObservableObject {
 
             // Encode through the 64³ machine: persisted method setting,
             // eligibility fallback (spec/output/ExportMethods.hs).
+            // The palette is shown as it is created (per-frame tables).
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
-                                             settings: ExportSettings.load())
+                                             settings: ExportSettings.load(),
+                                             onFrameTable: { [frameTotal = quantizedFrames.count] f, table in
+                Task { @MainActor in
+                    self.liveTable = table
+                    self.processPhase = "Solving palette \(f + 1)/\(frameTotal)"
+                }
+            })
+
+            // Archive every successful export — the library reviews old
+            // GIFs + their palettes from the exact encoded bytes.
+            if let gifData { GIFLibrary.archive(gifData) }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).
@@ -1026,11 +675,6 @@ final class CameraManager: NSObject, ObservableObject {
                 logger.info("Dissonance: tuning (δG \(diss.loopTuning.kG), δB \(diss.loopTuning.kB))/1200, Ū \(diss.urgencyTotal)")
             }
 
-            // Teacher organism (PerfectQuantizer output) → MAP-Elites archive
-            let allIndices = quantizedFrames.flatMap { $0.paletteIndices }
-            let entropy = EntropyMeasure.compute(paletteIndices: allIndices)
-            let descriptor = Descriptor.from(entropy)
-
             await MainActor.run {
                 self.processProgress = 1.0
                 self.processPhase = ""
@@ -1039,17 +683,8 @@ final class CameraManager: NSObject, ObservableObject {
                 self.gifMeasure = measure
                 self.rungTelemetry = rungs
                 self.dissonance = diss
-                self.generation = 0
-                self.sobolExplorer.reset()
-                // Initialize two genes: A = default, B = perturbed
-                self.geneA = GeneWeights.defaultWeights()
-                self.geneB = self.geneA.perturbed(scale: 0.20, seed: 42)
-                if let data = gifData {
-                    self.placeOrganism(gene: self.geneA, beauty: measure?.beauty ?? 0,
-                                       descriptor: descriptor, gifData: data, entropy: entropy)
-                    // Simplicity decree (2026-08-09): capture → result, no
-                    // A/B step. dualExplore/composing/refining stay compiled
-                    // but the flow never enters them.
+                // Simplicity decree (2026-08-09): capture → result.
+                if gifData != nil {
                     self.state = .done
                 } else {
                     // A nil encode is a failure, not a result.
@@ -1062,11 +697,48 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Preview Images
 
     /// Build the composite quantized preview from palette indices.
-    nonisolated func buildPreviewImage(indices: [UInt8]) -> CGImage? {
+    /// PREVIEW/EXPORT UNIFICATION under the Aerial Mirror Law: LOOK =
+    /// dyad previews through the export's law (γ staging, one search,
+    /// σ-routing). Slow state (τ-lifted rung-16 fit, stats-on-ŷ,
+    /// table) at 5 Hz on CPU; the 20 Hz assignment runs the
+    /// aerialPreview Metal kernel when this frame's textures are
+    /// resident, the CPU reference otherwise. Other looks keep the
+    /// lattice quick-quantize.
+    nonisolated private func makePreview(
+        rgb: [(Float, Float, Float)], depths: [Float], frameIndex: Int,
+        metal: MetalPipeline? = nil, gpuTexturesReady: Bool = false
+    ) -> (CGImage?, BirkhoffMeasure) {
+        if ExportSettings.load().method == .dyad {
+            dyadPreview.refreshIfDue(rgb: rgb, depths: depths)
+            let indices: [UInt8]?
+            if gpuTexturesReady, let metal, let st = dyadPreview.metalState,
+               let gpu = metal.aerialAssign(state: st) {
+                indices = gpu
+            } else {
+                indices = dyadPreview.assignCPU(rgb: rgb, depths: depths)
+            }
+            if let indices {
+                return (buildPreviewImage(indices: indices, table: dyadPreview.table),
+                        BirkhoffMeasure(paletteIndices: indices))
+            }
+        }
+        let indices = PerfectQuantizer.previewQuantize(
+            rgb: rgb, depths: depths, frameIndex: frameIndex)
+        return (buildPreviewImage(indices: indices),
+                BirkhoffMeasure(paletteIndices: indices))
+    }
+
+    /// Build a preview image from palette indices. With `table`, colors
+    /// come from the live DYAD table (the unified preview); without,
+    /// from the canonical tesseract lattice palette.
+    nonisolated func buildPreviewImage(
+        indices: [UInt8], table: [(UInt8, UInt8, UInt8)]
+    ) -> CGImage? {
+        guard table.count == 256 else { return buildPreviewImage(indices: indices) }
         let size = CameraConfig.outputSize
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
         for i in 0..<(size * size) {
-            let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
+            let (r, g, b) = table[Int(indices[i])]
             rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b
         }
         let cs = CGColorSpaceCreateDeviceRGB()
@@ -1077,13 +749,12 @@ final class CameraManager: NSObject, ObservableObject {
         return ctx.makeImage()
     }
 
-    /// Build a single-channel grayscale preview (R, G, B, or D).
-    nonisolated func buildChannelPreview(values: [Float]) -> CGImage? {
+    nonisolated func buildPreviewImage(indices: [UInt8]) -> CGImage? {
         let size = CameraConfig.outputSize
         var rgba = [UInt8](repeating: 255, count: size * size * 4)
-        for i in 0..<min(size * size, values.count) {
-            let v = UInt8(clamping: Int(values[i] * 255))
-            rgba[i * 4] = v; rgba[i * 4 + 1] = v; rgba[i * 4 + 2] = v
+        for i in 0..<(size * size) {
+            let (r, g, b) = TesseractCoord(index: indices[i]).sRGB8
+            rgba[i * 4] = r; rgba[i * 4 + 1] = g; rgba[i * 4 + 2] = b
         }
         let cs = CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: &rgba, width: size, height: size,

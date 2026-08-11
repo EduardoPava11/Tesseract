@@ -30,6 +30,7 @@ QUANTIZATION = quantization/TesseractAxes.hs \
 
 TEMPORAL = temporal/ContinuousDepthCadence.hs \
            temporal/DepthSignal.hs \
+           temporal/DepthMixture.hs \
            temporal/FaceCadence.hs \
            temporal/DepthBinomial.hs \
            temporal/TemporalBinomial.hs \

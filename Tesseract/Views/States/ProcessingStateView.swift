@@ -12,6 +12,9 @@ struct ProcessingStateView: View {
     let progress: Float
     let phase: String
     let boards: GoBoards?
+    /// The palette being created — per-frame DYAD table (nil until the
+    /// palette pass begins, or for non-dyad looks).
+    var table: Data? = nil
 
     var body: some View {
         ZStack(alignment: .topLeading) {
@@ -19,6 +22,7 @@ struct ProcessingStateView: View {
                      ink: Color(srgb8: Ink.ledGhost))
                 .place(GridLayout.procTitle)
             boardsRow.place(GridLayout.procBoards)
+            CellPalette(table: table).place(GridLayout.procPalette)
             progressBar.place(GridLayout.procBar)
             CellText(String(format: "%.0f%%", progress * 100), rows: TypeRows.counter)
                 .place(GridLayout.procPct)

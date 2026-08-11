@@ -153,11 +153,21 @@ enum GIFMachine {
     /// upper triangle c00 c01 c02 c11 c12 c22). Since DY8 made the
     /// solver a single-valued function of these, the STATS section
     /// rebuilds every palette byte: the GIF carries its own generator.
-    static func dyadTrace(tables: [Data], stats: [DyadPalette.Stats],
-                          indexFrames: [[UInt8]],
+    static func dyadTrace(_ dyad: DyadPipeline.Output,
                           settings: ExportSettings) -> String {
+        let tables = dyad.tables, stats = dyad.stats, indexFrames = dyad.indexFrames
         var lines = [harmonyTrace(tables: tables)]
         lines.append("DYAD SETTINGS bleed=\(settings.bleed ? 1 : 0) mirror=\(settings.mirror ? 1 : 0)")
+        // The derived role law — every number an OUTPUT of the capture's
+        // own depth field (spec temporal/DepthMixture.hs; no naked
+        // constants). m* is the crossover reported in meters.
+        let m = dyad.mixture
+        lines.append(String(
+            format: "DYAD MIXTURE phases=%d muF=%.6g muB=%.6g piB=%.6g sigma=%.6g "
+                  + "sStar=%.6g tau=%.6g mStar=%.4gm alpha=%.6g",
+            dyad.twoPhase ? 2 : 1, m.muF, m.muB, m.piB, m.sigma,
+            m.crossover, m.temperature,
+            DepthMixture.metersOf(signal: m.crossover), dyad.alpha))
         lines.append("DYAD STATS v1 frames=\(stats.count)")
         for s in stats {
             let c = s.covariance
@@ -205,13 +215,15 @@ enum GIFMachine {
     static func makeGIF(
         frames: [QuantizedFrame],
         measure: BirkhoffMeasure?,
-        settings: ExportSettings
+        settings: ExportSettings,
+        onFrameTable: ((Int, Data) -> Void)? = nil
     ) -> Data? {
         switch resolve(settings.method, frames: frames) {
         case .dyad:
             // process() can still decline at runtime (defensive); the
             // chain continues exactly as eligibility would have.
-            if let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed),
+            if let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed,
+                                               onFrameTable: onFrameTable),
                let data = GIFEncoder.encode(
                    indexFrames: settings.mirror
                        ? dyad.indexFrames.map { mirrored($0, side: QuantizedFrame.size) }
@@ -219,9 +231,7 @@ enum GIFMachine {
                    side: QuantizedFrame.size,
                    measure: measure, upscale: CameraConfig.exportUpscale,
                    perFrameTables: dyad.tables,
-                   trace: dyadTrace(tables: dyad.tables, stats: dyad.stats,
-                                    indexFrames: dyad.indexFrames,
-                                    settings: settings)) {
+                   trace: dyadTrace(dyad, settings: settings)) {
                 return data
             }
             var fallback = settings

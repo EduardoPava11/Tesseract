@@ -45,29 +45,14 @@ enum GridLayout {
     // selection moved into the settings scene.
     static let chrome: [GridRegion] = []
 
-    /// DEPRECATED chrome — kept as named claims for reference; not in
-    /// any scene array. (wordmark/mode pills replaced by the settings
-    /// scene; eliteButton parked with the A/B deprecation.)
-    static let wordmark = GridRegion("wordmark", col: 3, row: 14, w: 30, h: 11)
-    static let modeLive = GridRegion("modeLive", col: 55, row: 14, w: 20, h: 11, interactive: true)
-    static let modeFace = GridRegion("modeFace", col: 77, row: 14, w: 20, h: 11, interactive: true)
-    static let eliteButton = GridRegion("eliteButton", col: 76, row: 30, w: 22, h: 11, interactive: true)
-    static let modeBar = GridRegion("modeBar", col: 0, row: 14, w: 100, h: 11, interactive: true)
-
     /// The one piece of surface chrome: the settings button, top-right.
-    static let settingsButton = GridRegion("settingsButton", col: 77, row: 14, w: 20, h: 11, interactive: true)
+    static let settingsButton = GridRegion("settingsButton", col: 73, row: 14, w: 24, h: 13, interactive: true)
 
     // ── Capture scene (CameraState.previewing, LIVE) ──
-    static let gauge = GridRegion("gauge", col: 18, row: 30, w: 54, h: 10)
     static let preview = GridRegion("preview", col: 18, row: 48, w: 64, h: 64)
-    static let channels = GridRegion("channels", col: 23, row: 116, w: 54, h: 15)
-    static let captureInfo = GridRegion("captureInfo", col: 18, row: 135, w: 64, h: 5)
-    static let palette = GridRegion("palette", col: 12, row: 176, w: 16, h: 16)
-    static let record = GridRegion("record", col: 41, row: 174, w: 18, h: 18, interactive: true)
+    static let record = GridRegion("record", col: 39, row: 172, w: 22, h: 22, interactive: true)
 
     // SIMPLICITY: the capture surface is exactly three claims.
-    // (gauge/channels/captureInfo/palette stay as named claims for the
-    // deprecated richer surface; not in the scene.)
     static let captureScene: [GridRegion] = [
         preview, record, settingsButton,
     ]
@@ -93,42 +78,22 @@ enum GridLayout {
     // ── Processing scene (shared; boards render empty for FACE) ──
     static let procTitle = GridRegion("procTitle", col: 18, row: 30, w: 64, h: 8)
     static let procBoards = GridRegion("procBoards", col: 10, row: 48, w: 79, h: 28)
+    /// The palette being created: 16×16 entries at 2 cells (128 pt).
+    static let procPalette = GridRegion("procPalette", col: 34, row: 80, w: 32, h: 32)
     static let procBar = GridRegion("procBar", col: 18, row: 116, w: 64, h: 4)
     static let procPct = GridRegion("procPct", col: 18, row: 124, w: 64, h: 10)
-    static let procPhase = GridRegion("procPhase", col: 10, row: 138, w: 80, h: 10)
+    static let procPhase = GridRegion("procPhase", col: 10, row: 138, w: 80, h: 12)
 
     static let processingScene: [GridRegion] = chrome + [
-        procTitle, procBoards, procBar, procPct, procPhase,
-    ]
-
-    // ── Dual-explore scene ──
-    // 68 = 64 tile + 1-cell gutter + 1-cell bracket per flank; the
-    // projection strips live IN the gutter ring. Rows 27-41 stay clear
-    // for the elite button.
-    static let panelA = GridRegion("panelA", col: 16, row: 42, w: 68, h: 68, interactive: true)
-    static let panelB = GridRegion("panelB", col: 16, row: 112, w: 68, h: 68, interactive: true)
-    static let scrubber = GridRegion("scrubber", col: 18, row: 182, w: 64, h: 11, interactive: true)
-    static let stats = GridRegion("stats", col: 18, row: 195, w: 64, h: 16)
-
-    static let dualExploreScene: [GridRegion] = chrome + [
-        eliteButton, panelA, panelB, scrubber, stats,
-    ]
-
-    // ── Refining scene ──
-    static let refineGif = GridRegion("refineGif", col: 16, row: 44, w: 68, h: 68, interactive: true)
-    static let alphaReadout = GridRegion("alphaReadout", col: 18, row: 120, w: 64, h: 8)
-    static let refHints = GridRegion("refHints", col: 18, row: 132, w: 64, h: 6)
-
-    static let refiningScene: [GridRegion] = chrome + [
-        eliteButton, refineGif, alphaReadout, refHints,
+        procTitle, procBoards, procPalette, procBar, procPct, procPhase,
     ]
 
     // ── Result scene (shared LIVE + FACE) ──
     static let resultGif = GridRegion("resultGif", col: 18, row: 48, w: 64, h: 64)
     static let resultMetrics = GridRegion("resultMetrics", col: 18, row: 116, w: 64, h: 10)
-    static let resultShare = GridRegion("resultShare", col: 18, row: 174, w: 18, h: 11, interactive: true)
-    static let resultKeep = GridRegion("resultKeep", col: 41, row: 174, w: 18, h: 11, interactive: true)
-    static let resultRetake = GridRegion("resultRetake", col: 64, row: 174, w: 18, h: 11, interactive: true)
+    static let resultShare = GridRegion("resultShare", col: 5, row: 172, w: 27, h: 13, interactive: true)
+    static let resultKeep = GridRegion("resultKeep", col: 36, row: 172, w: 27, h: 13, interactive: true)
+    static let resultRetake = GridRegion("resultRetake", col: 67, row: 172, w: 27, h: 13, interactive: true)
     /// Second register for KEEP outcomes (photos denied / save failed).
     static let resultNote = GridRegion("resultNote", col: 10, row: 130, w: 80, h: 6)
 
@@ -150,8 +115,8 @@ enum GridLayout {
     // ── Error scene (shared LIVE + FACE) ──
     static let errTitle = GridRegion("errTitle", col: 18, row: 88, w: 64, h: 8)
     static let errMsg = GridRegion("errMsg", col: 10, row: 100, w: 80, h: 14)
-    static let errRetry = GridRegion("errRetry", col: 24, row: 120, w: 22, h: 11, interactive: true)
-    static let errSettings = GridRegion("errSettings", col: 54, row: 120, w: 22, h: 11, interactive: true)
+    static let errRetry = GridRegion("errRetry", col: 20, row: 120, w: 26, h: 13, interactive: true)
+    static let errSettings = GridRegion("errSettings", col: 54, row: 120, w: 26, h: 13, interactive: true)
 
     static let errorScene: [GridRegion] = chrome + [
         errTitle, errMsg, errRetry, errSettings,
@@ -161,57 +126,55 @@ enum GridLayout {
     // CAMERA row (LIVE/FACE) + LOOK radio (the 64³ machine's methods).
     static let setTitle = GridRegion("setTitle", col: 18, row: 20, w: 64, h: 10)
     static let setModeLabel = GridRegion("setModeLabel", col: 18, row: 44, w: 64, h: 6)
-    static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 20, h: 11, interactive: true)
-    static let setModeFace = GridRegion("setModeFace", col: 42, row: 54, w: 20, h: 11, interactive: true)
+    static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 28, h: 13, interactive: true)
+    static let setModeFace = GridRegion("setModeFace", col: 54, row: 54, w: 28, h: 13, interactive: true)
     static let setLookLabel = GridRegion("setLookLabel", col: 18, row: 78, w: 64, h: 6)
-    static let lookDyad = GridRegion("lookDyad", col: 18, row: 90, w: 64, h: 11, interactive: true)
-    static let lookRefine = GridRegion("lookRefine", col: 18, row: 106, w: 64, h: 11, interactive: true)
-    static let lookTess = GridRegion("lookTess", col: 18, row: 122, w: 64, h: 11, interactive: true)
+    static let lookDyad = GridRegion("lookDyad", col: 18, row: 90, w: 64, h: 13, interactive: true)
+    static let lookRefine = GridRegion("lookRefine", col: 18, row: 107, w: 64, h: 13, interactive: true)
+    static let lookTess = GridRegion("lookTess", col: 18, row: 124, w: 64, h: 13, interactive: true)
     // The two useful-and-simple toggles: DYAD background bleed,
     // export mirroring. Both persisted (ExportSettings).
-    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 142, w: 64, h: 11, interactive: true)
-    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 158, w: 64, h: 11, interactive: true)
-    static let setClose = GridRegion("setClose", col: 40, row: 190, w: 20, h: 11, interactive: true)
+    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 144, w: 64, h: 13, interactive: true)
+    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 161, w: 64, h: 13, interactive: true)
+    /// The GIF archive entry (2026-08-10): review old GIFs + palettes.
+    static let setLibrary = GridRegion("setLibrary", col: 18, row: 178, w: 64, h: 13, interactive: true)
+    static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: 13, interactive: true)
 
     static let settingsScene: [GridRegion] = [
         setTitle, setModeLabel, setModeLive, setModeFace,
         setLookLabel, lookDyad, lookRefine, lookTess,
-        toggleBleed, toggleMirror, setClose,
+        toggleBleed, toggleMirror, setLibrary, setClose,
     ]
 
-    // ── Elite-map scene (fullScreenCover — its own canvas, no chrome) ──
-    // Gallery tiles are 20×20 cells = 80pt, over the 11-cell touch floor.
-    static let eliteHeader = GridRegion("eliteHeader", col: 18, row: 20, w: 64, h: 10)
-    static let eliteColLabels = GridRegion("eliteColLabels", col: 16, row: 32, w: 64, h: 4)
-    static let eliteRowLabel0 = GridRegion("eliteRowLabel0", col: 4, row: 38, w: 10, h: 20)
-    static let eliteRowLabel1 = GridRegion("eliteRowLabel1", col: 4, row: 60, w: 10, h: 20)
-    static let eliteRowLabel2 = GridRegion("eliteRowLabel2", col: 4, row: 82, w: 10, h: 20)
-    static let eliteCell0 = GridRegion("eliteCell0", col: 16, row: 38, w: 20, h: 20, interactive: true)
-    static let eliteCell1 = GridRegion("eliteCell1", col: 38, row: 38, w: 20, h: 20, interactive: true)
-    static let eliteCell2 = GridRegion("eliteCell2", col: 60, row: 38, w: 20, h: 20, interactive: true)
-    static let eliteCell3 = GridRegion("eliteCell3", col: 16, row: 60, w: 20, h: 20, interactive: true)
-    static let eliteCell4 = GridRegion("eliteCell4", col: 38, row: 60, w: 20, h: 20, interactive: true)
-    static let eliteCell5 = GridRegion("eliteCell5", col: 60, row: 60, w: 20, h: 20, interactive: true)
-    static let eliteCell6 = GridRegion("eliteCell6", col: 16, row: 82, w: 20, h: 20, interactive: true)
-    static let eliteCell7 = GridRegion("eliteCell7", col: 38, row: 82, w: 20, h: 20, interactive: true)
-    static let eliteCell8 = GridRegion("eliteCell8", col: 60, row: 82, w: 20, h: 20, interactive: true)
-    static let eliteDetail = GridRegion("eliteDetail", col: 28, row: 110, w: 44, h: 44)
-    static let eliteMetrics = GridRegion("eliteMetrics", col: 18, row: 158, w: 64, h: 8)
-    static let eliteShare = GridRegion("eliteShare", col: 24, row: 170, w: 20, h: 11, interactive: true)
-    static let eliteKeep = GridRegion("eliteKeep", col: 56, row: 170, w: 20, h: 11, interactive: true)
-    static let eliteClose = GridRegion("eliteClose", col: 40, row: 190, w: 20, h: 11, interactive: true)
+    // ── Library scene (fullScreenCover — its own canvas) ──
+    // 3×3 grid of archived GIFs (20-cell tiles), then the selected
+    // GIF playing beside its 256-entry palette, provenance line, and
+    // SHARE / DELETE. Latest nine; older files stay on disk.
+    static let libTitle = GridRegion("libTitle", col: 18, row: 14, w: 64, h: 10)
+    static let libCell0 = GridRegion("libCell0", col: 16, row: 28, w: 20, h: 20, interactive: true)
+    static let libCell1 = GridRegion("libCell1", col: 38, row: 28, w: 20, h: 20, interactive: true)
+    static let libCell2 = GridRegion("libCell2", col: 60, row: 28, w: 20, h: 20, interactive: true)
+    static let libCell3 = GridRegion("libCell3", col: 16, row: 50, w: 20, h: 20, interactive: true)
+    static let libCell4 = GridRegion("libCell4", col: 38, row: 50, w: 20, h: 20, interactive: true)
+    static let libCell5 = GridRegion("libCell5", col: 60, row: 50, w: 20, h: 20, interactive: true)
+    static let libCell6 = GridRegion("libCell6", col: 16, row: 72, w: 20, h: 20, interactive: true)
+    static let libCell7 = GridRegion("libCell7", col: 38, row: 72, w: 20, h: 20, interactive: true)
+    static let libCell8 = GridRegion("libCell8", col: 60, row: 72, w: 20, h: 20, interactive: true)
+    static let libDetailGif = GridRegion("libDetailGif", col: 6, row: 104, w: 44, h: 44)
+    static let libDetailPalette = GridRegion("libDetailPalette", col: 56, row: 108, w: 32, h: 32)
+    static let libInfo = GridRegion("libInfo", col: 6, row: 152, w: 88, h: 12)
+    static let libShare = GridRegion("libShare", col: 14, row: 168, w: 27, h: 13, interactive: true)
+    static let libDelete = GridRegion("libDelete", col: 59, row: 168, w: 27, h: 13, interactive: true)
+    static let libClose = GridRegion("libClose", col: 38, row: 197, w: 24, h: 13, interactive: true)
 
-    static let eliteCells: [GridRegion] = [
-        eliteCell0, eliteCell1, eliteCell2,
-        eliteCell3, eliteCell4, eliteCell5,
-        eliteCell6, eliteCell7, eliteCell8,
+    static let libCells: [GridRegion] = [
+        libCell0, libCell1, libCell2, libCell3, libCell4,
+        libCell5, libCell6, libCell7, libCell8,
     ]
 
-    static let eliteMapScene: [GridRegion] =
-        [eliteHeader, eliteColLabels,
-         eliteRowLabel0, eliteRowLabel1, eliteRowLabel2]
-        + eliteCells
-        + [eliteDetail, eliteMetrics, eliteShare, eliteKeep, eliteClose]
+    static let libraryScene: [GridRegion] =
+        [libTitle] + libCells
+        + [libDetailGif, libDetailPalette, libInfo, libShare, libDelete, libClose]
 
     /// Every proven scene, by name (for the launch selfCheck).
     static let allScenes: [(name: String, regions: [GridRegion])] = [
@@ -219,13 +182,11 @@ enum GridLayout {
         ("facePreview", facePreviewScene),
         ("recording", recordingScene),
         ("processing", processingScene),
-        ("dualExplore", dualExploreScene),
-        ("refining", refiningScene),
         ("result", resultScene),
         ("idle", idleScene),
         ("error", errorScene),
         ("settings", settingsScene),
-        ("eliteMap", eliteMapScene),
+        ("library", libraryScene),
     ]
 
     // ── Self-check: disjoint ∧ in-bounds ∧ touch-floor ∧ faces total ──

@@ -16,6 +16,7 @@ struct SettingsView: View {
     let onClose: () -> Void
 
     @State private var settings = ExportSettings.load()
+    @State private var showLibrary = false
 
     var body: some View {
         ZStack {
@@ -54,12 +55,31 @@ struct SettingsView: View {
                     }
                     .place(GridLayout.toggleMirror)
 
+                    libraryButton.place(GridLayout.setLibrary)
                     closeButton.place(GridLayout.setClose)
                 }
                 .gridCentered(in: geo.size)
             }
             .ignoresSafeArea()
         }
+        .fullScreenCover(isPresented: $showLibrary) {
+            LibraryView(clock: clock, onClose: { showLibrary = false })
+        }
+    }
+
+    private var libraryButton: some View {
+        Button(action: { showLibrary = true }) {
+            ZStack {
+                ControlFrame(cols: GridLayout.setLibrary.w, rows: GridLayout.setLibrary.h,
+                             state: 0, tick: clock.tick, reduceMotion: clock.reduceMotion)
+                CellText("LIBRARY", rows: TypeRows.body, ink: Color(srgb8: Ink.ink))
+            }
+            .frame(width: Lattice.gif(GridLayout.setLibrary.w),
+                   height: Lattice.gif(GridLayout.setLibrary.h))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("GIF library")
     }
 
     // MARK: - Rows (the mode-pill vocabulary: accent ring = selected)
@@ -87,7 +107,7 @@ struct SettingsView: View {
         } label: {
             ZStack {
                 selectionRing(region, selected: selected, enabled: modeSwitchAllowed)
-                CellText(mode.rawValue, rows: TypeRows.label,
+                CellText(mode.rawValue, rows: TypeRows.body,
                          ink: Color(srgb8: selected ? Ink.ink : Ink.ledGhost))
             }
             .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
@@ -105,7 +125,7 @@ struct SettingsView: View {
             ZStack {
                 ControlFrame(cols: region.w, rows: region.h, state: 0,
                              tick: clock.tick, reduceMotion: clock.reduceMotion)
-                CellText("\(title) \(value ? "ON" : "OFF")", rows: TypeRows.label,
+                CellText("\(title) \(value ? "ON" : "OFF")", rows: TypeRows.body,
                          ink: Color(srgb8: value ? Ink.ink : Ink.ledGhost))
             }
             .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
@@ -123,7 +143,7 @@ struct SettingsView: View {
         } label: {
             ZStack {
                 selectionRing(region, selected: selected, enabled: true)
-                CellText(title, rows: TypeRows.label,
+                CellText(title, rows: TypeRows.body,
                          ink: Color(srgb8: selected ? Ink.ink : Ink.ledGhost))
             }
             .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
@@ -139,7 +159,7 @@ struct SettingsView: View {
             ZStack {
                 ControlFrame(cols: GridLayout.setClose.w, rows: GridLayout.setClose.h,
                              state: 0, tick: clock.tick, reduceMotion: clock.reduceMotion)
-                CellText("DONE", rows: TypeRows.label, ink: Color(srgb8: Ink.ink))
+                CellText("DONE", rows: TypeRows.body, ink: Color(srgb8: Ink.ink))
             }
             .frame(width: Lattice.gif(GridLayout.setClose.w),
                    height: Lattice.gif(GridLayout.setClose.h))

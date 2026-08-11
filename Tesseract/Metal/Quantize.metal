@@ -1,142 +1,112 @@
 // Quantize.metal
 // Tesseract
 //
-// Port of DepthBinomial.hs to Metal compute shader.
-// Per-pixel: σ_i = σ_base × (2 - d_i)
-// Continuous depth, no zones. One GPU pass.
+// GPU downsample kernels (camera-resolution RGB + depth → the 64×64
+// capture grid, 90° CCW baked into the read) + the aerialPreview
+// kernel: the 20 Hz GPU twin of DyadPreview.assignCPU under THE
+// AERIAL MIRROR LAW (spec §6c v5). Export quantization stays CPU/ANE;
+// this kernel serves the live preview only — near-tie fp32 flips vs
+// the CPU reference are the only permitted difference.
 //
-// Input:  RGB texture (64×64) + depth texture (64×64) + frame params
-// Output: palette index buffer (4096 UInt8 values)
+// The old quantizeWithDepth kernel was removed 2026-08-10: it read raw
+// TrueDepth METERS where the [0,1] signal contract applied. Here the
+// meters→signal map is applied IN the kernel from parameters supplied
+// by DepthSignal.swift (single source of the anchors).
 
 #include <metal_stdlib>
 using namespace metal;
 
 // ════════════════════════════════════════════════════════════════
-// § 1. HASH PRNG (port of Haskell pixelHash)
+// § 0. AERIAL PREVIEW — γ staging + σ-routing on the GPU
 // ════════════════════════════════════════════════════════════════
 
-inline uint pixelHash(uint x, uint y, uint seed) {
-    uint h0 = x * 374761393u + y * 668265263u + seed;
-    uint h1 = (h0 ^ (h0 >> 15)) * 2246822519u;
-    uint h2 = (h1 ^ (h1 >> 13)) * 3266489917u;
-    return h2 ^ (h2 >> 16);
-}
-
-inline float hashToFloat(uint h) {
-    return float(h % 1000000u) / 1000000.0f;
-}
-
-// ════════════════════════════════════════════════════════════════
-// § 2. CDF SAMPLING
-// ════════════════════════════════════════════════════════════════
-
-inline uint8_t cdfSample(float4 probs, float u) {
-    float cumul = 0.0f;
-    for (int d = 0; d < 3; d++) {
-        cumul += probs[d];
-        if (cumul >= u) return uint8_t(d);
-    }
-    return 3;
-}
-
-// ════════════════════════════════════════════════════════════════
-// § 3. PARAMETERS
-// ════════════════════════════════════════════════════════════════
-
-// NOTE: float4 MUST come first to avoid 16-byte alignment padding.
-// Swift struct must match this layout exactly.
-struct QuantizeParams {
-    float4 epochCenters;    // offset 0  (16 bytes, 16-byte aligned)
-    float sigmaBase;        // offset 16 (4 bytes)
-    uint frameIndex;        // offset 20
-    uint seed;              // offset 24
-    uint width;             // offset 28
-    uint height;            // offset 32
-    uint debugFlags;        // offset 36
-    uint _pad;              // offset 40 (pad to 48 = 16-byte multiple)
-    // Total: 48 bytes
+// Layout mirrored by AerialParamsSwift (three 16-byte rows, 48 bytes).
+struct AerialParams {
+    float4 centroid;   // xyz = OKLab c_F (the γ-staging centroid)
+    float4 scalars;    // x = s*, y = τ, z = 1/dNear, w = 1/dFar
+    uint4  flags;      // x = twoPhase, y = side (64)
 };
 
-// ════════════════════════════════════════════════════════════════
-// § 4. MAIN KERNEL: quantizeWithDepth
-// ════════════════════════════════════════════════════════════════
+// sRGB → OKLab (Björn Ottosson's matrices — mirror of DyadPalette.swift).
+inline float srgbToLinearGPU(float c) {
+    return c <= 0.04045f ? c / 12.92f : powr((c + 0.055f) / 1.055f, 2.4f);
+}
 
-kernel void quantizeWithDepth(
+inline float3 oklabFromSrgbGPU(float3 srgb) {
+    float r = srgbToLinearGPU(srgb.r);
+    float g = srgbToLinearGPU(srgb.g);
+    float b = srgbToLinearGPU(srgb.b);
+    float l = 0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b;
+    float m = 0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b;
+    float s = 0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b;
+    float l3 = powr(l, 1.0f / 3.0f);
+    float m3 = powr(m, 1.0f / 3.0f);
+    float s3 = powr(s, 1.0f / 3.0f);
+    return float3(
+        0.2104542553f * l3 + 0.7936177850f * m3 - 0.0040720468f * s3,
+        1.9779984951f * l3 - 2.4285922050f * m3 + 0.4505937099f * s3,
+        0.0259040371f * l3 + 0.7827717662f * m3 - 0.8086757660f * s3);
+}
+
+// The Bayer 4×4 (DyadPalette §6 v3) — same matrix as the CPU side.
+constant int aerialBayer[4][4] = {
+    {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}
+};
+
+kernel void aerialPreview(
     texture2d<float, access::read> rgbTexture   [[texture(0)]],
     texture2d<float, access::read> depthTexture [[texture(1)]],
-    device uint8_t* output                       [[buffer(0)]],
-    constant QuantizeParams& params              [[buffer(1)]],
-    // Debug: per-epoch pixel counts (4 atomic counters)
-    device atomic_uint* epochCounts              [[buffer(2)]],
-    // Debug: sigma histogram (32 bins from σ=7 to σ=16)
-    device atomic_uint* sigmaHist                [[buffer(3)]],
-    uint2 gid                                    [[thread_position_in_grid]]
+    device const float4* prims                  [[buffer(0)]],   // 128 OKLab
+    constant AerialParams& P                    [[buffer(1)]],
+    device uchar* out                           [[buffer(2)]],
+    uint2 gid                                   [[thread_position_in_grid]]
 ) {
-    // Bounds check
-    if (gid.x >= params.width || gid.y >= params.height) return;
+    uint side = P.flags.y;
+    if (gid.x >= side || gid.y >= side) return;
 
-    uint pixelIdx = gid.y * params.width + gid.x;
-
-    // ── Read RGB ──
-    float4 rgba = rgbTexture.read(gid);
-    float r = rgba.r;
-    float g = rgba.g;
-    float b = rgba.b;
-
-    // ── Read Depth ──
-    // depth texture: r channel = depth in [0,1], 1=near, 0=far
-    float depth = depthTexture.read(gid).r;
-    // Clamp to valid range
-    depth = clamp(depth, 0.0f, 1.0f);
-
-    // ── Continuous σ: σ_i = σ_base × (2 - d_i) ──
-    // d=1 (near/face): σ = σ_base × 1.0 → stable
-    // d=0 (far/wall):  σ = σ_base × 2.0 → volatile
-    float sigma_i = params.sigmaBase * (2.0f - depth);
-
-    // ── Debug: log sigma to histogram ──
-    {
-        // Map σ from [7, 16] to bin [0, 31]
-        int sigmaBin = clamp(int((sigma_i - 7.0f) * 32.0f / 9.0f), 0, 31);
-        atomic_fetch_add_explicit(&sigmaHist[sigmaBin], 1, memory_order_relaxed);
-    }
-
-    // ── Epoch probabilities with per-pixel σ ──
-    float z = float(params.frameIndex);
-    float s2 = 2.0f * sigma_i * sigma_i;
-
-    float4 probs;
-    probs[0] = exp(-(z - params.epochCenters[0]) * (z - params.epochCenters[0]) / s2);
-    probs[1] = exp(-(z - params.epochCenters[1]) * (z - params.epochCenters[1]) / s2);
-    probs[2] = exp(-(z - params.epochCenters[2]) * (z - params.epochCenters[2]) / s2);
-    probs[3] = exp(-(z - params.epochCenters[3]) * (z - params.epochCenters[3]) / s2);
-
-    float total = probs[0] + probs[1] + probs[2] + probs[3];
-    // Guard against division by zero (all probs near zero for extreme σ)
-    if (total < 1e-10f) {
-        probs = float4(0.25f);  // uniform fallback
+    // Depth METERS → [0,1] signal (DepthSignal contract, anchors from
+    // the params so DepthSignal.swift stays the single source).
+    float m = depthTexture.read(gid).r;
+    float s;
+    if (isfinite(m) && m > 0.0f) {
+        s = clamp((1.0f / m - P.scalars.w) / (P.scalars.z - P.scalars.w),
+                  0.0f, 1.0f);
     } else {
-        probs /= total;
+        s = 0.5f;   // DepthSignal.fill
     }
 
-    // ── Hash-based epoch sampling ──
-    uint hash = pixelHash(gid.x, gid.y, params.seed + params.frameIndex * 997u);
-    uint8_t epoch = cdfSample(probs, hashToFloat(hash));
+    // Quantize the sample to sRGB8 first (the DY12 byte round-trip the
+    // CPU reference applies), then to OKLab.
+    float3 rgb8 = round(saturate(rgbTexture.read(gid).rgb) * 255.0f) / 255.0f;
+    float3 lab = oklabFromSrgbGPU(rgb8);
 
-    // ── Debug: count epoch assignments ──
-    atomic_fetch_add_explicit(&epochCounts[epoch], 1, memory_order_relaxed);
+    // γ staging: ŷ = c_F + γ(s)·(y − c_F), γ = 1/(2−s)  (DY9/DY10).
+    float gamma = 1.0f / (2.0f - s);
+    float3 yhat = P.centroid.xyz + gamma * (lab - P.centroid.xyz);
 
-    // ── Quantize RGB to 4³ grid ──
-    uint8_t a = uint8_t(clamp(r * 4.0f, 0.0f, 3.0f));
-    uint8_t bq = uint8_t(clamp(g * 4.0f, 0.0f, 3.0f));
-    uint8_t c = uint8_t(clamp(b * 4.0f, 0.0f, 3.0f));
+    // Coverage t = mixture posterior (0 when single-phase, R3).
+    float t = 0.0f;
+    if (P.flags.x != 0u) {
+        t = 1.0f / (1.0f + exp((s - P.scalars.x) / P.scalars.y));
+    }
 
-    // ── Tesseract index: d×64 + a×16 + b×4 + c ──
-    output[pixelIdx] = epoch * 64 + a * 16 + bq * 4 + c;
+    // ONE search over the 128 primaries.
+    uint best = 0;
+    float bestD = INFINITY;
+    for (uint j = 0; j < 128; j++) {
+        float3 d = prims[j].xyz - yhat;
+        float dist = dot(d, d);
+        if (dist < bestD) { bestD = dist; best = j; }
+    }
+
+    // σ-routing at coverage t (Bayer threshold on the grid position).
+    float th = (float(aerialBayer[gid.y % 4][gid.x % 4]) + 0.5f) / 16.0f;
+    uint idx = (th < t) ? (255u - best) : best;
+    out[gid.y * side + gid.x] = uchar(idx);
 }
 
 // ════════════════════════════════════════════════════════════════
-// § 5. DOWNSAMPLE KERNEL: camera resolution → 64×64
+// § 1. DOWNSAMPLE KERNEL: camera resolution → 64×64
 // ════════════════════════════════════════════════════════════════
 
 // Dynamic downsample params (universal 768 crop, from Block.hs)

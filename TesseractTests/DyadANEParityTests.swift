@@ -24,12 +24,30 @@ final class DyadANEParityTests: XCTestCase {
         let P = DyadANE.pixelCount
         let side = Int(Double(P).squareRoot())
 
-        // Synthetic capture with all three depth zones:
-        // face disk (d=0.9), bleed ring (d=0.55), far field (d=0.2).
+        // Synthetic capture with all three depth zones: face disk
+        // (d=0.9), ring (d=0.55), far field (d=0.2). The ring sits at
+        // the cluster midpoint, so the FITTED role law (DepthMixture —
+        // no naked thresholds) must place it in the dither band.
         var labs: [[OKLabColor]] = []
         var primaries: [[OKLabColor]] = []
         var masks: [[Bool]] = []
         var fars: [[Bool]] = []
+
+        let cGeo = Double(side - 1) / 2
+        var depths = [Float](repeating: 0, count: P)
+        for p in 0..<P {
+            let x = Double(p % side), y = Double(p / side)
+            let r2 = (x - cGeo) * (x - cGeo) + (y - cGeo) * (y - cGeo)
+            depths[p] = r2 <= 24 * 24 ? 0.9 : (r2 <= 30 * 30 ? 0.55 : 0.2)
+        }
+        let mixture = DepthMixture.fit(depths.map { Double($0) })
+        XCTAssertLessThan(mixture.pull(0.9), DyadPipeline.coverageFloor,
+                          "face zone must be solid-face under the fitted law")
+        let tRing = mixture.pull(0.55)
+        XCTAssertTrue(tRing > DyadPipeline.coverageFloor && tRing < DyadPipeline.coverageCeil,
+                      "midpoint ring must land in the band")
+        XCTAssertGreaterThan(mixture.pull(0.2), DyadPipeline.coverageCeil,
+                             "far zone must be solid-mirror")
         var seed = 7
         func next() -> Double {
             seed = (1103515245 * seed + 12345) % 2147483648
@@ -54,29 +72,23 @@ final class DyadANEParityTests: XCTestCase {
             primaries.append(prims)
             let centroid = prims[0]
 
-            let c = Double(side - 1) / 2
             var frameLabs: [OKLabColor] = []
             var frameMask: [Bool] = []
             var frameFar: [Bool] = []
             frameLabs.reserveCapacity(P)
             for p in 0..<P {
-                let x = Double(p % side), y = Double(p / side)
-                let r2 = (x - c) * (x - c) + (y - c) * (y - c)
-                let depth: Float = r2 <= 24 * 24 ? 0.9 : (r2 <= 30 * 30 ? 0.55 : 0.2)
-                let face = depth > DyadPipeline.faceThreshold
-                let t = face ? 0 : DyadPipeline.pull(depth)
-                frameMask.append(face)
-                frameFar.append(!face && t >= 1)
+                let t = mixture.pull(Double(depths[p]))
+                frameMask.append(t < DyadPipeline.coverageFloor)
+                frameFar.append(false)   // v5: no short-circuit
                 let rgb: (UInt8, UInt8, UInt8) = (
                     UInt8(120 + Int(next() * 120)),
                     UInt8(90 + Int(next() * 100)),
                     UInt8(70 + Int(next() * 90)))
-                let lab = DyadPalette.oklab(fromSRGB8: rgb)
-                let g = Double(1 - t)
-                frameLabs.append(OKLabColor(
-                    l: centroid.l + (lab.l - centroid.l) * g,
-                    a: centroid.a + (lab.a - centroid.a) * g,
-                    b: centroid.b + (lab.b - centroid.b) * g))
+                // v5 staging (Aerial Mirror): ŷ = c_F + γ(s)·(y − c_F)
+                // for ALL roles — the pair is a function of s only.
+                frameLabs.append(DyadPipeline.stageAerial(
+                    DyadPalette.oklab(fromSRGB8: rgb),
+                    s: Double(depths[p]), about: centroid))
             }
             labs.append(frameLabs)
             masks.append(frameMask)
