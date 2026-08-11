@@ -507,23 +507,27 @@ aerialPrimary :: [RGB8] -> Double -> RGB8 -> Int
 aerialPrimary tbl s c =
   nearestPrimaryLab tbl (stageAerial (srgb8ToOklab (head tbl)) s (srgb8ToOklab c))
 
--- | v5 DEFAULT (comp-halo): γ staging + σ-routing at coverage t.
+-- | v6 DEFAULT (faithful-hue — ★R4 RULED, Daniel 2026-08-11, on the
+--   first 17 Pro export: "I do not like how it looks"; DY11 had
+--   already measured faithful as aggregate-closer to ŷ): the σ side
+--   routes through comp so the DISPLAYED color ≈ ŷ itself
+--   (table[partner qc] = ground(comp-nearest) and comp∘comp = id up
+--   to gamut clamp). Two searches, σ-side pixels only.
 quantizeAerialAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
 quantizeAerialAt tbl s t (x, y) c
-  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner q
-  | otherwise                                = q
-  where q = aerialPrimary tbl s c
-
--- | R4 VARIANT (faithful-hue): the σ side routes through comp so the
---   displayed color ≈ ŷ itself (comp∘comp = id up to gamut clamp).
---   Two searches — kept in spec for the Mac render comparison only.
-quantizeAerialFaithfulAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
-quantizeAerialFaithfulAt tbl s t (x, y) c
   | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner qc
   | otherwise                                = aerialPrimary tbl s c
   where
     cF = srgb8ToOklab (head tbl)
     qc = nearestPrimaryLab tbl (comp (stageAerial cF s (srgb8ToOklab c)))
+
+-- | v5 VARIANT (comp-halo — the pre-R4 default, archived for render
+--   comparison): σ side = mirror of the ŷ-nearest primary.
+quantizeAerialHaloAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
+quantizeAerialHaloAt tbl s t (x, y) c
+  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner q
+  | otherwise                                = q
+  where q = aerialPrimary tbl s c
 
 -- ════════════════════════════════════════════════════════════════
 -- § 7. DETERMINISTIC TEST INPUTS (no System.Random)
@@ -749,10 +753,14 @@ axiom_DY10 = pairTFree && lipschitz && faceCompat
     sGrid = [fromIntegral n / 20 | n <- [0 .. 20 :: Int]] :: [Double]
     posGrid = [ (x, y) | x <- [0 .. 3], y <- [0 .. 3] ]
     stageOf s c = stageAerial cF s (srgb8ToOklab c)
+    -- the RULED pair law (R4 faithful): primary side is q, σ side is
+    -- the partner of the comp-nearest primary qc — both functions of
+    -- s only, never of t or grid position
     pairTFree = and
-      [ idx == q || idx == partner q
+      [ idx == q || idx == partner qc
       | c <- probes, s <- sGrid
       , let q = aerialPrimary tbl s c
+      , let qc = nearestPrimaryLab tbl (comp (stageOf s c))
       , t <- sGrid, xy <- posGrid
       , let idx = quantizeAerialAt tbl s t xy c ]
     lipschitz = and
@@ -784,12 +792,15 @@ axiom_DY11 = farHalf && farSpreadV5 && chromaOctave && faithfulCloser
       [ abs (sqrt (dLab2 (stageAerial cF 0 y) cF) - sqrt (dLab2 y cF) / 2) < 1e-9
       | c <- farColors, let y = srgb8ToOklab c ]
     labOf i = srgb8ToOklab (tbl !! i)
+    -- the R4 datum that decided the ruling: the (now default)
+    -- faithful σ side is aggregate-closer to ŷ than the halo variant
     faithfulCloser = sum (map dist faithful) <= sum (map dist halo) + 1e-9
       where
         yhats = [ stageAerial cF 0.05 (srgb8ToOklab c) | c <- farColors ]
         faithful = zip yhats
-          [ quantizeAerialFaithfulAt tbl 0.05 1 (0, 0) c | c <- farColors ]
-        halo = zip yhats (map (\c -> quantizeAerialAt tbl 0.05 1 (0, 0) c) farColors)
+          [ quantizeAerialAt tbl 0.05 1 (0, 0) c | c <- farColors ]
+        halo = zip yhats
+          [ quantizeAerialHaloAt tbl 0.05 1 (0, 0) c | c <- farColors ]
         dist (yhat, i) = sqrt (dLab2 (labOf i) yhat)
 
 -- (DY12) STATS-ON-ŷ (the coherence clause): analyzing STAGED samples

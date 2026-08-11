@@ -158,7 +158,20 @@ final class DyadPreview {
                 if d < bestD { bestD = d; best = j }
             }
             let sigmaSide = DyadPipeline.bayer4[(p / side) % 4][(p % side) % 4] < Float(t)
-            out[p] = UInt8(sigmaSide ? 255 - best : best)
+            if sigmaSide {
+                // ★R4 faithful-hue (2026-08-11): σ side routes through
+                // comp — displayed ≈ ŷ (matches DyadPipeline.pairDither)
+                let target = DyadPalette.comp(yhat)
+                var bestC = 0
+                var bestDC = Double.infinity
+                for j in 0..<prims.count {
+                    let d = DyadPalette.dLab2(prims[j], target)
+                    if d < bestDC { bestDC = d; bestC = j }
+                }
+                out[p] = UInt8(255 - bestC)
+            } else {
+                out[p] = UInt8(best)
+            }
         }
         return out
     }

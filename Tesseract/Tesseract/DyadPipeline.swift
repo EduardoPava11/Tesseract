@@ -230,19 +230,32 @@ enum DyadPipeline {
             pulls.append(framePull)
         }
 
-        // ── Band post-pass: the pair dither (spec §6 v3), applied
-        // IDENTICALLY to both engines' outputs. Stage 2 put every
-        // band pixel on the σ side s; the Bayer threshold at the
-        // pixel's grid position flips coverage 1 − t of each tile
-        // back to the primary side 255 − s. Face and far pixels are
-        // untouched; bleed off / single-phase has no band.
+        // ── Band post-pass: the pair dither (spec §5 v6 — ★R4 RULED
+        // faithful-hue, Daniel 2026-08-11, on the first 17 Pro
+        // export; DY11 had measured faithful as aggregate-closer to
+        // ŷ). Stage 2 put every band pixel on the σ side; the Bayer
+        // threshold flips coverage 1 − t back to the primary side.
+        // Pixels that STAY on the σ side re-route through comp: the
+        // partner of the comp-nearest primary, so the DISPLAYED
+        // color ≈ ŷ itself (quantizeAerialAt; assignment/ANE stay
+        // untouched — faithful lives entirely in this post-pass).
         func pairDither(_ engineOut: [[UInt8]]) -> [[UInt8]] {
             return engineOut.enumerated().map { f, indices in
                 var out = indices
                 let side = Int(Double(indices.count).squareRoot())
+                let prims = labPrimaries[f]
                 for p in 0..<indices.count where !masks[f][p] && !fars[f][p] {
                     if bayer4[(p / side) % 4][(p % side) % 4] >= pulls[f][p] {
                         out[p] = 255 - out[p]
+                    } else {
+                        let target = DyadPalette.comp(labs[f][p])
+                        var best = 0
+                        var bestD = Double.infinity
+                        for j in 0..<prims.count {
+                            let d = DyadPalette.dLab2(prims[j], target)
+                            if d < bestD { bestD = d; best = j }
+                        }
+                        out[p] = UInt8(255 - best)
                     }
                 }
                 return out

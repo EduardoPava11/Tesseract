@@ -90,18 +90,22 @@ kernel void aerialPreview(
         t = 1.0f / (1.0f + exp((s - P.scalars.x) / P.scalars.y));
     }
 
-    // ONE search over the 128 primaries.
+    // σ-routing at coverage t (Bayer threshold on the grid position).
+    // ★R4 RULED faithful-hue (2026-08-11): the σ side searches for
+    // the comp-nearest primary — comp(L,a,b) = (L,−a,−b) — so the
+    // displayed color ≈ ŷ itself (the CPU twin in DyadPreview and
+    // DyadPipeline.pairDither is the law).
+    float th = (float(aerialBayer[gid.y % 4][gid.x % 4]) + 0.5f) / 16.0f;
+    bool sigmaSide = (th < t);
+    float3 target = sigmaSide ? float3(yhat.x, -yhat.y, -yhat.z) : yhat;
     uint best = 0;
     float bestD = INFINITY;
     for (uint j = 0; j < 128; j++) {
-        float3 d = prims[j].xyz - yhat;
+        float3 d = prims[j].xyz - target;
         float dist = dot(d, d);
         if (dist < bestD) { bestD = dist; best = j; }
     }
-
-    // σ-routing at coverage t (Bayer threshold on the grid position).
-    float th = (float(aerialBayer[gid.y % 4][gid.x % 4]) + 0.5f) / 16.0f;
-    uint idx = (th < t) ? (255u - best) : best;
+    uint idx = sigmaSide ? (255u - best) : best;
     out[gid.y * side + gid.x] = uchar(idx);
 }
 
