@@ -18,7 +18,9 @@ struct ProcessingStateView: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            CellText("TESSERACT", rows: TypeRows.body,
+            // The machine's word (SM1): after capture the grid keeps
+            // talking — SOLVING, with the palette being born below.
+            CellText(SurfaceMachine.State.solving.word, rows: TypeRows.body,
                      ink: Color(srgb8: Ink.ledGhost))
                 .place(GridLayout.procTitle)
             boardsRow.place(GridLayout.procBoards)

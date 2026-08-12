@@ -61,7 +61,8 @@ NEURAL = neural/BayerResidual.hs \
          neural/SKGeneSemantics.hs \
          neural/OctaveCodec.hs
 
-UI = ui/CellMechanics.hs
+UI = ui/CellMechanics.hs \
+     ui/SurfaceMachine.hs
 
 HARMONY = harmony/SetListDissonance.hs
 

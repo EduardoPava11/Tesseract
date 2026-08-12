@@ -86,20 +86,19 @@ struct ContentView: View {
 
     // MARK: - Mode Bar (LIVE | FACE)
 
-    /// Switching mid-capture would destroy an in-flight recording —
-    /// guarded in BOTH modes (the FACE side was previously unguarded).
+    /// Switching mid-capture would destroy an in-flight recording.
+    /// The law lives in the SURFACE MACHINE (SM3): work is sacred —
+    /// exactly WEAVING and SOLVING refuse interruption.
     private var modeSwitchAllowed: Bool {
         switch appMode {
         case .live:
-            switch camera.state {
-            case .recording, .processing: return false
-            default: return true
-            }
+            return SurfaceMachine.state(
+                for: camera.state,
+                hasPreview: camera.previewImage != nil).interruptible
         case .face:
-            switch faceCamera.state {
-            case .recording, .processing: return false
-            default: return true
-            }
+            return SurfaceMachine.state(
+                for: faceCamera.state,
+                hasPreview: faceCamera.previewImage != nil).interruptible
         }
     }
 
@@ -155,35 +154,38 @@ struct ContentView: View {
     }
 
     // Two-register error voice (2026-08-09): all-caps headline + one
-    // lowercase sentence that explains the connection. Terminal hardware
-    // gates render no RETRY (it could never succeed); permission denials
-    // add Open Settings; a failed encode retries to .previewing (the
-    // session is still running).
+    // lowercase sentence that explains the connection. The HEADLINE
+    // is the surface machine's word (SM1); terminal hardware gates
+    // render no RETRY (SM4: they are the machine's only terminals);
+    // permission denials add Open Settings; a failed encode retries
+    // to .previewing (the session is still running).
     @ViewBuilder
     private func errorState(_ msg: String,
                             restart: @escaping () -> Void,
                             reshoot: @escaping () -> Void) -> some View {
-        switch msg {
-        case CameraManager.cameraDeniedMessage:
-            ErrorStateView(message: "CAMERA OFF",
+        let refusal = SurfaceMachine.refusal(for: msg)
+        let headline = SurfaceMachine.State.refused(refusal).word
+        switch refusal {
+        case .cameraOff:
+            ErrorStateView(message: headline,
                            detail: "allow camera access in Settings to see the preview",
                            onRetry: restart,
                            showsSettings: true)
-        case CameraManager.noTrueDepthMessage:
+        case .noTrueDepth:
             // The gate: Tesseract does not run on non-TrueDepth iPhones
             // (Daniel, 2026-08-09). No capability key can hide the app
             // from these devices, so the gate states the requirement.
-            ErrorStateView(message: "NO TRUEDEPTH",
+            ErrorStateView(message: headline,
                            detail: "tesseract needs the Face ID camera, and this iPhone has none")
-        case FaceCaptureManager.faceTrackingUnsupportedMessage:
-            ErrorStateView(message: "NO FACE TRACKING",
+        case .noFaceTracking:
+            ErrorStateView(message: headline,
                            detail: "this device cannot track the ARKit face mesh")
-        case CameraManager.encodeFailedMessage:
-            ErrorStateView(message: "EXPORT FAILED",
+        case .exportFailed:
+            ErrorStateView(message: headline,
                            detail: "the GIF could not be encoded, record again",
                            onRetry: reshoot)
-        default:
-            ErrorStateView(message: "ERROR", detail: msg, onRetry: restart)
+        case .unknown(let detail):
+            ErrorStateView(message: headline, detail: detail, onRetry: restart)
         }
     }
 

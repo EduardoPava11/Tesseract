@@ -16,7 +16,8 @@ struct IdleStateView: View {
                 .place(GridLayout.idleSub)
             CellBusyTile(sideCells: GridLayout.idleBusy.w)
                 .place(GridLayout.idleBusy)
-            CellText("initializing camera...", rows: TypeRows.label,
+            // The machine's word (SM1): the grid says what it is doing.
+            CellText(SurfaceMachine.State.waking.word, rows: TypeRows.label,
                      ink: Color(srgb8: Ink.ledGhost))
                 .place(GridLayout.idleHint)
         }

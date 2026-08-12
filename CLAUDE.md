@@ -23,9 +23,9 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (43 files green
-  as of 2026-08-12 — RateLadder.hs + PairTree.hs added; the tally must
-  stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+- `spec/` — runghc axiom suite: `cd spec && make test` (44 files green
+  as of 2026-08-12 — RateLadder.hs + PairTree.hs + SurfaceMachine.hs
+  added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
   MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
   keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
@@ -228,6 +228,25 @@ pool in-kernel). comp() survives as the §3 map (DY3) but no longer
 routes assignment. ANE DyadAssign untouched. Device pass owed.
 
 ## UI (SIMPLICITY DECREE, 2026-08-09)
+
+★ THE SURFACE MACHINE (Daniel's ruling, 2026-08-12: "the app should
+be made of a strict grid; squares make words; the grid is a state
+machine that surfaces what the app is doing — including after
+capture"): spec/ui/SurfaceMachine.hs SM1–SM5 green (suite 44) →
+Tesseract/UI/SurfaceMachine.swift. Six states, one square-word each:
+WAKING → WATCHING → WEAVING → SOLVING → SEALED (+ REFUSED with the
+ruled two-register headlines). Laws: SM2 the capture arc admits no
+skips (after the shutter the grid MUST surface the solve — SOLVING
+shows the palette being born); SM3 exactly {WEAVING, SOLVING} refuse
+interruption (ContentView.modeSwitchAllowed now reads the machine);
+SM4 terminals = the hardware refusals only, everything else reaches
+WATCHING; SM5 one scene per state. ContentView error headlines,
+IdleStateView (WAKING), RecordingStateView (WEAVING + time), and
+ProcessingStateView (SOLVING) all speak the machine's words.
+SurfaceMachineTests adds the strict-grid teeth: every spoken word is
+rasterized by CellText at its real register and must FIT its
+GridRegion — exact ink, no estimates. One machine serves LIVE and
+FACE (FaceCaptureState maps case for case).
 
 Launch = loading screen until the first preview frame, then ONE
 surface: preview + record + SET. All choices live in the settings
