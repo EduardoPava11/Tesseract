@@ -157,8 +157,7 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         let frameIdx = frameBuffer.frameCount
         let previewIndices: [UInt8]
         let previewTable: [(UInt8, UInt8, UInt8)]?
-        if ExportSettings.load().method == .dyad,
-           let dyadIdx = dyadPreview.process(rgb: rgb, depths: signalGrid) {
+        if let dyadIdx = dyadPreview.process(rgb: rgb, depths: signalGrid) {
             previewIndices = dyadIdx
             previewTable = dyadPreview.table
         } else {
@@ -376,8 +375,8 @@ final class FaceCaptureManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            // Encode through the 64³ machine: persisted method setting,
-            // eligibility fallback. The anatomical signal rides the
+            // Encode through the 64³ machine: DYAD per-frame palettes,
+            // or nil surfaced honestly. The anatomical signal rides the
             // depth slot, so DYAD's face mass = mesh weight here too.
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
                                              settings: ExportSettings.load(),

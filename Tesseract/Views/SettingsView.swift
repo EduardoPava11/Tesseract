@@ -2,10 +2,11 @@
 // Tesseract
 //
 // The settings surface (fullScreenCover, its own canvas —
-// GridLayout.settingsScene). Two groups, per the simplicity decree:
-// CAMERA (LIVE TrueDepth / FACE mesh) and LOOK (the 64³ machine's
-// methods, radio, persisted through ExportSettings — the same value
-// GIFMachine reads at export time).
+// GridLayout.settingsScene). Per the simplicity decree: CAMERA
+// (LIVE TrueDepth / FACE mesh) plus the two toggles (BLEED, MIRROR,
+// persisted through ExportSettings — the same values GIFMachine
+// reads at export time). The LOOK radio is gone: DYAD per-frame
+// palettes are the law (Daniel's decree, 2026-08-12), not a choice.
 
 import SwiftUI
 
@@ -33,16 +34,6 @@ struct SettingsView: View {
                         .place(GridLayout.setModeLive)
                     modeRow(.face, region: GridLayout.setModeFace)
                         .place(GridLayout.setModeFace)
-
-                    CellText("LOOK", rows: TypeRows.label,
-                             ink: Color(srgb8: Ink.ledGhost))
-                        .place(GridLayout.setLookLabel)
-                    lookRow(.dyad, title: "DYAD", region: GridLayout.lookDyad)
-                        .place(GridLayout.lookDyad)
-                    lookRow(.refined, title: "REFINE", region: GridLayout.lookRefine)
-                        .place(GridLayout.lookRefine)
-                    lookRow(.tesseract, title: "TESS", region: GridLayout.lookTess)
-                        .place(GridLayout.lookTess)
 
                     toggleRow(title: "BLEED", value: settings.bleed,
                               region: GridLayout.toggleBleed) {
@@ -133,25 +124,6 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(title) \(value ? "on" : "off")")
-    }
-
-    private func lookRow(_ look: ExportMethod, title: String, region: GridRegion) -> some View {
-        let selected = look == settings.method
-        return Button {
-            settings.method = look
-            settings.save()
-        } label: {
-            ZStack {
-                selectionRing(region, selected: selected, enabled: true)
-                CellText(title, rows: TypeRows.body,
-                         ink: Color(srgb8: selected ? Ink.ink : Ink.ledGhost))
-            }
-            .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("\(title) look")
-        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var closeButton: some View {

@@ -39,6 +39,8 @@ final class MetalPipeline {
     private var aerialPrimsBuffer: MTLBuffer?
     private var aerialParamsBuffer: MTLBuffer?
     private var aerialOutBuffer: MTLBuffer?
+    /// ★PAIR TREE P2: 16 depth-4 node means (w = canonical leaf).
+    private var aerialNodesBuffer: MTLBuffer?
 
     // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
 
@@ -150,6 +152,9 @@ final class MetalPipeline {
         aerialParamsBuffer = device.makeBuffer(
             length: MemoryLayout<AerialParamsSwift>.stride, options: .storageModeShared)
         aerialOutBuffer = device.makeBuffer(length: size * size, options: .storageModeShared)
+        // ★PAIR TREE P2: the 32-level node targets (16 × float4).
+        aerialNodesBuffer = device.makeBuffer(
+            length: 16 * MemoryLayout<SIMD4<Float>>.stride, options: .storageModeShared)
 
         // Texture cache for CVPixelBuffer → MTLTexture conversion
         var cache: CVMetalTextureCache?
@@ -298,11 +303,19 @@ final class MetalPipeline {
               let primsBuf = aerialPrimsBuffer,
               let paramsBuf = aerialParamsBuffer,
               let outBuf = aerialOutBuffer,
-              state.primaries.count == 128 else { return nil }
+              let nodesBuf = aerialNodesBuffer,
+              state.primaries.count == 128,
+              state.nodes.count <= 16 else { return nil }
 
         var prims = state.primaries
         primsBuf.contents().copyMemory(
             from: &prims, byteCount: 128 * MemoryLayout<SIMD4<Float>>.stride)
+        if !state.nodes.isEmpty {
+            var nodes = state.nodes
+            nodesBuf.contents().copyMemory(
+                from: &nodes,
+                byteCount: state.nodes.count * MemoryLayout<SIMD4<Float>>.stride)
+        }
         var params = AerialParamsSwift(
             centroid: SIMD4<Float>(state.centroid.x, state.centroid.y,
                                    state.centroid.z, 0),
@@ -310,7 +323,8 @@ final class MetalPipeline {
                                   1 / Float(DepthSignal.dNear),
                                   1 / Float(DepthSignal.dFar)),
             flags: SIMD4<UInt32>(state.twoPhase ? 1 : 0,
-                                 UInt32(CameraConfig.outputSize), 0, 0))
+                                 UInt32(CameraConfig.outputSize),
+                                 UInt32(state.nodes.count), 0))
         paramsBuf.contents().copyMemory(
             from: &params, byteCount: MemoryLayout<AerialParamsSwift>.stride)
 
@@ -322,6 +336,7 @@ final class MetalPipeline {
         encoder.setBuffer(primsBuf, offset: 0, index: 0)
         encoder.setBuffer(paramsBuf, offset: 0, index: 1)
         encoder.setBuffer(outBuf, offset: 0, index: 2)
+        encoder.setBuffer(nodesBuf, offset: 0, index: 3)
         let side = CameraConfig.outputSize
         encoder.dispatchThreads(MTLSize(width: side, height: side, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 8, height: 8, depth: 1))

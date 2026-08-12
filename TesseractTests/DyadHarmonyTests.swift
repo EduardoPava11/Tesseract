@@ -116,16 +116,10 @@ final class DyadHarmonyTests: XCTestCase {
     }
 
     func testDyadExportCarriesHarmonyComment() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
-                                                   measure: nil, method: .dyad))
+        let gif = try XCTUnwrap(GIFMachine.makeGIF(
+            frames: frames(withRGB: true), measure: nil,
+            settings: ExportSettings(bleed: true, mirror: false)))
         XCTAssertNotNil(gif.range(of: Data("DYAD HARMONY".utf8)),
                         "dyad stream carries the harmony trace comment")
-    }
-
-    func testTesseractExportHasNoHarmonyComment() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
-                                                   measure: nil, method: .tesseract))
-        XCTAssertNil(gif.range(of: Data("DYAD HARMONY".utf8)),
-                     "lattice stream carries no harmony trace")
     }
 }

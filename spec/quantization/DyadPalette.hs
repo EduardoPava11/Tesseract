@@ -27,13 +27,23 @@
 --
 -- v5-W (THE WADA GROUND, 2026-08-10): the DISPLAYED σ half is no
 -- longer the raw gamut-max complement — it is the Wada ground:
--- hue-mirrored (σ = tritone survives), chroma-muted by the
--- dictionary's power law, L-shifted as an ensemble to the
--- dictionary's ground lightness. See § 3b. comp itself (negation)
--- is untouched: it remains the ASSIGNMENT geometry (one-search
--- σ-mirror, DY3) and the staging space of § 6c. The table law is
--- now T[σ(i)] = groundOf cL (T[i]) with cL read from T[0] — still
--- byte-exact, still verifiable from the table alone.
+-- chroma-muted by the dictionary's power law, L-shifted as an
+-- ensemble to the dictionary's ground lightness. See § 3b.
+--
+-- v7 (SAME-HUE GROUND + CHAOS BLUR — Daniel's ruling, 2026-08-12:
+-- "the blue haze on the background is unprofessional; blur the
+-- background as it becomes chaos"): the ground family KEEPS its
+-- figure's hue. The old hue-negation made the entire σ half the
+-- complement of the face's shells, so a warm subject painted every
+-- background pixel blue-gray — structurally, whatever the scene's
+-- own hue was. Wada does not constrain the hue interval (|Δh| is
+-- near-uniform — § 3b), so same-hue is equally dictionary-lawful,
+-- and it is what atmospheric haze actually does: desaturate and
+-- shift lightness, never hue-invert. comp itself (negation) is
+-- untouched as a §3 map (DY3), but it no longer routes assignment:
+-- the σ side targets the CHAOS-BLURRED staged lab (§ 6c v7). The
+-- table law stays T[σ(i)] = groundOf cL (T[i]) with cL read from
+-- T[0] — still byte-exact, still verifiable from the table alone.
 --
 -- Gamut law: when a generated color (ground or shell sample)
 -- leaves sRGB, it is clamped by scaling chroma alone — L and hue
@@ -154,9 +164,13 @@ clampL (l, a, b) = (max 0 (min 1 l), a, b)
 -- chromatic — our face) and GROUND (less — our background):
 --
 --   hue     |Δh| is near-uniform on [0°,180°]: Wada does not
---           constrain the hue interval, so σ = hue+180° stays —
---           the involution, the tritone, and the one-search
---           ANE mirror assignment are all preserved.
+--           constrain the hue interval. v5-W read that freedom as
+--           license to keep hue+180°; v7 (2026-08-12) reads it the
+--           other way — the ground keeps its figure's hue, because
+--           the negated family painted every background blue-gray
+--           under a warm subject (the "blue haze" Daniel ruled
+--           unprofessional). The index involution σ and the
+--           one-search assignment are unchanged either way.
 --   chroma  ln C_G = wadaAlphaC + wadaBetaC · ln C_S (r = +0.30):
 --           a power law. The ground is muted (≈ 0.46× at skin
 --           chroma — the v4 gamut-max blue glare is un-Wada) yet
@@ -193,7 +207,7 @@ groundLab cL (l, a, b) =
      else let c  = sqrt c2
               c' = min c (exp (wadaAlphaC + wadaBetaC * log c))
               s  = c' / c
-          in (l', negate (a * s), negate (b * s))
+          in (l', a * s, b * s)     -- v7: SAME hue — never negated
 
 -- | The generation law for the σ half, byte to byte. cL is the L
 --   of the BYTE centroid T[0], so the table law stays verifiable
@@ -476,10 +490,11 @@ quantizeDyad tbl d = quantizeDyadAt tbl d (0, 0)
 -- pair {q, 255−q} is a function of s alone (seam-death), so the
 -- involution and the GIF contract are untouched by construction.
 --
--- R4 fork (BOTH spec'd, neither chosen): default = comp-halo (the
--- shipped v4 aesthetic — far shows the complement of its own staged
--- color); variant = faithful-hue (σ side ≈ the pixel's own hue via
--- double-comp routing; costs a second search — ANE rebuild).
+-- R4 history: comp-halo shipped first; Daniel ruled faithful-hue
+-- 2026-08-11 ("I do not like how it looks"); v7 (2026-08-12)
+-- superseded both — with the same-hue ground the plain σ-mirror is
+-- faithful by construction, and the σ target is the chaos-blurred
+-- block mean (§ 6d). comp no longer routes assignment.
 -- ════════════════════════════════════════════════════════════════
 
 -- Exact-rational forms for the invariant (DY9 checks exactly).
@@ -507,27 +522,51 @@ aerialPrimary :: [RGB8] -> Double -> RGB8 -> Int
 aerialPrimary tbl s c =
   nearestPrimaryLab tbl (stageAerial (srgb8ToOklab (head tbl)) s (srgb8ToOklab c))
 
--- | v6 DEFAULT (faithful-hue — ★R4 RULED, Daniel 2026-08-11, on the
---   first 17 Pro export: "I do not like how it looks"; DY11 had
---   already measured faithful as aggregate-closer to ŷ): the σ side
---   routes through comp so the DISPLAYED color ≈ ŷ itself
---   (table[partner qc] = ground(comp-nearest) and comp∘comp = id up
---   to gamut clamp). Two searches, σ-side pixels only.
-quantizeAerialAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
-quantizeAerialAt tbl s t (x, y) c
-  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner qc
+-- | v7 DEFAULT (SAME-HUE σ + CHAOS BLUR — Daniel's ruling,
+--   2026-08-12, superseding ★R4 faithful-hue: the comp re-route
+--   still snapped every background to the hue-negated shell family
+--   — the blue haze; with the v7 same-hue ground, the PLAIN
+--   σ-mirror of the ŷ-nearest primary already displays ≈ muted ŷ,
+--   so the comp routing is deleted). The σ side targets `ybar`,
+--   the pixel's rung-16 BLOCK MEAN of the staged field (§ 6d): the
+--   background renders in flat 4×4-block colors — spatially
+--   blurred — and the Bayer coverage t makes the blur EMERGE as
+--   the pixel becomes chaos. One constant-free scale: rung 16 is
+--   THE RESOLUTION OF DEPTH (TriScaleLadder TL9), 64/16 = 4.
+quantizeAerialAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Lab -> Int
+quantizeAerialAt tbl s t (x, y) c ybar
+  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner (nearestPrimaryLab tbl ybar)
   | otherwise                                = aerialPrimary tbl s c
-  where
-    cF = srgb8ToOklab (head tbl)
-    qc = nearestPrimaryLab tbl (comp (stageAerial cF s (srgb8ToOklab c)))
 
--- | v5 VARIANT (comp-halo — the pre-R4 default, archived for render
---   comparison): σ side = mirror of the ŷ-nearest primary.
-quantizeAerialHaloAt :: [RGB8] -> Double -> Double -> (Int, Int) -> RGB8 -> Int
-quantizeAerialHaloAt tbl s t (x, y) c
-  | bayer4 !! (y `mod` 4) !! (x `mod` 4) < t = partner q
-  | otherwise                                = q
-  where q = aerialPrimary tbl s c
+-- ════════════════════════════════════════════════════════════════
+-- § 6d. v7 — THE CHAOS BLUR (2026-08-12, Daniel's ruling)
+--
+-- "Blur the background as it becomes chaos." The blur is the rung
+-- ladder's own pooling: the σ-side target of every pixel is the
+-- MEAN of the staged field ŷ over the pixel's rung-16 spatial
+-- block (4×4 on the 64² frame — the resolution of depth, TL9).
+-- All 16 pixels of a block share one target, hence one σ index:
+-- the far field is flat at rung 16. Coverage t routes per pixel,
+-- so the blur appears exactly as fast as the chaos does — no new
+-- boundary, no new constant, seam-death (DY10) preserved because
+-- the emitted pair is still independent of t and grid position.
+-- ════════════════════════════════════════════════════════════════
+
+chaosRung :: Int
+chaosRung = 4                      -- 64 / 16: the rung-16 block side
+
+-- | Block mean of a side×side staged field at the chaos rung.
+--   Position (x, y) → the mean over its 4×4 block. Total: the
+--   field is indexed row-major, callers pass side = the row width.
+chaosBlur :: Int -> [Lab] -> (Int, Int) -> Lab
+chaosBlur side field (x, y) =
+  let bx = (x `div` chaosRung) * chaosRung
+      by = (y `div` chaosRung) * chaosRung
+      pts = [ field !! ((by + dy) * side + (bx + dx))
+            | dy <- [0 .. chaosRung - 1], dx <- [0 .. chaosRung - 1] ]
+      n = fromIntegral (length pts)
+      (ls, as, bs) = unzip3 pts
+  in (sum ls / n, sum as / n, sum bs / n)
 
 -- ════════════════════════════════════════════════════════════════
 -- § 7. DETERMINISTIC TEST INPUTS (no System.Random)
@@ -753,16 +792,17 @@ axiom_DY10 = pairTFree && lipschitz && faceCompat
     sGrid = [fromIntegral n / 20 | n <- [0 .. 20 :: Int]] :: [Double]
     posGrid = [ (x, y) | x <- [0 .. 3], y <- [0 .. 3] ]
     stageOf s c = stageAerial cF s (srgb8ToOklab c)
-    -- the RULED pair law (R4 faithful): primary side is q, σ side is
-    -- the partner of the comp-nearest primary qc — both functions of
-    -- s only, never of t or grid position
+    -- the v7 pair law: primary side is q, σ side is the partner of
+    -- the nearest primary to the (blur) target ybar — both
+    -- independent of t and grid position (here ybar = the pixel's
+    -- own ŷ, the singleton-block limit of § 6d)
     pairTFree = and
-      [ idx == q || idx == partner qc
+      [ idx == q || idx == partner qb
       | c <- probes, s <- sGrid
       , let q = aerialPrimary tbl s c
-      , let qc = nearestPrimaryLab tbl (comp (stageOf s c))
+      , let qb = nearestPrimaryLab tbl (stageOf s c)
       , t <- sGrid, xy <- posGrid
-      , let idx = quantizeAerialAt tbl s t xy c ]
+      , let idx = quantizeAerialAt tbl s t xy c (stageOf s c) ]
     lipschitz = and
       [ dLab2 (stageOf s1 c) (stageOf s2 c)
           <= d0 * (s2 - s1) * (s2 - s1) + 1e-12
@@ -775,16 +815,19 @@ axiom_DY10 = pairTFree && lipschitz && faceCompat
 -- (DY11) AERIAL OCCUPANCY: at full coverage the far field lives in
 --        the σ half and SPREADS over the mirrored shells (no solid);
 --        the staged chroma radius at s = 0 is EXACTLY half the raw
---        radius (the octave, in color); and the faithful-hue R4
---        variant is (in aggregate) at least as close to the staged
---        color on the σ side as the comp-halo default.
+--        radius (the octave, in color); and the displayed σ side is
+--        HUE-FAITHFUL — never blue-shifted against its target: for
+--        every chromatic far probe, the displayed table entry's
+--        (a,b) has a non-negative dot with the target's (a,b). This
+--        is the anti-blue-haze axiom (Daniel, 2026-08-12).
 axiom_DY11 :: Bool
-axiom_DY11 = farHalf && farSpreadV5 && chromaOctave && faithfulCloser
+axiom_DY11 = farHalf && farSpreadV5 && chromaOctave && hueFaithful
   where
     tbl = buildDyad (skinColors 1 324)
     cF = srgb8ToOklab (head tbl)
     farColors = randColors8 43 25
-    farIdx = [ quantizeAerialAt tbl 0.05 1 (0, 0) c | c <- farColors ]
+    yhatOf c = stageAerial cF 0.05 (srgb8ToOklab c)
+    farIdx = [ quantizeAerialAt tbl 0.05 1 (0, 0) c (yhatOf c) | c <- farColors ]
     farHalf = all (>= 128) farIdx
     farSpreadV5 = length (nubInt farIdx) >= 4
     nubInt = foldr (\i acc -> if i `elem` acc then acc else i : acc) []
@@ -792,16 +835,15 @@ axiom_DY11 = farHalf && farSpreadV5 && chromaOctave && faithfulCloser
       [ abs (sqrt (dLab2 (stageAerial cF 0 y) cF) - sqrt (dLab2 y cF) / 2) < 1e-9
       | c <- farColors, let y = srgb8ToOklab c ]
     labOf i = srgb8ToOklab (tbl !! i)
-    -- the R4 datum that decided the ruling: the (now default)
-    -- faithful σ side is aggregate-closer to ŷ than the halo variant
-    faithfulCloser = sum (map dist faithful) <= sum (map dist halo) + 1e-9
-      where
-        yhats = [ stageAerial cF 0.05 (srgb8ToOklab c) | c <- farColors ]
-        faithful = zip yhats
-          [ quantizeAerialAt tbl 0.05 1 (0, 0) c | c <- farColors ]
-        halo = zip yhats
-          [ quantizeAerialHaloAt tbl 0.05 1 (0, 0) c | c <- farColors ]
-        dist (yhat, i) = sqrt (dLab2 (labOf i) yhat)
+    -- displayed σ entry vs the primary it mirrors: the ground law
+    -- keeps hue, so the shown color's chroma vector must never
+    -- oppose its own figure's — no structural blue for warm scenes
+    hueFaithful = and
+      [ da * fa + db * fb >= -1e-9
+      | i <- farIdx
+      , let (_, da, db) = labOf i          -- displayed σ entry
+      , let (_, fa, fb) = labOf (partner i) -- its figure primary
+      , fa * fa + fb * fb > 1e-12 ]
 
 -- (DY12) STATS-ON-ŷ (the coherence clause): analyzing STAGED samples
 --        keeps the solver single-valued (determinism), every staged
@@ -887,9 +929,11 @@ axiom_DY13 = all roleOK probeColors && monotoneC && achromatic
       (\l -> groundLab 0.7 (l, 0, 0) == (l + (wadaGroundL - 0.7), 0, 0))
       [0, 0.25, 0.5, 0.75, 1]
 
--- (DY14) THE σ SURVIVES: the generated ground is anti-colinear
---        with its figure in the (a,b) plane — hue+180° exactly,
---        never off-hue — through the ground law AND both clamps.
+-- (DY14) THE HUE SURVIVES (v7 — Daniel's 2026-08-12 ruling,
+--        replacing the anti-colinear law that made the blue haze):
+--        the generated ground is COLINEAR with its figure in the
+--        (a,b) plane — the SAME hue exactly, never negated, never
+--        off-hue — through the ground law AND both clamps.
 axiom_DY14 :: Bool
 axiom_DY14 = all ok probeColors
   where
@@ -898,7 +942,7 @@ axiom_DY14 = all ok probeColors
           (_, a', b') = chromaClamp (clampL (groundLab 0.65 lab))
           cross = a' * b - b' * a
           dotC  = a' * a + b' * b
-      in (a * a + b * b < 1e-12) || (dotC <= 0 && abs cross <= 1e-9)
+      in (a * a + b * b < 1e-12) || (dotC >= 0 && abs cross <= 1e-9)
 
 -- (DY15) THE ENSEMBLE SHIFT: the L-shift is rigid — within-ensemble
 --        lightness offsets are preserved exactly (pre-clamp) — and
@@ -914,6 +958,47 @@ axiom_DY15 = rigidity && all landOK allTables
       [ abs ((lOf cL c1 - lOf cL c2) - (rawL c1 - rawL c2)) <= 1e-12
       | (c1, c2) <- zip probeColors (tail probeColors), cL <- [0.4, 0.7] ]
     landOK t = abs (lOf (centroidL t) (head t) - wadaGroundL) <= 1e-12
+
+-- (DY16) THE CHAOS BLUR (v7, Daniel's 2026-08-12 ruling): the rung
+--        is the ladder's own 64/16 = 4; a constant field is a fixed
+--        point of the blur; every position inside one block yields
+--        the SAME target — so at full coverage the far field is
+--        flat at rung 16 (16 pixels, one σ index); and the face
+--        side never sees the blur (t = 0 ⇒ the pure ŷ search,
+--        whatever ybar is passed).
+axiom_DY16 :: Bool
+axiom_DY16 = rungLaw && constantFixed && blockFlat && flatIndices && faceUntouched
+  where
+    rungLaw = chaosRung == 64 `div` 16
+    side8 = 8
+    constF = replicate (side8 * side8) (0.5, 0.125, -0.25)
+    constantFixed = and
+      [ approxLab (chaosBlur side8 constF (x, y)) (0.5, 0.125, -0.25)
+      | x <- [0 .. side8 - 1], y <- [0 .. side8 - 1] ]
+    approxLab (l1, a1, b1) (l2, a2, b2) =
+      abs (l1 - l2) <= 1e-12 && abs (a1 - a2) <= 1e-12 && abs (b1 - b2) <= 1e-12
+    -- a varied deterministic field: every block's 16 positions
+    -- share one target byte-exactly (same pts list, same fold)
+    variedF = [ srgb8ToOklab c | c <- randColors8 47 (side8 * side8) ]
+    blockFlat = and
+      [ chaosBlur side8 variedF (x, y)
+          == chaosBlur side8 variedF ((x `div` 4) * 4, (y `div` 4) * 4)
+      | x <- [0 .. side8 - 1], y <- [0 .. side8 - 1] ]
+    -- full coverage over the whole 8×8 field: indices are flat on
+    -- each 4×4 block (the visible blur), still in the σ half
+    tbl = buildDyad (skinColors 1 324)
+    idxAt (x, y) = quantizeAerialAt tbl 0.05 1 (x, y)
+                     (oklabToSrgb8 (variedF !! (y * side8 + x)))
+                     (chaosBlur side8 variedF (x, y))
+    flatIndices = and
+      [ idxAt (x, y) == idxAt ((x `div` 4) * 4, (y `div` 4) * 4)
+          && idxAt (x, y) >= 128
+      | x <- [0 .. side8 - 1], y <- [0 .. side8 - 1] ]
+    faceUntouched = and
+      [ quantizeAerialAt tbl s 0 (x, y) c ybar == aerialPrimary tbl s c
+      | c <- take 8 probeColors, s <- [0, 0.5, 1]
+      , ybar <- [(0.2, -0.1, 0.3), (0.9, 0.2, -0.2)]
+      , (x, y) <- [(0, 0), (3, 2)] ]
 
 -- ════════════════════════════════════════════════════════════════
 -- § 9. VISUALIZATION
@@ -984,11 +1069,12 @@ main = do
   check "DY8 canonical PCA signs: no shell flips between frames"    [axiom_DY8]
   check "DY9 aerial invariant σ·γ = σ_base(K) exact, octave [½,1]"  [axiom_DY9]
   check "DY10 seam-death: pair t-free, 1-Lipschitz, face-compat"    [axiom_DY10]
-  check "DY11 aerial occupancy: σ-half spread, chroma octave, R4"   [axiom_DY11]
+  check "DY11 aerial occupancy: σ-half spread, octave, hue-faithful" [axiom_DY11]
   check "DY12 stats-on-ŷ: single-valued, involution, stable"        [axiom_DY12]
   check "DY13 ground role: muted, monotone, achromatic-exact"       [axiom_DY13]
-  check "DY14 σ survives: ground anti-colinear, hue+180° exact"     [axiom_DY14]
+  check "DY14 hue survives: ground colinear, same hue exact (v7)"   [axiom_DY14]
   check "DY15 ensemble shift: rigid L, T[255] lands at wadaGroundL" [axiom_DY15]
+  check "DY16 chaos blur: rung 64/16, block-flat, face untouched"   [axiom_DY16]
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════"

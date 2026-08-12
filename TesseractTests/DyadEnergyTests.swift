@@ -123,7 +123,7 @@ final class DyadEnergyTests: XCTestCase {
     func testGIFCarriesEnergySection() throws {
         let gif = try XCTUnwrap(GIFMachine.makeGIF(
             frames: (0..<4).map(makeFrame), measure: nil,
-            settings: ExportSettings(method: .dyad, bleed: true, mirror: false)))
+            settings: ExportSettings(bleed: true, mirror: false)))
         let ascii = String(decoding: gif, as: UTF8.self)
         XCTAssertTrue(ascii.contains("DYAD ENERGY v1"),
                       "every DYAD export reports its energies")

@@ -101,6 +101,15 @@ enum CameraConfig {
     // are provenance, not look. Internal flag by design (no
     // settings-cover surface without a ruling; simplicity decree).
     static let skGenes = true
+
+    // ★PAIR TREE (Daniel's ruling 2026-08-12, "be bold";
+    // docs/pair-tree-palette.md, spec PairTree.hs PT1–PT9): the
+    // figure half is the analytic dyadic tree (closed-form Gaussian
+    // splits) instead of the ring shells, the σ-side chaos targets
+    // quantize at the 32-level (prefix law, P2), and traces bump to
+    // DYAD STATS v3. DEFAULT ON per the ruling; one-line revert;
+    // device pass owed. Ring solver stays for v1/v2 rebuilds.
+    static let pairTree = true
 }
 
 @MainActor
@@ -663,8 +672,8 @@ final class CameraManager: NSObject, ObservableObject {
                 return BirkhoffMeasure(counts: perFrame)
             }()
 
-            // Encode through the 64³ machine: persisted method setting,
-            // eligibility fallback (spec/output/ExportMethods.hs).
+            // Encode through the 64³ machine: DYAD per-frame palettes,
+            // or nil surfaced honestly (spec/output/ExportMethods.hs).
             // The palette is shown as it is created (per-frame tables).
             let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
                                              settings: ExportSettings.load(),
@@ -723,19 +732,20 @@ final class CameraManager: NSObject, ObservableObject {
         rgb: [(Float, Float, Float)], depths: [Float], frameIndex: Int,
         metal: MetalPipeline? = nil, gpuTexturesReady: Bool = false
     ) -> (CGImage?, BirkhoffMeasure) {
-        if ExportSettings.load().method == .dyad {
-            dyadPreview.refreshIfDue(rgb: rgb, depths: depths)
-            let indices: [UInt8]?
-            if gpuTexturesReady, let metal, let st = dyadPreview.metalState,
-               let gpu = metal.aerialAssign(state: st) {
-                indices = gpu
-            } else {
-                indices = dyadPreview.assignCPU(rgb: rgb, depths: depths)
-            }
-            if let indices {
-                return (buildPreviewImage(indices: indices, table: dyadPreview.table),
-                        BirkhoffMeasure(paletteIndices: indices))
-            }
+        // DYAD is the only look (2026-08-12 decree); the lattice
+        // quick-quantize below survives solely as the warm-up
+        // fallback before the first slow-state table exists.
+        dyadPreview.refreshIfDue(rgb: rgb, depths: depths)
+        let dyadIndices: [UInt8]?
+        if gpuTexturesReady, let metal, let st = dyadPreview.metalState,
+           let gpu = metal.aerialAssign(state: st) {
+            dyadIndices = gpu
+        } else {
+            dyadIndices = dyadPreview.assignCPU(rgb: rgb, depths: depths)
+        }
+        if let dyadIndices {
+            return (buildPreviewImage(indices: dyadIndices, table: dyadPreview.table),
+                    BirkhoffMeasure(paletteIndices: dyadIndices))
         }
         let indices = PerfectQuantizer.previewQuantize(
             rgb: rgb, depths: depths, frameIndex: frameIndex)

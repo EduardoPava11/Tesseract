@@ -24,7 +24,8 @@ using namespace metal;
 struct AerialParams {
     float4 centroid;   // xyz = OKLab c_F (the γ-staging centroid)
     float4 scalars;    // x = s*, y = τ, z = 1/dNear, w = 1/dFar
-    uint4  flags;      // x = twoPhase, y = side (64)
+    uint4  flags;      // x = twoPhase, y = side (64), z = node count
+                       // (★PAIR TREE: 16 when the 32-level targets ride)
 };
 
 // sRGB → OKLab (Björn Ottosson's matrices — mirror of DyadPalette.swift).
@@ -59,6 +60,9 @@ kernel void aerialPreview(
     device const float4* prims                  [[buffer(0)]],   // 128 OKLab
     constant AerialParams& P                    [[buffer(1)]],
     device uchar* out                           [[buffer(2)]],
+    device const float4* nodes                  [[buffer(3)]],   // ★PAIR TREE: 16 depth-4
+                                                                  // means, w = canonical leaf;
+                                                                  // count in P.flags.z
     uint2 gid                                   [[thread_position_in_grid]]
 ) {
     uint side = P.flags.y;
@@ -91,21 +95,71 @@ kernel void aerialPreview(
     }
 
     // σ-routing at coverage t (Bayer threshold on the grid position).
-    // ★R4 RULED faithful-hue (2026-08-11): the σ side searches for
-    // the comp-nearest primary — comp(L,a,b) = (L,−a,−b) — so the
-    // displayed color ≈ ŷ itself (the CPU twin in DyadPreview and
-    // DyadPipeline.pairDither is the law).
+    // v7 CHAOS BLUR (Daniel's ruling, 2026-08-12, spec §6d): the σ
+    // side targets the rung-16 BLOCK MEAN of the staged field — the
+    // background blurs as it becomes chaos. The same-hue ground
+    // (DY14 v7) makes the plain σ-mirror hue-faithful; the comp
+    // re-route is dead. CPU twins: DyadPreview.assignCPU and
+    // DyadPipeline.pairDither.
     float th = (float(aerialBayer[gid.y % 4][gid.x % 4]) + 0.5f) / 16.0f;
     bool sigmaSide = (th < t);
-    float3 target = sigmaSide ? float3(yhat.x, -yhat.y, -yhat.z) : yhat;
-    uint best = 0;
-    float bestD = INFINITY;
-    for (uint j = 0; j < 128; j++) {
-        float3 d = prims[j].xyz - target;
-        float dist = dot(d, d);
-        if (dist < bestD) { bestD = dist; best = j; }
+    uint idx;
+    if (sigmaSide) {
+        // chaos blur: rung-16 spatial block mean of ŷ (spec §6d)
+        uint bx = (gid.x / 4u) * 4u;
+        uint by = (gid.y / 4u) * 4u;
+        float3 sum = float3(0.0f);
+        for (uint dy = 0; dy < 4u; dy++) {
+            for (uint dx = 0; dx < 4u; dx++) {
+                uint2 q = uint2(bx + dx, by + dy);
+                float mq = depthTexture.read(q).r;
+                float sq;
+                if (isfinite(mq) && mq > 0.0f) {
+                    sq = clamp((1.0f / mq - P.scalars.w) / (P.scalars.z - P.scalars.w),
+                               0.0f, 1.0f);
+                } else {
+                    sq = 0.5f;   // DepthSignal.fill
+                }
+                float3 rq = round(saturate(rgbTexture.read(q).rgb) * 255.0f) / 255.0f;
+                float3 lq = oklabFromSrgbGPU(rq);
+                float gq = 1.0f / (2.0f - sq);
+                sum += P.centroid.xyz + gq * (lq - P.centroid.xyz);
+            }
+        }
+        float3 target = sum / 16.0f;
+        uint nodeCount = P.flags.z;
+        if (nodeCount > 0u) {
+            // ★PAIR TREE P2 (prefix law): 32-level quantization —
+            // nearest depth-4 node, emit its canonical leaf's partner
+            // (CPU twins: DyadPreview.assignCPU, DyadPipeline.pairDither).
+            uint best = 0;
+            float bestD = INFINITY;
+            for (uint c = 0; c < nodeCount; c++) {
+                float3 d = nodes[c].xyz - target;
+                float dist = dot(d, d);
+                if (dist < bestD) { bestD = dist; best = c; }
+            }
+            idx = 255u - uint(nodes[best].w);
+        } else {
+            uint best = 0;
+            float bestD = INFINITY;
+            for (uint j = 0; j < 128; j++) {
+                float3 d = prims[j].xyz - target;
+                float dist = dot(d, d);
+                if (dist < bestD) { bestD = dist; best = j; }
+            }
+            idx = 255u - best;
+        }
+    } else {
+        uint best = 0;
+        float bestD = INFINITY;
+        for (uint j = 0; j < 128; j++) {
+            float3 d = prims[j].xyz - yhat;
+            float dist = dot(d, d);
+            if (dist < bestD) { bestD = dist; best = j; }
+        }
+        idx = best;
     }
-    uint idx = sigmaSide ? (255u - best) : best;
     out[gid.y * side + gid.x] = uchar(idx);
 }
 

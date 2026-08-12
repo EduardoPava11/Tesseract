@@ -1,34 +1,30 @@
 // GIFMachineTests.swift
 // Tesseract
 //
-// Swift mirrors of the ExportMethods spec (XM2–XM5): eligibility
-// resolution, the persisted setting's round-trip, and the table
-// scheme each method actually emits on the wire. No camera, no Metal.
+// Swift mirrors of the ExportMethods spec (XM1–XM4): DYAD per-frame
+// palettes are the only export law (Daniel's decree, 2026-08-12) —
+// eligible captures emit one LCT per frame, ineligible captures
+// emit NOTHING (honest refusal, no global-table fallback). Plus the
+// persisted toggles and the provenance round-trip. No camera, no
+// Metal.
 
 import XCTest
 @testable import Tesseract
 
 final class GIFMachineTests: XCTestCase {
 
-    private var savedMethod: String?
     private var savedBleed: Any?
     private var savedMirror: Any?
 
     override func setUp() {
         super.setUp()
         let d = UserDefaults.standard
-        savedMethod = d.string(forKey: ExportSettings.methodKey)
         savedBleed = d.object(forKey: ExportSettings.bleedKey)
         savedMirror = d.object(forKey: ExportSettings.mirrorKey)
     }
 
     override func tearDown() {
         let d = UserDefaults.standard
-        if let saved = savedMethod {
-            d.set(saved, forKey: ExportSettings.methodKey)
-        } else {
-            d.removeObject(forKey: ExportSettings.methodKey)
-        }
         if let b = savedBleed as? Bool {
             d.set(b, forKey: ExportSettings.bleedKey)
         } else {
@@ -70,6 +66,10 @@ final class GIFMachineTests: XCTestCase {
         (0..<count).map { makeFrame(index: $0, withRGB: withRGB) }
     }
 
+    private func defaultSettings(mirror: Bool = false) -> ExportSettings {
+        ExportSettings(bleed: true, mirror: mirror)
+    }
+
     /// Packed byte of the FIRST image descriptor in a GIF stream.
     private func firstDescriptorPackedByte(_ gif: Data) -> UInt8? {
         let b = [UInt8](gif)
@@ -84,71 +84,41 @@ final class GIFMachineTests: XCTestCase {
         return nil
     }
 
-    // MARK: - XM2/XM3: eligibility resolution
+    // MARK: - XM2: honest refusal — DYAD or nothing
 
-    func testResolveChain() {
-        let rich = frames(withRGB: true)
-        let poor = frames(withRGB: false)
-        XCTAssertEqual(GIFMachine.resolve(.dyad, frames: rich), .dyad)
-        XCTAssertEqual(GIFMachine.resolve(.dyad, frames: poor), .refined,
-                       "no rawRGB → dyad falls to refined")
-        XCTAssertEqual(GIFMachine.resolve(.refined, frames: poor), .refined)
-        for method in ExportMethod.allCases {
-            XCTAssertEqual(GIFMachine.resolve(.tesseract, frames: rich), .tesseract)
-            XCTAssertTrue(GIFMachine.eligible(GIFMachine.resolve(method, frames: poor),
-                                              frames: poor),
-                          "resolved method must always be eligible (XM2)")
-        }
-        XCTAssertEqual(GIFMachine.resolve(.dyad, frames: []), .refined,
-                       "empty capture is not dyad-eligible")
+    func testEligibility() {
+        XCTAssertTrue(GIFMachine.eligible(frames: frames(withRGB: true)))
+        XCTAssertFalse(GIFMachine.eligible(frames: frames(withRGB: false)),
+                       "no rawRGB → not eligible")
+        XCTAssertFalse(GIFMachine.eligible(frames: []),
+                       "empty capture is not eligible")
     }
-
-    // MARK: - XM5: the wire scheme per method
 
     func testDyadEmitsPerFrameTables() throws {
         let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
-                                                   measure: nil, method: .dyad))
+                                                   measure: nil,
+                                                   settings: defaultSettings()))
         XCTAssertEqual(firstDescriptorPackedByte(gif), 0x87,
-                       "dyad carries a 256-entry LCT on every frame")
+                       "every frame carries a 256-entry LCT")
     }
 
-    func testDyadWithoutRGBFallsToGlobalTable() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: false),
-                                                   measure: nil, method: .dyad))
-        XCTAssertEqual(firstDescriptorPackedByte(gif), 0x00,
-                       "resolved refined → single global table")
+    func testIneligibleCaptureProducesNoGIF() {
+        XCTAssertNil(GIFMachine.makeGIF(frames: frames(withRGB: false),
+                                        measure: nil, settings: defaultSettings()),
+                     "no rawRGB → honest nil, never a global-table downgrade")
+        XCTAssertNil(GIFMachine.makeGIF(frames: [], measure: nil,
+                                        settings: defaultSettings()))
     }
 
-    func testTesseractEmitsCanonicalGCT() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: false),
-                                                   measure: nil, method: .tesseract))
-        let b = [UInt8](gif)
-        XCTAssertEqual(Data(b[13..<(13 + 768)]), TesseractPalette.gifColorTable)
-        XCTAssertEqual(firstDescriptorPackedByte(gif), 0x00)
-    }
-
-    func testRefinedEmitsGlobalTable() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
-                                                   measure: nil, method: .refined))
-        XCTAssertEqual(firstDescriptorPackedByte(gif), 0x00)
-    }
-
-    func testEmptyCaptureProducesNoGIF() {
-        XCTAssertNil(GIFMachine.makeGIF(frames: [], measure: nil, method: .dyad))
-    }
-
-    // MARK: - XM4: the persisted setting
+    // MARK: - The persisted toggles
 
     func testSettingsRoundTrip() {
-        for method in ExportMethod.allCases {
-            for bleed in [true, false] {
-                for mirror in [true, false] {
-                    ExportSettings(method: method, bleed: bleed, mirror: mirror).save()
-                    let loaded = ExportSettings.load()
-                    XCTAssertEqual(loaded.method, method)
-                    XCTAssertEqual(loaded.bleed, bleed)
-                    XCTAssertEqual(loaded.mirror, mirror)
-                }
+        for bleed in [true, false] {
+            for mirror in [true, false] {
+                ExportSettings(bleed: bleed, mirror: mirror).save()
+                let loaded = ExportSettings.load()
+                XCTAssertEqual(loaded.bleed, bleed)
+                XCTAssertEqual(loaded.mirror, mirror)
             }
         }
     }
@@ -178,32 +148,23 @@ final class GIFMachineTests: XCTestCase {
         let capture = frames(withRGB: true)
         let plain = try XCTUnwrap(GIFMachine.makeGIF(
             frames: capture, measure: nil,
-            settings: ExportSettings(method: .dyad, bleed: true, mirror: false)))
+            settings: ExportSettings(bleed: true, mirror: false)))
         let flipped = try XCTUnwrap(GIFMachine.makeGIF(
             frames: capture, measure: nil,
-            settings: ExportSettings(method: .dyad, bleed: true, mirror: true)))
+            settings: ExportSettings(bleed: true, mirror: true)))
         XCTAssertNotEqual(plain, flipped, "mirror must change the bytes")
         // Same palette work either way: identical GCT (frame 0's table).
         XCTAssertEqual(Data([UInt8](plain)[13..<781]), Data([UInt8](flipped)[13..<781]))
-    }
-
-    func testGarbageStoredValueParsesToDefault() {
-        UserDefaults.standard.set("garbage", forKey: ExportSettings.methodKey)
-        XCTAssertEqual(ExportSettings.load().method, .dyad)
-        UserDefaults.standard.removeObject(forKey: ExportSettings.methodKey)
-        XCTAssertEqual(ExportSettings.load().method, .dyad,
-                       "missing value defaults to dyad")
     }
 
     // MARK: - Stats provenance: the GIF carries its own generator
 
     func testStatsTraceRebuildsTablesByteExact() throws {
         let out = try XCTUnwrap(DyadPipeline.process(frames: frames(withRGB: true)))
-        let trace = GIFMachine.dyadTrace(
-            out, settings: ExportSettings(method: .dyad, bleed: true, mirror: false))
+        let trace = GIFMachine.dyadTrace(out, settings: defaultSettings())
         let rebuilt = try XCTUnwrap(GIFMachine.rebuildTables(fromTrace: trace))
         XCTAssertEqual(rebuilt, out.tables,
-                       "9 numbers per frame must regenerate every palette byte")
+                       "the stats numbers must regenerate every palette byte")
     }
 
     func testGIFCarriesItsGenerator() throws {
@@ -211,7 +172,7 @@ final class GIFMachineTests: XCTestCase {
         // comment → re-solve the tables → byte-match the embedded LCTs.
         let gif = try XCTUnwrap(GIFMachine.makeGIF(
             frames: frames(withRGB: true), measure: nil,
-            settings: ExportSettings(method: .dyad, bleed: true, mirror: false)))
+            settings: defaultSettings()))
         let b = [UInt8](gif)
 
         var comments: [String] = []
@@ -243,25 +204,41 @@ final class GIFMachineTests: XCTestCase {
             }
         }
 
-        let trace = try XCTUnwrap(comments.first(where: { $0.contains("DYAD STATS v2") }),
-                                  "the provenance comment must be in the stream")
+        let trace = try XCTUnwrap(comments.first(where: { $0.contains("DYAD STATS v3") }),
+                                  "the provenance comment must be in the stream (v3 = pair tree)")
         XCTAssertTrue(trace.contains("DYAD HARMONY"), "harmony rides the same comment")
         XCTAssertTrue(trace.contains("DYAD SETTINGS bleed=1 mirror=0"))
+        XCTAssertTrue(trace.contains("RATE LEDGER v1"),
+                      "the beauty meter rides the same comment (rate-ladder S0)")
         let rebuilt = try XCTUnwrap(GIFMachine.rebuildTables(fromTrace: trace))
         XCTAssertEqual(rebuilt, embeddedLCTs,
                        "the GIF's own comment must regenerate its embedded tables")
     }
 
-    // MARK: - Pill cycle
+    // MARK: - RATE LEDGER (rate-ladder redesign, step S0)
 
-    func testPillCycleVisitsEveryMethod() {
-        var seen: Set<ExportMethod> = []
-        var m = ExportMethod.tesseract
-        for _ in 0..<ExportMethod.allCases.count {
-            seen.insert(m)
-            m = m.next
+    /// The meter's ordering law (spec RateLadder RL5): an ordered
+    /// cube costs the coder less than a noisy one — M(flat) > M(noise)
+    /// through the encoder's OWN LZW.
+    func testRateLedgerOrdersFlatAboveNoise() {
+        let n = QuantizedFrame.pixelCount
+        let flat = (0..<4).map { f in [UInt8](repeating: UInt8(f), count: n) }
+        var seed: UInt64 = 0x2545F4914F6CDD1D
+        let noise = (0..<4).map { _ in
+            (0..<n).map { _ -> UInt8 in
+                seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17
+                return UInt8(truncatingIfNeeded: seed)
+            }
         }
-        XCTAssertEqual(seen, Set(ExportMethod.allCases))
-        XCTAssertEqual(m, .tesseract, "cycle returns to its start")
+        let flatCost = GIFEncoder.lzwCost(indexFrames: flat)
+        let noiseCost = GIFEncoder.lzwCost(indexFrames: noise)
+        XCTAssertLessThan(flatCost, noiseCost,
+                          "order must compress; noise must not")
+        // And the noise cube's K̂ sits near (or above) 8 bits/px while
+        // the flat cube's is far below 1 — the meter separates them.
+        let kFlat = 8 * Double(flatCost) / Double(4 * n)
+        let kNoise = 8 * Double(noiseCost) / Double(4 * n)
+        XCTAssertLessThan(kFlat, 1.0)
+        XCTAssertGreaterThan(kNoise, 6.0)
     }
 }

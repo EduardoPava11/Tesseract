@@ -1,105 +1,55 @@
 // GIFMachine.swift
 // Tesseract
 //
-// The 64³ GIF machine: every export is 64 frames of 64×64 indices
-// against a 256-entry table scheme. Methods differ only in how
-// indices and tables are produced; the shape, the stream, and the
-// setting are one. Port of spec/output/ExportMethods.hs (XM1–XM5,
-// XP1–XP2 — the Haskell spec is authoritative).
+// The 64³ GIF machine: every export is 64 frames of 64×64 indices,
+// each frame carrying its own 256-entry Local Color Table — the
+// DYAD-256 scheme is the ONLY export law (Daniel's decree,
+// 2026-08-12: per-frame palettes, non-negotiable; the tesseract/
+// refined global-table methods are deleted). A capture that cannot
+// run DYAD exports NOTHING — the nil is surfaced honestly
+// (encodeFailedMessage), never silently downgraded to a global
+// table. Port of spec/output/ExportMethods.hs (XM1–XM4, XP1–XP2 —
+// the Haskell spec is authoritative).
 
 import Foundation
 
-/// How indices and tables are made. Raw values are the persisted
-/// setting strings (spec §3: render/parse round-trip).
-enum ExportMethod: String, CaseIterable, Sendable {
-    case tesseract   // canonical 4⁴ lattice, one global table
-    case refined     // lattice indices, pass-2 cell-clamped global table
-    case dyad        // DYAD-256 paired per-frame local tables
-
-    static let defaultMethod: ExportMethod = .dyad
-
-    /// Fallback chain: dyad → refined → tesseract → ∅ (spec §2).
-    var fallback: ExportMethod? {
-        switch self {
-        case .dyad:      return .refined
-        case .refined:   return .tesseract
-        case .tesseract: return nil
-        }
-    }
-
-    /// Pill cycle order (UI): tesseract → refined → dyad → tesseract.
-    var next: ExportMethod {
-        switch self {
-        case .tesseract: return .refined
-        case .refined:   return .dyad
-        case .dyad:      return .tesseract
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .tesseract: return "TESS"
-        case .refined:   return "REFINE"
-        case .dyad:      return "DYAD"
-        }
-    }
-}
-
-/// The persisted settings. Unknown or missing stored values parse to
-/// defaults (spec XM4: garbage → default). Useful and simple: every
-/// entry here has a visible effect on the GIF.
+/// The persisted settings. Missing stored values parse to defaults.
+/// Useful and simple: every entry here has a visible effect on the
+/// GIF. (The old `method` setting is gone — DYAD is the law, not a
+/// choice; a stale "export.method" default is simply ignored.)
 struct ExportSettings: Sendable {
-    var method: ExportMethod
-    /// DYAD background: harsh σ-mirror bleed (true) or the flat
-    /// solid comp(centroid) everywhere (false — role law v1, a lawful
-    /// subset of v2: every background pixel fully pulled).
+    /// DYAD background: coverage dither band (true) or hard MAP
+    /// classes only (false — role law v1, a lawful subset).
     var bleed: Bool
     /// Mirror the exported GIF horizontally (selfie orientation).
-    /// Index-domain flip — exact, method-independent.
+    /// Index-domain flip — exact.
     var mirror: Bool
 
-    static let methodKey = "export.method"
     static let bleedKey = "export.bleed"
     static let mirrorKey = "export.mirror"
 
     static func load() -> ExportSettings {
         let defaults = UserDefaults.standard
-        let stored = defaults.string(forKey: methodKey) ?? ""
         return ExportSettings(
-            method: ExportMethod(rawValue: stored) ?? .defaultMethod,
             bleed: defaults.object(forKey: bleedKey) as? Bool ?? true,
             mirror: defaults.object(forKey: mirrorKey) as? Bool ?? false)
     }
 
     func save() {
         let defaults = UserDefaults.standard
-        defaults.set(method.rawValue, forKey: Self.methodKey)
         defaults.set(bleed, forKey: Self.bleedKey)
         defaults.set(mirror, forKey: Self.mirrorKey)
     }
 }
 
-/// One dispatcher for every capture export. DualCubeAnimator's
-/// organism artifacts stay outside — that A/B surface is
-/// deprecation-eligible (Daniel, 2026-08-09).
+/// One dispatcher for every capture export.
 enum GIFMachine {
 
-    /// Dyad needs per-pixel color (the mask rides the always-present
-    /// depth slot); the lattice methods accept anything (spec §2).
-    static func eligible(_ method: ExportMethod, frames: [QuantizedFrame]) -> Bool {
-        switch method {
-        case .dyad:
-            return !frames.isEmpty && frames.allSatisfy { $0.rawRGB != nil }
-        case .tesseract, .refined:
-            return true
-        }
-    }
-
-    /// Requested method → method actually run. Total; terminates at
-    /// tesseract, which accepts anything (spec XM2).
-    static func resolve(_ method: ExportMethod, frames: [QuantizedFrame]) -> ExportMethod {
-        if eligible(method, frames: frames) { return method }
-        return resolve(method.fallback ?? .tesseract, frames: frames)
+    /// DYAD needs per-pixel color (the mask rides the always-present
+    /// depth slot). Both capture managers provide rawRGB on the
+    /// record path; an ineligible capture exports nothing.
+    static func eligible(frames: [QuantizedFrame]) -> Bool {
+        !frames.isEmpty && frames.allSatisfy { $0.rawRGB != nil }
     }
 
     /// Horizontal index-domain flip (exact, involutive) — the MIRROR
@@ -113,17 +63,6 @@ enum GIFMachine {
             }
         }
         return out
-    }
-
-    private static func mirrorFrames(_ frames: [QuantizedFrame]) -> [QuantizedFrame] {
-        frames.map { f in
-            QuantizedFrame(
-                index: f.index,
-                paletteIndices: mirrored(f.paletteIndices, side: QuantizedFrame.size),
-                rawRGB: f.rawRGB, depths: f.depths, measure: f.measure,
-                subjectAnalysis: f.subjectAnalysis, anchorTrace: f.anchorTrace,
-                timestamp: f.timestamp)
-        }
     }
 
     /// Ou & Luo pair-harmony of the whole capture's DYAD tables, for
@@ -173,7 +112,10 @@ enum GIFMachine {
         // v2 (phase-palette step 3, ruling R2): 9 stats numbers plus
         // the frame's fitted ground moments (deltaL alphaC betaC cap)
         // — 13 per line. The GIF still carries its full generator.
-        lines.append("DYAD STATS v2 frames=\(stats.count)")
+        // v3 (★PAIR TREE, 2026-08-12): same 13 numbers, solved
+        // through the analytic dyadic tree instead of the rings —
+        // the version tag picks the rebuild law.
+        lines.append("DYAD STATS \(CameraConfig.pairTree ? "v3" : "v2") frames=\(stats.count)")
         for (s, gm) in zip(stats, dyad.groundMoments) {
             let c = s.covariance
             let nums = [s.centroid.l, s.centroid.a, s.centroid.b,
@@ -183,6 +125,26 @@ enum GIFMachine {
                             .joined(separator: " "))
         }
         lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
+        // RATE LEDGER v1 (rate-ladder redesign step S0 — measurement
+        // only; spec output/RateLadder.hs RL5): H₀ = order-0 entropy
+        // of the emitted index cube, K̂ = bits/px the encoder's own
+        // LZW spends, M = (8 − K̂)/8 — Rigau's operational Birkhoff
+        // measure. Every later stratum step is judged against this
+        // line's before/after. Comment bytes only.
+        let pxCount = indexFrames.reduce(0) { $0 + $1.count }
+        if pxCount > 0 {
+            var hist = [Int](repeating: 0, count: 256)
+            for f in indexFrames { for i in f { hist[Int(i)] += 1 } }
+            let n = Double(pxCount)
+            let h0 = hist.reduce(0.0) { acc, c in
+                c > 0 ? acc - (Double(c) / n) * log2(Double(c) / n) : acc
+            }
+            let lzwBytes = GIFEncoder.lzwCost(indexFrames: indexFrames)
+            let kHat = 8 * Double(lzwBytes) / n
+            lines.append(String(
+                format: "RATE LEDGER v1 px=%d lzw=%d H0=%.4f K=%.4f M=%.4f",
+                pxCount, lzwBytes, h0, kHat, (8 - kHat) / 8))
+        }
         // PHASE F (step 2, measurement only — docs/phase-palette-design.md):
         // the three reads' distortions, the Haar band energies with the
         // PP1 identity witness, and the chaos entropy bill Σ log W.
@@ -215,18 +177,22 @@ enum GIFMachine {
     }
 
     /// Inverse of the STATS section: parse the per-frame generating
-    /// state and re-solve the tables. v2 lines carry 13 numbers
-    /// (9 stats + deltaL alphaC betaC cap); v1 lines carry 9 and
-    /// rebuild through the prior path — the library's older GIFs
-    /// stay self-reproducing. The provenance law (tested): the
-    /// rebuilt tables byte-equal the LCTs embedded in the same GIF.
+    /// state and re-solve the tables. v3 lines carry 13 numbers and
+    /// rebuild through the PAIR TREE; v2 lines carry the same 13 and
+    /// rebuild through the ring solver; v1 lines carry 9 and rebuild
+    /// through the ring prior path — the library's older GIFs stay
+    /// self-reproducing under THEIR generation law. The provenance
+    /// law (tested): the rebuilt tables byte-equal the LCTs embedded
+    /// in the same GIF.
     static func rebuildTables(fromTrace trace: String) -> [Data]? {
         let lines = trace.split(separator: "\n", omittingEmptySubsequences: false)
         guard let header = lines.firstIndex(where: {
-            $0.hasPrefix("DYAD STATS v1") || $0.hasPrefix("DYAD STATS v2") })
+            $0.hasPrefix("DYAD STATS v1") || $0.hasPrefix("DYAD STATS v2")
+                || $0.hasPrefix("DYAD STATS v3") })
         else { return nil }
+        let isV3 = lines[header].hasPrefix("DYAD STATS v3")
         let isV2 = lines[header].hasPrefix("DYAD STATS v2")
-        let want = isV2 ? 13 : 9
+        let want = (isV2 || isV3) ? 13 : 9
         var out: [Data] = []
         for line in lines[(header + 1)...] {
             let parts = line.split(separator: " ")
@@ -239,10 +205,11 @@ enum GIFMachine {
             let stats = DyadPalette.makeStats(
                 centroid: OKLabColor(l: v[0], a: v[1], b: v[2]), covariance: cov)
             let table: [(UInt8, UInt8, UInt8)]
-            if isV2 {
+            if isV3 || isV2 {
                 let gm = DyadPalette.GroundMoments(
                     deltaL: v[9], alphaC: v[10], betaC: v[11], capped: v[12] != 0)
-                table = DyadPalette.table(stats: stats, moments: gm)
+                table = isV3 ? PairTree.table(stats: stats, moments: gm)
+                             : DyadPalette.table(stats: stats, moments: gm)
             } else {
                 table = DyadPalette.table(stats: stats)
             }
@@ -251,55 +218,28 @@ enum GIFMachine {
         return out.isEmpty ? nil : out
     }
 
-    static func makeGIF(
-        frames: [QuantizedFrame],
-        measure: BirkhoffMeasure?,
-        method: ExportMethod
-    ) -> Data? {
-        makeGIF(frames: frames, measure: measure,
-                settings: ExportSettings(method: method, bleed: true, mirror: false))
-    }
-
     /// The machine. Every capture export in the app goes through here.
+    /// DYAD or nothing: a capture that cannot run the per-frame-
+    /// palette law returns nil, surfaced as encodeFailedMessage —
+    /// never a silent global-table downgrade.
     static func makeGIF(
         frames: [QuantizedFrame],
         measure: BirkhoffMeasure?,
         settings: ExportSettings,
         onFrameTable: ((Int, Data) -> Void)? = nil
     ) -> Data? {
-        switch resolve(settings.method, frames: frames) {
-        case .dyad:
-            // process() can still decline at runtime (defensive); the
-            // chain continues exactly as eligibility would have.
-            if let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed,
-                                               chaosLoop: CameraConfig.phaseChaosLoop,
-                                               onFrameTable: onFrameTable),
-               let data = GIFEncoder.encode(
-                   indexFrames: settings.mirror
-                       ? dyad.indexFrames.map { mirrored($0, side: QuantizedFrame.size) }
-                       : dyad.indexFrames,
-                   side: QuantizedFrame.size,
-                   measure: measure, upscale: CameraConfig.exportUpscale,
-                   perFrameTables: dyad.tables,
-                   trace: dyadTrace(dyad, settings: settings, frames: frames)) {
-                return data
-            }
-            var fallback = settings
-            fallback.method = .refined
-            return makeGIF(frames: frames, measure: measure, settings: fallback)
-
-        case .refined:
-            let input = settings.mirror ? mirrorFrames(frames) : frames
-            let refined = CentroidRefiner.refineAuto(frames: input)
-            return GIFEncoder.encode(
-                frames: input, measure: measure,
-                upscale: CameraConfig.exportUpscale, refined: refined)
-
-        case .tesseract:
-            let input = settings.mirror ? mirrorFrames(frames) : frames
-            return GIFEncoder.encode(
-                frames: input, measure: measure,
-                upscale: CameraConfig.exportUpscale)
-        }
+        guard eligible(frames: frames),
+              let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed,
+                                              chaosLoop: CameraConfig.phaseChaosLoop,
+                                              onFrameTable: onFrameTable)
+        else { return nil }
+        return GIFEncoder.encode(
+            indexFrames: settings.mirror
+                ? dyad.indexFrames.map { mirrored($0, side: QuantizedFrame.size) }
+                : dyad.indexFrames,
+            side: QuantizedFrame.size,
+            measure: measure, upscale: CameraConfig.exportUpscale,
+            perFrameTables: dyad.tables,
+            trace: dyadTrace(dyad, settings: settings, frames: frames))
     }
 }

@@ -123,26 +123,24 @@ enum GridLayout {
     ]
 
     // ── Settings scene (fullScreenCover — its own canvas) ──
-    // CAMERA row (LIVE/FACE) + LOOK radio (the 64³ machine's methods).
+    // CAMERA row (LIVE/FACE) + the two toggles. The LOOK radio is
+    // deleted (2026-08-12 decree: DYAD per-frame palettes are the
+    // only export law); the rows below moved up into its block,
+    // keeping the 17-row rhythm.
     static let setTitle = GridRegion("setTitle", col: 18, row: 20, w: 64, h: 10)
     static let setModeLabel = GridRegion("setModeLabel", col: 18, row: 44, w: 64, h: 6)
     static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 28, h: 13, interactive: true)
     static let setModeFace = GridRegion("setModeFace", col: 54, row: 54, w: 28, h: 13, interactive: true)
-    static let setLookLabel = GridRegion("setLookLabel", col: 18, row: 78, w: 64, h: 6)
-    static let lookDyad = GridRegion("lookDyad", col: 18, row: 90, w: 64, h: 13, interactive: true)
-    static let lookRefine = GridRegion("lookRefine", col: 18, row: 107, w: 64, h: 13, interactive: true)
-    static let lookTess = GridRegion("lookTess", col: 18, row: 124, w: 64, h: 13, interactive: true)
     // The two useful-and-simple toggles: DYAD background bleed,
     // export mirroring. Both persisted (ExportSettings).
-    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 144, w: 64, h: 13, interactive: true)
-    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 161, w: 64, h: 13, interactive: true)
+    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 78, w: 64, h: 13, interactive: true)
+    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 95, w: 64, h: 13, interactive: true)
     /// The GIF archive entry (2026-08-10): review old GIFs + palettes.
-    static let setLibrary = GridRegion("setLibrary", col: 18, row: 178, w: 64, h: 13, interactive: true)
+    static let setLibrary = GridRegion("setLibrary", col: 18, row: 112, w: 64, h: 13, interactive: true)
     static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: 13, interactive: true)
 
     static let settingsScene: [GridRegion] = [
         setTitle, setModeLabel, setModeLive, setModeFace,
-        setLookLabel, lookDyad, lookRefine, lookTess,
         toggleBleed, toggleMirror, setLibrary, setClose,
     ]
 

@@ -303,24 +303,19 @@ final class AxiomTests: XCTestCase {
     // GIF ENCODER — PALETTE ROUNDTRIP
     // ════════════════════════════════════════════════
 
-    /// Verify that GIF encoding preserves the 256-entry tesseract palette.
-    /// The Global Color Table (bytes 13-780) must match TesseractPalette.gifColorTable.
+    /// Verify that GIF encoding carries the per-frame palette bytes
+    /// verbatim: GCT = frame 0's table, valid GIF89a envelope.
+    /// (The global-table lattice stream is deleted — 2026-08-12
+    /// decree; DyadGIFContractTests locks the full LCT walk.)
     func testGIF_palettePreserved() {
-        // Create a frame with known indices (0,1,2,...,255 repeated)
         let n = CameraConfig.pixelCount
         let indices: [UInt8] = (0..<n).map { UInt8($0 % 256) }
-        let frame = QuantizedFrame(
-            index: 0,
-            paletteIndices: indices,
-            rawRGB: nil,
-            depths: [Float](repeating: 0.5, count: n),
-            measure: BirkhoffMeasure(paletteIndices: indices),
-            subjectAnalysis: nil,
-            anchorTrace: nil,
-            timestamp: 0
-        )
+        let table = DyadPalette.gifColorTable(
+            DyadPalette.table(stats: DyadPalette.analyze([])))
 
-        let gifData = GIFEncoder.encode(frames: [frame])
+        let gifData = GIFEncoder.encode(
+            indexFrames: [indices], side: CameraConfig.outputSize,
+            perFrameTables: [table])
         XCTAssertNotNil(gifData, "GIF encoding should succeed")
 
         guard let data = gifData else { return }
@@ -337,16 +332,11 @@ final class AxiomTests: XCTestCase {
         XCTAssertEqual(data[9], 0)    // height high byte
         XCTAssertEqual(data[10], 0xF7, "Packed byte should indicate 256-entry GCT")
 
-        // Verify Global Color Table matches tesseract palette
+        // Verify the GCT is frame 0's table, byte-for-byte
         let gctStart = 13
         let gctEnd = gctStart + 768  // 256 × 3
-        let gctData = data[gctStart..<gctEnd]
-        XCTAssertEqual(Data(gctData), TesseractPalette.gifColorTable,
-            "GCT must match TesseractPalette.gifColorTable byte-for-byte")
-
-        // Verify palette has 256 entries (768 bytes)
-        XCTAssertEqual(TesseractPalette.gifColorTable.count, 768,
-            "Palette should be exactly 768 bytes (256 × 3)")
+        XCTAssertEqual(Data(data[gctStart..<gctEnd]), table,
+            "GCT must be frame 0's per-frame table byte-for-byte")
 
         // Verify trailer
         XCTAssertEqual(data.last, 0x3B, "GIF should end with trailer 0x3B")
@@ -401,24 +391,6 @@ final class AxiomTests: XCTestCase {
             XCTAssertTrue(canonical.contains(gct[i]),
                 "GCT byte \(i) = \(gct[i]) not in {32,96,159,223}")
         }
-    }
-
-    func testGIF_GCTinEncodedFile() {
-        let n = CameraConfig.pixelCount
-        let indices: [UInt8] = (0..<n).map { UInt8($0 % 256) }
-        let frame = QuantizedFrame(
-            index: 0, paletteIndices: indices, rawRGB: nil,
-            depths: [Float](repeating: 0.5, count: n),
-            measure: BirkhoffMeasure(paletteIndices: indices),
-            subjectAnalysis: nil, anchorTrace: nil, timestamp: 0
-        )
-        guard let data = GIFEncoder.encode(frames: [frame]) else {
-            XCTFail("GIF encoding failed"); return
-        }
-        // Bytes 13-780 = GCT
-        let gctSlice = Data(data[13..<781])
-        XCTAssertEqual(gctSlice, TesseractPalette.gifColorTable,
-            "GCT in encoded GIF must match TesseractPalette.gifColorTable")
     }
 
     // ════════════════════════════════════════════════
@@ -609,8 +581,11 @@ final class AxiomTests: XCTestCase {
             ))
         }
 
-        // Encode to GIF
-        let gifData = GIFEncoder.encode(frames: frames)
+        // Encode through the machine (DYAD per-frame palettes — the
+        // only export law; the frames carry rawRGB so it is eligible)
+        let gifData = GIFMachine.makeGIF(
+            frames: frames, measure: nil,
+            settings: ExportSettings(bleed: true, mirror: false))
         XCTAssertNotNil(gifData, "\(totalFrames)-frame GIF encoding should succeed")
 
         guard let data = gifData else { return }
@@ -619,9 +594,6 @@ final class AxiomTests: XCTestCase {
         XCTAssertEqual(data[0], 0x47, "GIF magic byte 0")  // 'G'
         XCTAssertEqual(data[10], 0xF7, "Packed byte: 256-entry GCT")
         XCTAssertEqual(data.last, 0x3B, "Trailer byte")
-
-        // GCT matches
-        XCTAssertEqual(Data(data[13..<781]), TesseractPalette.gifColorTable)
 
         // All frames have anchors
         for frame in frames {

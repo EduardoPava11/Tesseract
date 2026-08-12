@@ -1,16 +1,20 @@
 // GIFEncoder.swift
 // Tesseract
 //
-// GIF89a binary encoder with the 4^4 = 256 tesseract palette.
-// Writes raw palette indices via LZW — NO CGImageDestination,
-// NO re-quantization. The 256-entry Global Color Table is
-// TesseractPalette.gifColorTable, written byte-for-byte.
+// GIF89a binary encoder for DYAD-256 per-frame palettes — the ONLY
+// table scheme this app emits (Daniel's decree, 2026-08-12: every
+// export carries one 768-byte Local Color Table per frame; the
+// global-table lattice paths are deleted). Writes raw palette
+// indices via LZW — NO CGImageDestination, NO re-quantization.
+// Frame 0's table doubles as the GCT so naive decoders still
+// resolve frame 0.
 //
 // LZW encoder adapted from ROTAS (production-tested).
 
 import Foundation
 
-/// Encodes quantized frames into an animated GIF preserving the tesseract palette.
+/// Encodes quantized index frames into an animated GIF with one
+/// Local Color Table per frame.
 struct GIFEncoder {
 
     /// Frame delay for 20fps = 0.05s = 5 centiseconds
@@ -18,49 +22,21 @@ struct GIFEncoder {
 
     // MARK: - Encode
 
-    /// Encode quantized frames → GIF89a Data with preserved 4^4 palette.
+    /// Encode index frames → GIF89a Data, one 768-byte Local Color
+    /// Table per frame (`perFrameTables`, REQUIRED — the per-frame-
+    /// palette decree). The first table is also written as the GCT.
     ///
     /// `upscale` replicates each palette index into a factor×factor block at
     /// emit time (fat voxels, INDEX domain — never colors, no interpolation).
-    /// Default 1 preserves the existing byte-exact 64×64 output.
-    static func encode(frames: [QuantizedFrame], measure: BirkhoffMeasure? = nil, upscale: Int = 1,
-                       refined: RefinedPalette? = nil, perFrameTables: [Data]? = nil,
-                       trace: String? = nil) -> Data? {
-        encode(
-            indexFrames: frames.map(\.paletteIndices),
-            side: QuantizedFrame.size,    // 64
-            measure: measure,
-            upscale: upscale,
-            refined: refined,
-            perFrameTables: perFrameTables,
-            trace: trace
-        )
-    }
-
-    /// Side-parameterized variant for the DNG rung ladder (S ∈ {64, 256, 1024}):
-    /// same GIF89a stream, same tesseract GCT, arbitrary square side.
-    /// The QuantizedFrame overload above delegates here — one encoder.
-    ///
-    /// `refined` (pass 2, CentroidRefiner) substitutes a per-capture
-    /// color table whose entries are cell-clamped — indices unchanged,
-    /// reconstruction refined. nil = the canonical tesseract table.
-    ///
-    /// `perFrameTables` (DYAD-256 mode) emits one 768-byte Local Color
-    /// Table per frame; the first table doubles as the GCT so naive
-    /// decoders still resolve frame 0. nil = single global table only.
     ///
     /// `trace` (provenance) is written verbatim as one more comment
-    /// extension after the measure/refined comments. nil adds no bytes:
-    /// every existing stream is unchanged.
+    /// extension after the measure comment. nil adds no bytes.
     static func encode(indexFrames: [[UInt8]], side: Int, measure: BirkhoffMeasure? = nil, upscale: Int = 1,
-                       refined: RefinedPalette? = nil, perFrameTables: [Data]? = nil,
-                       trace: String? = nil) -> Data? {
+                       perFrameTables: [Data], trace: String? = nil) -> Data? {
         guard !indexFrames.isEmpty, side >= 1, upscale >= 1,
               indexFrames.allSatisfy({ $0.count == side * side }) else { return nil }
-        if let tables = perFrameTables {
-            guard tables.count == indexFrames.count,
-                  tables.allSatisfy({ $0.count == 768 }) else { return nil }
-        }
+        guard perFrameTables.count == indexFrames.count,
+              perFrameTables.allSatisfy({ $0.count == 768 }) else { return nil }
 
         let frames = indexFrames
         let width = side * upscale
@@ -87,10 +63,10 @@ struct GIFEncoder {
         ])
 
         // ── 3. Global Color Table (256 × 3 = 768 bytes) ──
-        //   Canonical: index i → TesseractCoord(index: i).sRGB8.
-        //   Refined (pass 2): per-capture centroids, every entry inside
-        //   its lattice cell (WL1) so re-quantization is unchanged.
-        data.append(perFrameTables?.first ?? refined?.gifColorTable ?? TesseractPalette.gifColorTable)
+        //   Frame 0's DYAD table — the naive-decoder fallback. Every
+        //   frame carries its own LCT below; this is never the only
+        //   table in the stream.
+        data.append(perFrameTables[0])
 
         // ── 4. NETSCAPE2.0 Loop Extension (infinite) ──
         data.append(contentsOf: [
@@ -109,14 +85,7 @@ struct GIFEncoder {
             writeCommentExtension(comment, to: &data)
         }
 
-        // ── 5b. Comment Extension (pass-2 push/pull trace provenance) ──
-        //   Derived from the palette itself — table and trace cannot
-        //   disagree, and the schedule rides along (RefinedPalette).
-        if let refined {
-            writeCommentExtension(refined.traceComment, to: &data)
-        }
-
-        // ── 5c. Comment Extension (caller-supplied trace) ──
+        // ── 5b. Comment Extension (caller-supplied trace) ──
         //   e.g. the DYAD HARMONY line (Ou & Luo pair score). Written
         //   verbatim; nil = absent, byte streams unchanged.
         if let trace {
@@ -135,21 +104,19 @@ struct GIFEncoder {
                 0x00                                         // block terminator
             ])
 
-            // Image Descriptor (10 bytes). Packed byte 0x87 = LCT present,
-            // 2^(7+1) = 256 entries; 0x00 = no LCT (global table only).
+            // Image Descriptor (10 bytes). Packed byte 0x87 = LCT
+            // present, 2^(7+1) = 256 entries — every frame, always.
             data.append(contentsOf: [
                 0x2C,                                        // image separator
                 0x00, 0x00,                                  // left = 0
                 0x00, 0x00,                                  // top = 0
                 UInt8(width & 0xFF), UInt8((width >> 8) & 0xFF),
                 UInt8(height & 0xFF), UInt8((height >> 8) & 0xFF),
-                perFrameTables == nil ? 0x00 : 0x87
+                0x87
             ])
 
             // Local Color Table (768 bytes) — this frame's DYAD table.
-            if let tables = perFrameTables {
-                data.append(tables[frameIndex])
-            }
+            data.append(perFrameTables[frameIndex])
 
             // LZW-compressed palette indices (minCodeSize = 8 for 256 colors)
             let indices = upscale == 1
@@ -197,6 +164,16 @@ struct GIFEncoder {
             }
         }
         return out
+    }
+
+    // MARK: - Rate ledger support
+
+    /// Wire cost of an index cube under the encoder's OWN LZW — the
+    /// RATE LEDGER's K̂ numerator (spec output/RateLadder.hs RL5,
+    /// docs/rate-ladder-redesign.md step S0). Same code path as the
+    /// emitted stream, so the meter measures the actual coder.
+    static func lzwCost(indexFrames: [[UInt8]]) -> Int {
+        indexFrames.reduce(0) { $0 + lzwEncode($1, minCodeSize: 8).count }
     }
 
     // MARK: - Comment Extension

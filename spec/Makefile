@@ -24,7 +24,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/DyadPalette.hs \
                quantization/PairPermutations.hs \
                quantization/SpectralPalette.hs \
-               quantization/PhasePalette.hs
+               quantization/PhasePalette.hs \
+               quantization/PairTree.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -68,7 +69,8 @@ HARMONY = harmony/SetListDissonance.hs
 OUTPUT = output/FrameGeometry.hs \
          output/BreakInvariants.hs \
          output/ExportMethods.hs \
-         output/TriScaleLadder.hs
+         output/TriScaleLadder.hs \
+         output/RateLadder.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
 OUTPUT_EXTRA = output/RealTesseract.hs \

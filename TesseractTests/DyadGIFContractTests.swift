@@ -140,22 +140,6 @@ final class DyadGIFContractTests: XCTestCase {
               "64 local color tables, involution law verified in all, \(gif.count) bytes")
     }
 
-    func testLatticeModeIsUntouched() throws {
-        // No perFrameTables → the original single-GCT stream, no LCT flag.
-        let frames = (0..<4).map { Self.makeIndexFrame($0) }
-        let gif = try XCTUnwrap(GIFEncoder.encode(indexFrames: frames, side: Self.side))
-        let b = [UInt8](gif)
-        XCTAssertEqual(Data(b[13..<(13 + 768)]), TesseractPalette.gifColorTable)
-        // First image descriptor follows the NETSCAPE block; find it.
-        var pos = 13 + 768
-        while b[pos] != 0x2C { // skip extensions
-            pos += 2
-            while b[pos] != 0x00 { pos += 1 + Int(b[pos]) }
-            pos += 1
-        }
-        XCTAssertEqual(b[pos + 9], 0x00, "no local color table in lattice mode")
-    }
-
     func testMalformedTablesAreRejected() {
         let frames = (0..<4).map { Self.makeIndexFrame($0) }
         // Wrong table count.

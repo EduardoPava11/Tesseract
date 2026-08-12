@@ -4,23 +4,21 @@
 -- ExportMethods: The 64³ GIF Machine
 --
 -- The app is one machine: every export is 64 frames of 64×64
--- palette indices against a 256-entry table scheme. What varies is
--- the METHOD — how indices and tables are produced:
+-- palette indices, and EVERY frame carries its own 256-entry Local
+-- Color Table. DYAD-256 per-frame palettes are the ONLY export law
+-- (Daniel's decree, 2026-08-12, non-negotiable): the tesseract and
+-- refined global-table methods, their fallback chain, and the
+-- persisted method setting are DELETED. A capture that cannot run
+-- DYAD exports NOTHING — the refusal is honest (nil surfaced as an
+-- error), never a silent downgrade to a global table.
 --
---   Tesseract  canonical 4⁴ lattice, one global table
---   Refined    lattice indices, pass-2 cell-clamped global table
---   Dyad       DYAD-256 paired per-frame local tables
---
--- Methods are selected by a SETTING and resolved by ELIGIBILITY:
--- a capture that cannot support a method falls down a fixed chain
--- that always terminates at Tesseract, which accepts anything.
---
--- PLACEMENT LAW: a method's law-bearing stages (tables, involution,
--- role masks) are exact; its pixel-assignment stage may run on an
--- approximate engine (ANE, fp16) that perturbs distances by at most
--- δ. Bounded perturbation can only flip assignments whose winning
--- gap is ≤ 2δ — near-ties, where either index is lawful — and can
--- never touch the role law, because the role select is exact.
+-- PLACEMENT LAW (unchanged): the law-bearing stages (tables,
+-- involution, role masks) are exact; the pixel-assignment stage may
+-- run on an approximate engine (ANE, fp16) that perturbs distances
+-- by at most δ. Bounded perturbation can only flip assignments
+-- whose winning gap is ≤ 2δ — near-ties, where either index is
+-- lawful — and can never touch the role law, because the role
+-- select is exact.
 -- ════════════════════════════════════════════════════════════════
 
 module ExportMethods where
@@ -38,20 +36,13 @@ machineEntries = 256
 machinePixels  = machineSide * machineSide
 
 -- ════════════════════════════════════════════════════════════════
--- § 2. METHODS, CAPTURES, ELIGIBILITY
+-- § 2. THE ONE METHOD, CAPTURES, HONEST REFUSAL
 -- ════════════════════════════════════════════════════════════════
 
-data Method = Tesseract | Refined | Dyad
+data Method = Dyad
   deriving (Eq, Show, Enum, Bounded)
 
-methods :: [Method]
-methods = [minBound .. maxBound]
-
--- | Chain position: higher = richer method.
-rank :: Method -> Int
-rank = fromEnum
-
--- | What a capture can offer its method.
+-- | What a capture can offer the machine.
 data Capture = Capture
   { hasRawRGB :: Bool     -- per-pixel color survives to export
   , hasDepth  :: Bool     -- face mask in the depth slot
@@ -62,21 +53,14 @@ data Capture = Capture
 lawfulShape :: Capture -> Bool
 lawfulShape c = nFrames c == machineFrames && side c == machineSide
 
--- | Dyad needs pixels and a mask; the lattice methods accept anything.
-eligible :: Method -> Capture -> Bool
-eligible Dyad c = hasRawRGB c && hasDepth c
-eligible _    _ = True
+-- | Dyad needs pixels and a mask.
+eligible :: Capture -> Bool
+eligible c = hasRawRGB c && hasDepth c
 
-fallback :: Method -> Maybe Method
-fallback Dyad      = Just Refined
-fallback Refined   = Just Tesseract
-fallback Tesseract = Nothing
-
--- | Requested method → method actually run.
-resolve :: Method -> Capture -> Method
-resolve m c
-  | eligible m c = m
-  | otherwise    = maybe Tesseract (`resolve` c) (fallback m)
+-- | Requested export → what actually happens. No fallback chain:
+--   an ineligible capture exports Nothing, honestly.
+export :: Capture -> Maybe Method
+export c = if eligible c then Just Dyad else Nothing
 
 allCaptures :: [Capture]
 allCaptures =
@@ -85,46 +69,21 @@ allCaptures =
   , n <- [0, 1, machineFrames], s <- [1, machineSide] ]
 
 -- ════════════════════════════════════════════════════════════════
--- § 3. THE SETTING (persisted string, total parse)
+-- § 3. THE TABLE SCHEME (what the GIF stream carries — always)
 -- ════════════════════════════════════════════════════════════════
 
-defaultMethod :: Method
-defaultMethod = Dyad
+-- | GIF89a image-descriptor packed byte: LCT present, 2^(7+1) = 256
+--   entries — on EVERY frame of EVERY export.
+packedByte :: Int
+packedByte = 0x87
 
-render :: Method -> String
-render Tesseract = "tesseract"
-render Refined   = "refined"
-render Dyad      = "dyad"
-
-parse :: String -> Maybe Method
-parse s = lookup s [(render m, m) | m <- methods]
-
-parseOrDefault :: String -> Method
-parseOrDefault = maybe defaultMethod id . parse
+-- | Total palette bytes carried by one export: one 768-byte Local
+--   Color Table per frame (frame 0's table doubles as the GCT).
+tableBytes :: Int
+tableBytes = machineFrames * 3 * machineEntries
 
 -- ════════════════════════════════════════════════════════════════
--- § 4. TABLE SCHEMES (what the GIF stream carries)
--- ════════════════════════════════════════════════════════════════
-
-data TableScheme = GlobalTable | PerFrameTables
-  deriving (Eq, Show)
-
-scheme :: Method -> TableScheme
-scheme Dyad = PerFrameTables
-scheme _    = GlobalTable
-
--- | GIF89a image-descriptor packed byte under each scheme.
-packedByte :: TableScheme -> Int
-packedByte GlobalTable    = 0x00
-packedByte PerFrameTables = 0x87   -- LCT present, 2^(7+1) = 256 entries
-
--- | Total palette bytes carried by one export.
-tableBytes :: TableScheme -> Int
-tableBytes GlobalTable    = 3 * machineEntries
-tableBytes PerFrameTables = machineFrames * 3 * machineEntries
-
--- ════════════════════════════════════════════════════════════════
--- § 5. PLACEMENT MODEL — exact laws, approximate assignment
+-- § 4. PLACEMENT MODEL — exact laws, approximate assignment
 --
 -- The engine model: assignment sees distances d_j + e_j with
 -- |e_j| ≤ δ (fp16 input rounding ≈ 1e-3 in OKLab units). The role
@@ -176,47 +135,38 @@ trials =
   | t <- [1 .. 200] ]
 
 -- ════════════════════════════════════════════════════════════════
--- § 6. AXIOMS
+-- § 5. AXIOMS
 -- ════════════════════════════════════════════════════════════════
 
--- (XM1) The machine: 64 × 64 × 64, 256 entries; scheme bytes fixed.
+-- (XM1) The machine: 64 × 64 × 64, 256 entries; the wire scheme is
+--       per-frame LCTs, 49152 palette bytes per export, packed
+--       byte 0x87 — there is no global-table row to describe.
 axiom_XM1 :: Bool
 axiom_XM1 =
      machineSide == 64 && machineFrames == 64 && machinePixels == 4096
   && machineEntries == 256
-  && tableBytes GlobalTable == 768
-  && tableBytes PerFrameTables == 49152
-  && packedByte GlobalTable == 0x00 && packedByte PerFrameTables == 0x87
+  && tableBytes == 49152
+  && packedByte == 0x87
 
--- (XM2) Resolution: total, lawful, terminating — the resolved
---       method is always eligible, and Tesseract resolves to itself
---       on every capture.
+-- (XM2) Honest refusal: export produces Dyad exactly on eligible
+--       captures and Nothing otherwise — no capture is ever served
+--       by a method it cannot lawfully run, and no fallback exists.
 axiom_XM2 :: Bool
 axiom_XM2 =
-     and [ eligible (resolve m c) c | m <- methods, c <- allCaptures ]
-  && and [ resolve Tesseract c == Tesseract | c <- allCaptures ]
+     and [ (export c == Just Dyad) == eligible c | c <- allCaptures ]
+  && and [ (export c == Nothing) == not (eligible c) | c <- allCaptures ]
 
 -- (XM3) Monotone eligibility: a capture that gains capabilities
---       never resolves DOWN the chain.
+--       never loses its export.
 axiom_XM3 :: Bool
 axiom_XM3 =
-  and [ rank (resolve m (richer c)) >= rank (resolve m c)
-      | m <- methods, c <- allCaptures ]
+  and [ maybe True (const (export (richer c) == Just Dyad)) (export c)
+      | c <- allCaptures ]
   where richer c = c { hasRawRGB = True, hasDepth = True }
 
--- (XM4) The setting round-trips: parse ∘ render = Just, renders are
---       distinct, garbage parses to Nothing and defaults to Dyad.
+-- (XM4) One method: Dyad is the whole method space.
 axiom_XM4 :: Bool
-axiom_XM4 =
-     all (\m -> parse (render m) == Just m) methods
-  && length (nub (map render methods)) == length methods
-  && parse "garbage" == Nothing
-  && parseOrDefault "garbage" == defaultMethod
-
--- (XM5) Scheme law: only Dyad carries per-frame tables.
-axiom_XM5 :: Bool
-axiom_XM5 = scheme Dyad == PerFrameTables
-         && all (\m -> m == Dyad || scheme m == GlobalTable) methods
+axiom_XM4 = [minBound .. maxBound] == [Dyad]
 
 -- (XP1) Role law under ANY engine: fully pulled background is 255
 --       exactly; bleed-band background stays inside the complement
@@ -238,50 +188,40 @@ axiom_XP2 = all ok trials
       && (agree || gap ds <= 2 * delta)      -- disagree ⇒ near-tie
 
 -- ════════════════════════════════════════════════════════════════
--- § 7. MAIN
+-- § 6. MAIN
 -- ════════════════════════════════════════════════════════════════
 
 main :: IO ()
 main = do
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn " ExportMethods: the 64³ GIF machine"
-  putStrLn " one shape, many methods, one setting, exact laws"
+  putStrLn " one shape, ONE method, per-frame palettes, exact laws"
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
-  putStrLn "── The method table ──"
+  putStrLn "  method │ needs        │ tables"
+  putStrLn "  ───────┼──────────────┼─────────────────"
+  putStrLn "  Dyad   │ rgb + depth  │ 64 × 768 B local (0x87)"
   putStrLn ""
-  putStrLn "  method     │ setting     │ needs        │ tables"
-  putStrLn "  ───────────┼─────────────┼──────────────┼─────────────────"
-  mapM_ (\m -> putStrLn $
-          "  " ++ padR 10 (show m)
-       ++ " │ " ++ padR 11 (render m)
-       ++ " │ " ++ padR 12 (needs m)
-       ++ " │ " ++ schemeDesc (scheme m))
-        methods
-  putStrLn ""
-  putStrLn $ "  default = " ++ render defaultMethod
-          ++ ";  fallback chain: dyad → refined → tesseract"
+  putStrLn "  no fallback chain: ineligible capture → Nothing (honest)"
   putStrLn ""
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn " AXIOMS"
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
-  check "XM1 machine: 64×64×64, 256 entries, scheme bytes fixed"    [axiom_XM1]
-  check "XM2 resolve: total, resolved method always eligible"       [axiom_XM2]
-  check "XM3 monotone: gaining capabilities never demotes"          [axiom_XM3]
-  check "XM4 setting: round-trip, distinct, garbage → default"      [axiom_XM4]
-  check "XP1 roles on any engine: bg in σ-half, far bg = 255"       [axiom_XP1]
-  check "XP2 near-tie law: gap > 2δ forces engine agreement"        [axiom_XP2]
-  check "XM5 scheme: only Dyad carries per-frame tables"            [axiom_XM5]
+  check "XM1 machine: 64×64×64, 256 entries, per-frame LCTs 0x87"    [axiom_XM1]
+  check "XM2 honest refusal: Dyad iff eligible, else Nothing"        [axiom_XM2]
+  check "XM3 monotone: gaining capabilities never loses the export"  [axiom_XM3]
+  check "XM4 one method: Dyad is the whole method space"             [axiom_XM4]
+  check "XP1 roles on any engine: bg in σ-half, far bg = 255"        [axiom_XP1]
+  check "XP2 near-tie law: gap > 2δ forces engine agreement"         [axiom_XP2]
   putStrLn ""
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn " THE PRINCIPLE"
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
-  putStrLn "  The app is a 64³ GIF machine. Methods differ only in"
-  putStrLn "  how indices and tables are made; the shape, the stream,"
-  putStrLn "  and the setting are one. Eligibility resolves every"
-  putStrLn "  request to a method that can run, ending at Tesseract."
+  putStrLn "  The app is a 64³ GIF machine with ONE law: every frame"
+  putStrLn "  carries its own palette. A capture that cannot support"
+  putStrLn "  the law is refused honestly — never downgraded."
   putStrLn ""
   putStrLn "  Placement is free where the law permits: tables and"
   putStrLn "  role masks are exact on the CPU; pixel assignment may"
@@ -289,16 +229,8 @@ main = do
   putStrLn "  perturbation can only flip near-ties — and near-ties"
   putStrLn "  are lawful either way."
   putStrLn "══════════════════════════════════════════════════════════"
-  where
-    needs Dyad = "rgb + depth"
-    needs _    = "indices"
-    schemeDesc GlobalTable    = "1 × 768 B global"
-    schemeDesc PerFrameTables = "64 × 768 B local"
 
 check :: String -> [Bool] -> IO ()
 check name results =
   let mark = if and results then "✓" else "✗"
   in putStrLn $ "  " ++ mark ++ " " ++ name
-
-padR :: Int -> String -> String
-padR n s = s ++ replicate (max 0 (n - length s)) ' '

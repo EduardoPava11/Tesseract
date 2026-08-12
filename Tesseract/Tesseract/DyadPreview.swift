@@ -36,6 +36,10 @@ final class DyadPreview {
     /// Everything the Metal kernel needs for one 20 Hz assignment.
     struct MetalState {
         var primaries: [SIMD4<Float>]   // 128 OKLab primaries (xyz)
+        /// ★PAIR TREE P2: the 16 depth-4 node means (xyz) with the
+        /// node's canonical FIGURE leaf index in w — the σ side's
+        /// 32-level targets. Empty when the tree is off.
+        var nodes: [SIMD4<Float>]
         var centroid: SIMD3<Float>      // the γ-staging centroid c_F
         var sStar: Float                // mixture crossover
         var tau: Float                  // mixture temperature
@@ -53,6 +57,10 @@ final class DyadPreview {
     private var smoothedBg: (meanL: Double, meanLnC: Double, sdLnC: Double)?
     private(set) var table: [(UInt8, UInt8, UInt8)] = []
     private var prims: [OKLabColor] = []
+    // ★PAIR TREE: 32-level node means + canonical figure leaves
+    // (empty when CameraConfig.pairTree is off).
+    private var nodes16: [OKLabColor] = []
+    private var canon16: [Int] = []
 
     // MARK: - The 5 Hz slow state
 
@@ -116,9 +124,6 @@ final class DyadPreview {
         // Ground law (step 3, ruling R2) — preview through the export
         // fit: background moments on the staged labs with σ weights,
         // EMA'd with the same gain; prior until evidence exists.
-        let prims8 = DyadPalette.primaries(stats: warm)
-        let cL = DyadPalette.centroidL(prims8)
-        let primsLab = prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
         if twoPhase {
             let ts = depths.map { fit.pull(Double($0)) }
             let stagedLabs = staged.map { DyadPalette.oklab(fromSRGB8: $0) }
@@ -130,6 +135,13 @@ final class DyadPreview {
                 } ?? rb
             }
         }
+        if CameraConfig.pairTree {
+            refreshTree(warm: warm)
+            return
+        }
+        let prims8 = DyadPalette.primaries(stats: warm)
+        let cL = DyadPalette.centroidL(prims8)
+        let primsLab = prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
         let gm = smoothedBg.map {
             DyadPalette.groundMoments(centroidL: cL, primsLab: primsLab,
                                       background: $0)
@@ -138,38 +150,85 @@ final class DyadPreview {
         prims = primsLab
     }
 
+    /// ★PAIR TREE twin of the export's stage 1c: tree figures, gm
+    /// anchored at the stats centroid, v3 table, 32-level nodes.
+    private func refreshTree(warm: DyadPalette.Stats) {
+        let tree = PairTree.solveFigures(stats: warm)
+        let cL = warm.centroid.l
+        let gm = smoothedBg.map {
+            DyadPalette.groundMoments(centroidL: cL, primsLab: tree.figures,
+                                      background: $0)
+        } ?? DyadPalette.priorMoments(centroidL: cL)
+        table = PairTree.table(figures8: tree.figures8, moments: gm)
+        prims = tree.figures
+        nodes16 = tree.nodes16
+        canon16 = tree.canonical16
+    }
+
     // MARK: - The 20 Hz assignment (CPU reference; GPU twin in Metal)
 
     /// One frame under the unified law, or nil until the first table.
+    /// v7 (2026-08-12): σ side targets the rung-16 block mean of ŷ —
+    /// the chaos blur — matching DyadPipeline.pairDither exactly.
     func assignCPU(rgb: [(Float, Float, Float)], depths: [Float]) -> [UInt8]? {
         guard let mixture, !prims.isEmpty else { return nil }
         let side = Int(Double(rgb.count).squareRoot())
+        // Stage every pixel once, then pool the staged field at the
+        // chaos rung (4×4 — spec §6d) for the σ-side targets.
+        let yhats = (0..<rgb.count).map { p in
+            DyadPipeline.stageAerial(
+                DyadPalette.oklab(fromSRGB8: DyadPipeline.srgb8(from: rgb[p])),
+                s: Double(depths[p]), about: cFStage)
+        }
+        let rung = 4
+        let bSide = side / rung
+        var pooled = [OKLabColor](repeating: OKLabColor(l: 0, a: 0, b: 0),
+                                  count: bSide * bSide)
+        for by in 0..<bSide {
+            for bx in 0..<bSide {
+                var sl = 0.0, sa = 0.0, sb = 0.0
+                for dy in 0..<rung {
+                    for dx in 0..<rung {
+                        let lab = yhats[(by * rung + dy) * side + bx * rung + dx]
+                        sl += lab.l; sa += lab.a; sb += lab.b
+                    }
+                }
+                let n = Double(rung * rung)
+                pooled[by * bSide + bx] = OKLabColor(l: sl / n, a: sa / n, b: sb / n)
+            }
+        }
         var out = [UInt8](repeating: 0, count: rgb.count)
         for p in 0..<rgb.count {
-            let s = Double(depths[p])
-            let t = twoPhase ? mixture.pull(s) : 0
-            let yhat = DyadPipeline.stageAerial(
-                DyadPalette.oklab(fromSRGB8: DyadPipeline.srgb8(from: rgb[p])),
-                s: s, about: cFStage)
-            var best = 0
-            var bestD = Double.infinity
-            for j in 0..<prims.count {
-                let d = DyadPalette.dLab2(prims[j], yhat)
-                if d < bestD { bestD = d; best = j }
-            }
+            let t = twoPhase ? mixture.pull(Double(depths[p])) : 0
             let sigmaSide = DyadPipeline.bayer4[(p / side) % 4][(p % side) % 4] < Float(t)
             if sigmaSide {
-                // ★R4 faithful-hue (2026-08-11): σ side routes through
-                // comp — displayed ≈ ŷ (matches DyadPipeline.pairDither)
-                let target = DyadPalette.comp(yhat)
-                var bestC = 0
-                var bestDC = Double.infinity
-                for j in 0..<prims.count {
-                    let d = DyadPalette.dLab2(prims[j], target)
-                    if d < bestDC { bestDC = d; bestC = j }
+                let target = pooled[((p / side) / rung) * bSide + (p % side) / rung]
+                if !nodes16.isEmpty {
+                    // ★PAIR TREE P2 (prefix law): 32-level targets —
+                    // matches DyadPipeline.pairDither.
+                    var best = 0
+                    var bestD = Double.infinity
+                    for c in 0..<nodes16.count {
+                        let d = DyadPalette.dLab2(nodes16[c], target)
+                        if d < bestD { bestD = d; best = c }
+                    }
+                    out[p] = UInt8(255 - canon16[best])
+                } else {
+                    var best = 0
+                    var bestD = Double.infinity
+                    for j in 0..<prims.count {
+                        let d = DyadPalette.dLab2(prims[j], target)
+                        if d < bestD { bestD = d; best = j }
+                    }
+                    out[p] = UInt8(255 - best)
                 }
-                out[p] = UInt8(255 - bestC)
             } else {
+                var best = 0
+                var bestD = Double.infinity
+                for j in 0..<prims.count {
+                    let d = DyadPalette.dLab2(prims[j], yhats[p])
+                    if d < bestD { bestD = d; best = j }
+                }
                 out[p] = UInt8(best)
             }
         }
@@ -189,6 +248,10 @@ final class DyadPreview {
         return MetalState(
             primaries: prims.map {
                 SIMD4<Float>(Float($0.l), Float($0.a), Float($0.b), 0)
+            },
+            nodes: zip(nodes16, canon16).map { node, leaf in
+                SIMD4<Float>(Float(node.l), Float(node.a), Float(node.b),
+                             Float(leaf))
             },
             centroid: SIMD3<Float>(Float(cFStage.l), Float(cFStage.a), Float(cFStage.b)),
             sStar: Float(mixture.crossover),

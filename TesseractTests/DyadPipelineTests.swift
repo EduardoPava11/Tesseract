@@ -90,13 +90,14 @@ final class DyadPipelineTests: XCTestCase {
     }
 
     func testMaskedBackgroundDoesNotSteerThePalette() throws {
-        // The loud green background is weight-0: the face centroid T[0]
-        // must be warm (a > 0 in OKLab), not dragged green.
+        // The loud green background is weight-0: the FITTED face
+        // centroid must be warm (a > 0 in OKLab), not dragged green.
+        // (Since the pair tree, T[0] is a corner leaf, not the
+        // centroid — the stats carry the centroid directly.)
         let frames = (0..<frameCount).map { makeFrame(index: $0) }
         let out = try XCTUnwrap(DyadPipeline.process(frames: frames))
-        let t = out.tables[0]
-        let centroid = DyadPalette.oklab(fromSRGB8: (t[0], t[1], t[2]))
-        XCTAssertGreaterThan(centroid.a, 0, "face centroid must stay warm")
+        XCTAssertGreaterThan(out.stats[0].centroid.a, 0,
+                             "face centroid must stay warm")
     }
 
     func testHarshBleedBand() throws {

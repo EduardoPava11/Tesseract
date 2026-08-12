@@ -3,13 +3,16 @@
 //
 // DYAD-256 export path: per-frame depth-masked OKLab statistics →
 // EMA warm start → paired 256-entry table per frame → role-law
-// index assignment under THE AERIAL MIRROR LAW (spec §5 v6,
-// ★R4 RULED faithful-hue 2026-08-11): every pixel is γ-staged
-// ŷ = c_F + γ(s)·(y − c_F) with γ(s) = 1/(2−s) — the chroma octave
-// that pays for the temporal octave (σ(s)·γ(s) = σ_base) — then ONE
-// search gives q and the posterior t routes coverage between q and
-// 255−q. Face → primaries, background → mirrored binomial shells
-// at compressed radius; no solid fill, no chroma seam (DY9–DY12).
+// index assignment under THE AERIAL MIRROR LAW (spec §6c/§6d v7 —
+// SAME-HUE GROUND + CHAOS BLUR, Daniel's ruling 2026-08-12): every
+// pixel is γ-staged ŷ = c_F + γ(s)·(y − c_F) with γ(s) = 1/(2−s) —
+// the chroma octave that pays for the temporal octave (σ(s)·γ(s) =
+// σ_base) — then ONE search gives q and the posterior t routes
+// coverage between q and the σ side, whose target is the rung-16
+// BLOCK MEAN of ŷ: the background blurs as it becomes chaos.
+// Face → primaries, background → mirrored binomial shells in the
+// figure's OWN hue (the blue-haze negation is dead — DY14 v7);
+// no solid fill, no chroma seam (DY9–DY16).
 //
 // THE ROLE LAW IS CONSTANT-FREE (Daniel's decree, 2026-08-10; spec
 // temporal/DepthMixture.hs DM1–DM10). No faceThreshold, no bleedWidth,
@@ -20,9 +23,9 @@
 // weights are 1 − t (ruling R1), and a BIC-single-phase capture is
 // all-face (ruling R3).
 //
-// Runs beside the lattice pipeline, never instead of it: process()
-// returns nil when a capture lacks raw RGB, and callers fall back
-// to the canonical PerfectQuantizer/CentroidRefiner path.
+// process() returns nil when a capture lacks raw RGB; GIFMachine
+// surfaces that nil honestly (no export) — there is no global-table
+// fallback path anymore (2026-08-12 decree).
 
 import Foundation
 
@@ -189,6 +192,11 @@ enum DyadPipeline {
         var masks: [[Bool]] = []
         var fars: [[Bool]] = []
         var pulls: [[Float]] = []
+        // ★PAIR TREE (P2): the per-frame 32-level nodes + their
+        // canonical figure leaves — the prefix-law targets the
+        // σ side quantizes against.
+        var nodes16All: [[OKLabColor]] = []
+        var canon16All: [[Int]] = []
         tables.reserveCapacity(frames.count)
 
         var smoothed: DyadPalette.Stats?
@@ -213,17 +221,28 @@ enum DyadPipeline {
                 } ?? rb
             }
 
-            let prims8 = DyadPalette.primaries(stats: warm)
-            let prims = prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
-            let cL = DyadPalette.centroidL(prims8)
+            // ★PAIR TREE (P1): figures = the analytic dyadic tree of
+            // the warm-started stats (closed-form Gaussian splits —
+            // PairTree.swift); rings remain only as the v1/v2
+            // rebuild path. cL anchors the ground family at the
+            // FIGURE CENTROID's lightness — for rings that was T[0];
+            // the tree's T[0] is a corner leaf, so read the centroid
+            // from the stats themselves (same number, honest source).
+            let tree = CameraConfig.pairTree ? PairTree.solveFigures(stats: warm) : nil
+            let prims8 = tree?.figures8 ?? DyadPalette.primaries(stats: warm)
+            let prims = tree?.figures ?? prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
+            let cL = tree != nil ? warm.centroid.l : DyadPalette.centroidL(prims8)
             let gm = smoothedBg.map {
                 DyadPalette.groundMoments(centroidL: cL, primsLab: prims,
                                           background: $0)
             } ?? DyadPalette.priorMoments(centroidL: cL)
             frameMoments.append(gm)
 
-            let table = DyadPalette.table(stats: warm, moments: gm)
+            let table = tree.map { PairTree.table(figures8: $0.figures8, moments: gm) }
+                ?? DyadPalette.table(stats: warm, moments: gm)
             tables.append(DyadPalette.gifColorTable(table))
+            nodes16All.append(tree?.nodes16 ?? [])
+            canon16All.append(tree?.canonical16 ?? [])
             onFrameTable?(f, tables[f])
             frameStats.append(warm)
             labPrimaries.append(prims)
@@ -244,32 +263,99 @@ enum DyadPipeline {
             pulls.append(framePull)
         }
 
-        // ── Band post-pass: the pair dither (spec §5 v6 — ★R4 RULED
-        // faithful-hue, Daniel 2026-08-11, on the first 17 Pro
-        // export; DY11 had measured faithful as aggregate-closer to
-        // ŷ). Stage 2 put every band pixel on the σ side; the Bayer
+        // ── Band post-pass: the pair dither (spec §6c/§6d v7 — THE
+        // CHAOS BLUR, Daniel's ruling 2026-08-12, superseding R4
+        // faithful-hue: with the same-hue ground the σ half displays
+        // its figure's own hue, so the comp re-route is deleted).
+        // Stage 2 put every band pixel on the σ side; the Bayer
         // threshold flips coverage 1 − t back to the primary side.
-        // Pixels that STAY on the σ side re-route through comp: the
-        // partner of the comp-nearest primary, so the DISPLAYED
-        // color ≈ ŷ itself (quantizeAerialAt; assignment/ANE stay
-        // untouched — faithful lives entirely in this post-pass).
+        // Pixels that STAY on the σ side target the rung-16 block
+        // mean of ŷ — SPACETIME since S4 (rate-ladder step, "be
+        // bold" 2026-08-12): 4×4 in space × 4 frames in time, the
+        // full 2×2×2 atom composed twice; the background holds
+        // still across 4-frame groups and the coder's K̂ pays less.
+        // ★PAIR TREE P2 (prefix law): those targets quantize at the
+        // 32-LEVEL — nearest of the 16 depth-4 node means, emitted
+        // as the node's canonical leaf's partner. The background's
+        // palette rate drops 8:1 exactly where its spatial rate
+        // does. Assignment/ANE stay untouched — blur and prefix
+        // live entirely in this post-pass.
         func pairDither(_ engineOut: [[UInt8]]) -> [[UInt8]] {
+            let frameCount = engineOut.count
+            guard let first = engineOut.first else { return engineOut }
+            let side = Int(Double(first.count).squareRoot())
+            let rung = 4
+            let bSide = side / rung
+            let blockCount = bSide * bSide
+            // Per-frame spatial rung-16 pools of the staged field.
+            var spatial = [[OKLabColor]]()
+            spatial.reserveCapacity(frameCount)
+            for f in 0..<frameCount {
+                var pooled = [OKLabColor](
+                    repeating: OKLabColor(l: 0, a: 0, b: 0), count: blockCount)
+                for by in 0..<bSide {
+                    for bx in 0..<bSide {
+                        var sl = 0.0, sa = 0.0, sb = 0.0
+                        for dy in 0..<rung {
+                            for dx in 0..<rung {
+                                let lab = labs[f][(by * rung + dy) * side + bx * rung + dx]
+                                sl += lab.l; sa += lab.a; sb += lab.b
+                            }
+                        }
+                        let n = Double(rung * rung)
+                        pooled[by * bSide + bx] = OKLabColor(l: sl / n, a: sa / n, b: sb / n)
+                    }
+                }
+                spatial.append(pooled)
+            }
+            // Temporal pooling over 4-frame groups (partial tail
+            // groups are lawful degenerates; 64 divides exactly).
+            let groupCount = (frameCount + 3) / 4
+            var spacetime = [[OKLabColor]]()
+            spacetime.reserveCapacity(groupCount)
+            for g in 0..<groupCount {
+                let lo = 4 * g, hi = min(4 * g + 4, frameCount)
+                var pooled = [OKLabColor](
+                    repeating: OKLabColor(l: 0, a: 0, b: 0), count: blockCount)
+                for b in 0..<blockCount {
+                    var sl = 0.0, sa = 0.0, sb = 0.0
+                    for f in lo..<hi {
+                        sl += spatial[f][b].l; sa += spatial[f][b].a; sb += spatial[f][b].b
+                    }
+                    let n = Double(hi - lo)
+                    pooled[b] = OKLabColor(l: sl / n, a: sa / n, b: sb / n)
+                }
+                spacetime.append(pooled)
+            }
             return engineOut.enumerated().map { f, indices in
                 var out = indices
-                let side = Int(Double(indices.count).squareRoot())
                 let prims = labPrimaries[f]
+                let nodes = nodes16All[f]
+                let canon = canon16All[f]
+                let pooled = spacetime[f / 4]
                 for p in 0..<indices.count where !masks[f][p] && !fars[f][p] {
                     if bayer4[(p / side) % 4][(p % side) % 4] >= pulls[f][p] {
                         out[p] = 255 - out[p]
                     } else {
-                        let target = DyadPalette.comp(labs[f][p])
-                        var best = 0
-                        var bestD = Double.infinity
-                        for j in 0..<prims.count {
-                            let d = DyadPalette.dLab2(prims[j], target)
-                            if d < bestD { bestD = d; best = j }
+                        let target = pooled[((p / side) / rung) * bSide + (p % side) / rung]
+                        if !nodes.isEmpty {
+                            // prefix law: 32-level quantization
+                            var best = 0
+                            var bestD = Double.infinity
+                            for c in 0..<nodes.count {
+                                let d = DyadPalette.dLab2(nodes[c], target)
+                                if d < bestD { bestD = d; best = c }
+                            }
+                            out[p] = UInt8(255 - canon[best])
+                        } else {
+                            var best = 0
+                            var bestD = Double.infinity
+                            for j in 0..<prims.count {
+                                let d = DyadPalette.dLab2(prims[j], target)
+                                if d < bestD { bestD = d; best = j }
+                            }
+                            out[p] = UInt8(255 - best)
                         }
-                        out[p] = UInt8(255 - best)
                     }
                 }
                 return out

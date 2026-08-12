@@ -23,19 +23,19 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (41 files green
-  as of 2026-08-11 post-unification; the tally must stay at zero
-  failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+- `spec/` — runghc axiom suite: `cd spec && make test` (43 files green
+  as of 2026-08-12 — RateLadder.hs + PairTree.hs added; the tally must
+  stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
   MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
   keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
 - The app is a 64³ GIF MACHINE (spec/output/ExportMethods.hs): every
-  export is 64 frames of 64×64 indices; METHODS (tesseract | refined |
-  dyad) differ only in how indices/tables are made, selected by the
-  persisted ExportSettings and resolved by eligibility. DYAD-256
-  (spec/quantization/DyadPalette.hs): paired per-frame palettes,
-  face → primaries, background → σ-mirror pair-dither bleeding to
-  255.
+  export is 64 frames of 64×64 indices with ONE method — DYAD-256
+  per-frame palettes (2026-08-12 decree; the tesseract/refined
+  global-table methods are deleted, ineligible captures export
+  nothing). DYAD-256 (spec/quantization/DyadPalette.hs): paired
+  per-frame palettes, face → primaries, background → σ-mirror
+  pair-dither bleeding to 255.
 - ★PHASE-PALETTE (2026-08-10/11, Daniel's ruling — background →
   CHAOS, subject → ORDER, boundary layer; information theory is the
   law; docs/phase-palette-design.md, rulings R1–R5 confirmed):
@@ -141,22 +141,99 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
 
 ## Export contract
 
-Every GIF is 256×256 px (palette-index replication, never interpolation;
-`decimate ∘ replicate = id`), exactly 5 cs frame delay = 20 fps.
-Table scheme by method: dyad = 64 per-frame Local Color Tables (packed
-byte 0x87, GCT = frame 0's table); tesseract/refined = one 256-entry
-global table (0x00). Byte-level contracts locked by
-`TesseractTests/GIFOutputContractTests` (lattice) and
-`DyadGIFContractTests` (per-frame LCTs + involution in every table).
-DYAD exports carry a "DYAD HARMONY" provenance comment (Ou & Luo pair
-score over all frames).
+★ PER-FRAME PALETTES ONLY (Daniel's decree, 2026-08-12, NON-
+NEGOTIABLE): every GIF carries one 768-byte Local Color Table per
+frame (packed byte 0x87 on every image descriptor; GCT = frame 0's
+table). The tesseract/refined global-table methods, the fallback
+chain, and the persisted LOOK setting are DELETED (GIFMachine,
+GIFEncoder, CentroidRefiner/RefineAccumulator/Refine.metal, the
+SettingsView LOOK radio, GIFOutputContractTests). A capture that
+cannot run DYAD exports NOTHING — nil surfaced as
+`encodeFailedMessage`, never a silent global-table downgrade.
+Every GIF is 256×256 px (palette-index replication, never
+interpolation; `decimate ∘ replicate = id`), exactly 5 cs frame
+delay = 20 fps. Byte-level contract locked by `DyadGIFContractTests`
+(per-frame LCTs + ground law in every table). DYAD exports carry a
+"DYAD HARMONY" provenance comment (Ou & Luo pair score over all
+frames).
+
+★ RATE LADDER (Daniel's ruling, 2026-08-12: "use the math and
+redesign the whole pipeline — in small steps, stratified; 2×2×2 ↔ 1
+is an 8:1 ratio of information"): the pipeline is one compressor
+(camera ~10⁹ b → GIF89a ~10⁶ b) reframed as declared strata whose
+ratios TELESCOPE — docs/rate-ladder-redesign.md is the strategy,
+spec/output/RateLadder.hs (RL1–RL6 green) is the algebra: the 8:1
+pooling atom + rung composition, polyphase partition, eigenvalue
+allocation law (n ∝ √λ), the Birkhoff–Rigau meter M = (8−K̂)/8, the
+17-level coverage code. STEP S0 SHIPPED (measurement only): "RATE
+LEDGER v1 px lzw H0 K M" rides every DYAD comment, computed by the
+encoder's own LZW (GIFEncoder.lzwCost) — the fitness function every
+later stratum step is judged against. Steps S2–S6 (S0 box prefilter
+kills decimation aliasing; S3 PC3 eigen-allocation; S4 spacetime
+4×4×4 chaos blur on the loop torus; S5 band-block exchange scope;
+S6 hue-conditioned harmony telemetry) AWAIT Daniel's step-order
+ruling — each changes pixels and needs spec axioms + a device pass.
+
+★ PAIR TREE (Daniel's ruling, 2026-08-12: "pair pairs so that the
+8:1 ratio in all of the scales is grounded in latent algos" + "we
+still need to train a model to help the capture"): the 256-entry
+table is a dyadic pairing tree — sibling maps s_ℓ(i) = i XOR 2^ℓ,
+eight commuting involutions whose TOTAL composition is σ(i) = 255−i
+(the DYAD involution IS pairing-pairs all the way up); bit-triples
+= the 2×2×2 atom, strata 256→32→4 aligned with the cube's rungs;
+the binomial ladder survives as the balanced tree's growth rings;
+splits are LATENT (local eigen-split at the node's own mean — RL4's
+n∝√λ locally), replacing designed rings/angles. Prefix law:
+truncated index ≡ coarser-level palette (chaos-blur targets should
+quantize at the 32-level; assignment becomes a log-time descent →
+the ANE shape). Design docs/pair-tree-palette.md; spec
+spec/quantization/PairTree.hs PT1–PT6 GREEN (suite 43). CAPTURE-
+ASSIST MODEL planned (nn/pair-tree/): distill the exact split
+algorithm from the rung-16 slow state (SKGene G1–G6 grounding
+pattern; corpora = synthetic GIF89a statistical variance per
+★NO-CAPTURE-TRAINING).
+★P1+P2+S4 SHIPPED 2026-08-12 (Daniel: "be bold"): the ANALYTIC
+tree is live — closed-form Gaussian splits (half-normal moments:
+child mean μ ± √λ·√(2/π)·u, child var λ(1−2/π) on the split axis,
+basis never rotates; spec PT7–PT9 green) keep the table a pure
+function of the traced 13 numbers → DYAD STATS v3 (rings remain
+the v1/v2 rebuild path); σ-side chaos targets = 4×4×4 SPACETIME
+block means (S4) quantized at the 32-LEVEL (16 depth-4 nodes ×
+canonical leaves — prefix law, P2) in all three ports
+(DyadPipeline.pairDither, DyadPreview.assignCPU, aerialPreview
+kernel buffer(3)); CameraConfig.pairTree = true (one-line revert);
+PairTreeTests on sim. cL for the ground family = the stats
+centroid (tree T[0] is a corner leaf, not the centroid). DEVICE
+PASS OWED. P3 (Mac lab) / P4 (mlpackage + hierarchical ANE
+descent) remain open.
+
+★ v7 SAME-HUE GROUND + CHAOS BLUR (Daniel's ruling, 2026-08-12:
+"the blue haze on the background is unprofessional; blur the
+background as it becomes chaos"): the ground family's hue NEGATION
+is dead — it made the whole σ half the complement of the face's
+shells, so a warm subject painted every background pixel blue-gray
+(R4 faithful-hue only re-routed the search; the displayed entries
+were still hue-negated). groundLab now keeps the figure's hue
+(chroma power law + rigid L-shift unchanged; Wada leaves hue
+unconstrained, so the dictionary derivation stands). The σ-side
+assignment target is the rung-16 BLOCK MEAN of the staged field ŷ
+(4×4 blocks on 64² — the resolution of depth, TL9): the background
+renders flat at rung 16 and the Bayer coverage t makes the blur
+emerge exactly as fast as the chaos does — zero new constants,
+seam-death preserved. Spec: DyadPalette.hs §3b/§6c/§6d, DY10/DY11
+(hue-faithful axiom)/DY14 (colinear)/DY16 (blur laws) + PhasePalette
+groundLab — all green. Ports: DyadPipeline.pairDither,
+DyadPreview.assignCPU, Quantize.metal aerialPreview (16-texel block
+pool in-kernel). comp() survives as the §3 map (DY3) but no longer
+routes assignment. ANE DyadAssign untouched. Device pass owed.
 
 ## UI (SIMPLICITY DECREE, 2026-08-09)
 
 Launch = loading screen until the first preview frame, then ONE
 surface: preview + record + SET. All choices live in the settings
-cover (CAMERA live/face, LOOK dyad/refine/tess, BLEED, MIRROR — all
-persisted via ExportSettings). No mode chrome, no menus.
+cover (CAMERA live/face, BLEED, MIRROR — persisted via
+ExportSettings; the LOOK radio was deleted 2026-08-12 with the
+per-frame-palette decree). No mode chrome, no menus.
 
 EXCISED 2026-08-10 (submission cleanup): the A/B dual-explore /
 compose / refine arc, MAP-Elites gallery, gene NN (GeneNN/GeneModule/
@@ -219,7 +296,7 @@ widened. SECOND PASS same day: the whole TypeRows registry grew
   is load-bearing.
 - Camera code is COMPILE-ONLY off-device (simulator has no camera). Pure
   logic suites run on simulator: FaceMeshSignal, GIFUpscale,
-  GIFOutputContract, MixtureStability, SKGene.
+  DyadGIFContract, MixtureStability, SKGene.
 - Submission (2026-08-10): PrivacyInfo.xcprivacy declares the
   required-reason APIs (UserDefaults → CA92.1; the only covered API in
   use) — ITMS-91053 closed. TrueDepth has NO capability key: the

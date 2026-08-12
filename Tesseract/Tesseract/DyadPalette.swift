@@ -213,6 +213,10 @@ enum DyadPalette {
     /// The ground law in OKLab under fitted (or prior) moments.
     /// Achromatic figures keep achromatic grounds exactly, at the
     /// shifted L; the cap applies on the prior path only.
+    /// v7 (Daniel's ruling, 2026-08-12): the ground keeps its
+    /// figure's HUE — the old negation made the whole σ half the
+    /// complement of the face's shells, painting every background
+    /// blue-gray under a warm subject (the blue haze). Spec DY14.
     static func groundLab(_ gm: GroundMoments, _ lab: OKLabColor) -> OKLabColor {
         let c2 = lab.a * lab.a + lab.b * lab.b
         let l = lab.l + gm.deltaL
@@ -221,7 +225,7 @@ enum DyadPalette {
         let cRaw = exp(gm.alphaC + gm.betaC * log(c))
         let cG = gm.capped ? min(c, cRaw) : cRaw
         let s = cG / c
-        return OKLabColor(l: l, a: -lab.a * s, b: -lab.b * s)
+        return OKLabColor(l: l, a: lab.a * s, b: lab.b * s)
     }
 
     /// The generation law for the σ half, byte to byte.
