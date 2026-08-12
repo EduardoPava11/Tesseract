@@ -122,7 +122,7 @@ stays the reference; parity gates stay.
 | **P1** | Swift PairTree solver: ANALYTIC tree (closed-form Gaussian splits, PT7–PT9) replaces ring shells; DYAD STATS v3; rings stay as v1/v2 rebuild | yes | ✅ SHIPPED 2026-08-12 ("be bold") — CameraConfig.pairTree, PairTreeTests; **device pass owed** |
 | **P2** | prefix law wired: chaos-blur targets quantize at the 32-level (16 nodes × σ), all three ports (pipeline/preview/Metal) | yes | ✅ SHIPPED with P1 — **device pass owed** |
 | **S4** | spacetime chaos blur: 4×4×4 spacetime block means (composed with P2) | yes | ✅ SHIPPED with P1 — **device pass owed** |
-| **P3** | nn/pair-tree lab: corpus sampler + v1-distillation model + parity harness (Mac only) | no | distillation parity vs exact algorithm (G1–G6 pattern) — OPEN |
+| **P3** | nn/descent lab: DL1–DL5 spec + self-gating corpus emitter (J0+J1 SHIPPED 2026-08-12 after Daniel's alignment rulings; docs/jepa-h-adversarial-review-2026-08-12.md corrected the theory) | no | ✅ spec green + corpus emitted; training (J2) + parity harness OPEN |
 | **P4** | mlpackage in app: tree prediction at the 5 Hz slow state; hierarchical ANE assignment | yes (flagged) | XP2 near-tie parity, ledger, **device ruling** — OPEN |
 
 P1 EXECUTION NOTE (the analytic tree): the provenance law forced an

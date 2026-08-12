@@ -59,7 +59,8 @@ NEURAL = neural/BayerResidual.hs \
          neural/ANELoop.hs \
          neural/SKGeneCalculus.hs \
          neural/SKGeneSemantics.hs \
-         neural/OctaveCodec.hs
+         neural/OctaveCodec.hs \
+         neural/DescentLadder.hs
 
 UI = ui/CellMechanics.hs \
      ui/SurfaceMachine.hs
@@ -111,6 +112,10 @@ icon:
 # Emit the gene-JEPA training corpus → nn/sk-gene/corpus/
 corpus:
 	@$(RUNGHC) $(FLAGS) output/SKCorpusEmit.hs
+
+# Emit the descent-ladder training corpus → nn/descent/corpus/
+corpus-descent:
+	@$(RUNGHC) $(FLAGS) output/DescentCorpusEmit.hs
 
 test-verbose:
 	@for f in $(CORE); do \

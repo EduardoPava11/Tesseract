@@ -23,9 +23,9 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (44 files green
-  as of 2026-08-12 — RateLadder.hs + PairTree.hs + SurfaceMachine.hs
-  added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+- `spec/` — runghc axiom suite: `cd spec && make test` (45 files green
+  as of 2026-08-12 — RateLadder.hs + PairTree.hs + SurfaceMachine.hs +
+  DescentLadder.hs added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
   MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
   keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
@@ -192,6 +192,20 @@ ASSIST MODEL planned (nn/pair-tree/): distill the exact split
 algorithm from the rung-16 slow state (SKGene G1–G6 grounding
 pattern; corpora = synthetic GIF89a statistical variance per
 ★NO-CAPTURE-TRAINING).
+★DESCENT LADDER (Daniel's alignment rulings 2026-08-12, after the
+adversarial review docs/jepa-h-adversarial-review-2026-08-12.md
+killed the research synthesis 0/6): the capture-assist model's
+FIRST job is P4 assignment descent; the 3-MODEL LADDER (M16/M32/
+M64) is committed STRUCTURALLY as one descent with three exit
+depths, nested by OUTPUTS (DL2 quotient law), never weights;
+corpus = synthetic only; sizes/cadences/K are DEVICE-MEASURED and
+appear in no law. J0+J1 SHIPPED: spec/neural/DescentLadder.hs
+DL1–DL5 green (suite 45) + self-gating emitter
+(make corpus-descent → nn/descent/corpus, 48×192 probes, exhaustive
+teacher labels at all three exits). nn/descent/README.md = the lab
+contract. J2 (MLX training), full-PCA manifold, XP2 parity harness,
+and ANY app placement are gated on the A19 bench + device pass.
+
 ★P1+P2+S4 SHIPPED 2026-08-12 (Daniel: "be bold"): the ANALYTIC
 tree is live — closed-form Gaussian splits (half-normal moments:
 child mean μ ± √λ·√(2/π)·u, child var λ(1−2/π) on the split axis,

@@ -1,0 +1,11 @@
+{
+  "emitter": "spec/output/DescentCorpusEmit.hs",
+  "date": "2026-08-12",
+  "samples": 48,
+  "probesPerSample": 192,
+  "manifold": "v1 axis-aligned (diagonal covariance, canonical axis directions); full-PCA sampling is J2 and needs mirrored Jacobi + parity gates",
+  "teacher": "exhaustive nearest over labs of CLAMPED figure bytes (DL5); coarse labels are quotients of the leaf label (DL2)",
+  "exits": {"leaf": 128, "c16": 16, "c2": 2},
+  "decrees": ["NO-CAPTURE-TRAINING: synthetic only", "labels never from the descent", "sizes/cadences/K are device-measured, not corpus properties"],
+  "spec": ["neural/DescentLadder.hs DL1-DL5", "quantization/PairTree.hs PT1-PT9"]
+}
