@@ -81,12 +81,12 @@ struct CellButton: View {
     /// Ring ink override — the BEAT drives this between `Ink.ledGhost`
     /// and `Ink.ink` on idle ticks; disc stays constant.
     var ringInk: SIMD3<UInt8>? = nil
-    private let n = TesseractLattice.recordCells       // 18
+    private let n = TesseractLattice.recordCells
 
     var body: some View {
-        let discR = Double(TesseractLattice.recordDiscCells) / 2   // 7
+        let discR = Double(TesseractLattice.recordDiscCells) / 2   // 9
         let ringT = Double(n - TesseractLattice.recordDiscCells) / 2   // 2
-        let fill: SIMD3<UInt8> = state == .busy ? Ink.reject : SIMD3(255, 255, 255)
+        let fill: SIMD3<UInt8> = state == .busy ? Ink.reject : Ink.pure
         let ring = state == .busy ? Ink.reject : (ringInk ?? fill)
         let cx = Double(n) / 2, cy = Double(n) / 2
         CellSprite(cols: n, rows: n, cellPt: Lattice.gifPx) { c, r2 in

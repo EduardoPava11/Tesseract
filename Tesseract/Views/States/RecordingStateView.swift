@@ -34,7 +34,7 @@ struct RecordingStateView: View {
                     .frame(width: Lattice.gif(TesseractLattice.previewCells),
                            height: Lattice.gif(TesseractLattice.previewCells))
             } else {
-                Color(srgb8: CellChecker.dark)
+                Color(srgb8: Ink.void)
                     .frame(width: Lattice.gif(TesseractLattice.previewCells),
                            height: Lattice.gif(TesseractLattice.previewCells))
             }

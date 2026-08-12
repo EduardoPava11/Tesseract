@@ -59,9 +59,6 @@ enum CellMechanics {
         // Settings scene
         "setModeLive": "frame",
         "setModeFace": "frame",
-        "lookDyad": "frame",
-        "lookRefine": "frame",
-        "lookTess": "frame",
         "toggleBleed": "frame",
         "toggleMirror": "frame",
         "setLibrary": "frame",

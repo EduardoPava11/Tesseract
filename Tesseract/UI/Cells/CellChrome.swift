@@ -33,7 +33,11 @@ struct CellSymbol: View {
         guard box > 0 else { return nil }
         let key = "\(box)|\(name)" as NSString
         if let hit = cache.object(forKey: key) { return hit }
-        let cfg = UIImage.SymbolConfiguration(pointSize: CGFloat(box) * 0.82, weight: .semibold)
+        // SF Symbols overshoot their point size; 0.82 em fits the
+        // glyph inside the box raster without clipping (owned
+        // raster heuristic — line pass 2026-08-12).
+        let symbolEmFraction: CGFloat = 0.82
+        let cfg = UIImage.SymbolConfiguration(pointSize: CGFloat(box) * symbolEmFraction, weight: .semibold)
         guard let sym = UIImage(systemName: name, withConfiguration: cfg)?
                 .withTintColor(.white, renderingMode: .alwaysOriginal) else { return nil }
 

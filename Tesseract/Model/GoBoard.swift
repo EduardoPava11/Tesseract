@@ -61,16 +61,25 @@ struct GoBoards {
 /// Threshold for "balanced" — below this, the pixel is at the boundary.
 private let goThreshold: Float = 0.08
 
-/// Convert a 19×19 block of RGB pixels to three Go boards.
-/// Each pixel becomes an intersection on each board.
-func blockToGoBoards(pixels: [(Float, Float, Float)]) -> GoBoards {
+/// Convert a frame's pixels to three Go boards, one intersection per
+/// sampled pixel. The frame is row-major at `side` (64): sample a
+/// 19×19 SPATIAL block from the top-left corner — the old linear
+/// copy of pixels[0..<361] wrapped scanlines, so the SOLVING boards
+/// showed strip diagrams of the first 5.6 rows, not a region of the
+/// image (line pass 2026-08-12).
+func blockToGoBoards(pixels: [(Float, Float, Float)], side: Int = 64) -> GoBoards {
     var rg = GoBoard(), gb = GoBoard(), br = GoBoard()
 
-    for i in 0..<min(GoBoard.count, pixels.count) {
-        let (r, g, b) = pixels[i]
-        rg.stones[i] = stoneCompare(r, g)
-        gb.stones[i] = stoneCompare(g, b)
-        br.stones[i] = stoneCompare(b, r)
+    for y in 0..<GoBoard.size {
+        for x in 0..<GoBoard.size {
+            let i = y * GoBoard.size + x
+            let src = y * side + x
+            guard src < pixels.count else { continue }
+            let (r, g, b) = pixels[src]
+            rg.stones[i] = stoneCompare(r, g)
+            gb.stones[i] = stoneCompare(g, b)
+            br.stones[i] = stoneCompare(b, r)
+        }
     }
 
     return GoBoards(rg: rg, gb: gb, br: br)

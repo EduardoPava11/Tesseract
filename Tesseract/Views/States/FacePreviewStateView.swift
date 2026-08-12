@@ -69,7 +69,7 @@ struct FacePreviewStateView: View {
                            height: Lattice.gif(TesseractLattice.previewCells))
             } else {
                 ZStack {
-                    Color(srgb8: CellChecker.dark)
+                    Color(srgb8: Ink.void)
                     CellText("64 × 64", rows: TypeRows.label,
                              ink: Color(srgb8: Ink.ledGhost))
                 }
@@ -90,11 +90,6 @@ struct FacePreviewStateView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(camera.faceDetected ? "Face detected" : "No face detected")
-    }
-
-    private var captureInfoLine: some View {
-        CellText("anatomical cadence  nose = 1  background = 0",
-                 rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
     }
 
     // Same BEAT record button as LIVE (the shared control language).

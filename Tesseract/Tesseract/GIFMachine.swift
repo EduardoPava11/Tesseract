@@ -168,9 +168,11 @@ enum GIFMachine {
            frames.allSatisfy({ $0.rawRGB != nil }),
            let sk = SKGene.trace(sourceRGB: frames.map { $0.rawRGB! },
                                  side: QuantizedFrame.size) {
+            #if DEBUG
             print("SKGene: \(sk) (ground=\(SKGene.isGroundAvailable ? 1 : 0) "
                   + "passer=\(SKGene.isPasserAvailable ? 1 : 0) "
                   + "codec=\(SKGene.isCodecAvailable ? 1 : 0))")
+            #endif
             lines.append(sk)
         }
         return lines.joined(separator: "\n")
@@ -222,18 +224,26 @@ enum GIFMachine {
     /// DYAD or nothing: a capture that cannot run the per-frame-
     /// palette law returns nil, surfaced as encodeFailedMessage —
     /// never a silent global-table downgrade.
+    ///
+    /// Returns the encoded bytes AND the Birkhoff measure of the
+    /// EMITTED cube (line pass 2026-08-12: the measure shown on
+    /// RESULT and written into the comment used to describe the
+    /// deleted lattice quantization, not the DYAD indices shipped).
     static func makeGIF(
         frames: [QuantizedFrame],
-        measure: BirkhoffMeasure?,
         settings: ExportSettings,
         onFrameTable: ((Int, Data) -> Void)? = nil
-    ) -> Data? {
+    ) -> (data: Data, measure: BirkhoffMeasure)? {
         guard eligible(frames: frames),
               let dyad = DyadPipeline.process(frames: frames, bleed: settings.bleed,
                                               chaosLoop: CameraConfig.phaseChaosLoop,
                                               onFrameTable: onFrameTable)
         else { return nil }
-        return GIFEncoder.encode(
+        var counts = [Int](repeating: 0, count: 256)
+        for f in dyad.indexFrames { for i in f { counts[Int(i)] += 1 } }
+        let measure = BirkhoffMeasure(
+            counts: counts.map { $0 / max(1, dyad.indexFrames.count) })
+        guard let data = GIFEncoder.encode(
             indexFrames: settings.mirror
                 ? dyad.indexFrames.map { mirrored($0, side: QuantizedFrame.size) }
                 : dyad.indexFrames,
@@ -241,5 +251,7 @@ enum GIFMachine {
             measure: measure, upscale: CameraConfig.exportUpscale,
             perFrameTables: dyad.tables,
             trace: dyadTrace(dyad, settings: settings, frames: frames))
+        else { return nil }
+        return (data, measure)
     }
 }

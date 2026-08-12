@@ -20,9 +20,6 @@ struct CapturedFrame {
     /// Downsampled outputSize² depth values [0,1] (1=near, 0=far)
     let depths: [Float]
 
-    /// Per-block Go evaluation from FULL camera resolution.
-    /// outputSize² entries, each from a step×step block of source pixels.
-
     /// Capture timestamp
     let timestamp: TimeInterval
 

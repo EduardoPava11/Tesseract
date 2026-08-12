@@ -31,8 +31,8 @@ private func faceInk(treatment: Int, c: Int, r: Int) -> SIMD3<UInt8> {
     }
 }
 
-/// **BRACKETS** — the face for controls whose content IS an image (the
-/// dual-explore panels, the refining GIF, elite cells). Never obscures a
+/// **BRACKETS** — the face for controls whose content IS an image
+/// (today: the library's GIF tiles). Never obscures a
 /// content pixel: four corner brackets in the GUTTER OUTSIDE the tile,
 /// arms `armCells` × 1 cell thick, footprint `side + 2·(gutter+1)`.
 /// The bracket rect IS the hit rect (caller adds `.contentShape(Rectangle())`).

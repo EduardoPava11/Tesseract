@@ -13,7 +13,7 @@ struct ProcessingStateView: View {
     let phase: String
     let boards: GoBoards?
     /// The palette being created — per-frame DYAD table (nil until the
-    /// palette pass begins, or for non-dyad looks).
+    /// palette pass begins).
     var table: Data? = nil
 
     var body: some View {
@@ -52,7 +52,7 @@ struct ProcessingStateView: View {
                 switch board[x, y] {
                 case .black: tintA
                 case .white: tintB
-                case .empty: CellChecker.dark
+                case .empty: Ink.void
                 }
             }
             .pixelFrame()

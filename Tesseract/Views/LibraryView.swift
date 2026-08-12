@@ -18,10 +18,14 @@ struct LibraryView: View {
     @State private var urls: [URL] = []
     @State private var selected: URL?
     @State private var selectedData: Data?
+    /// Thumbnails decoded ONCE per reload — the body re-evaluates at
+    /// the 20 Hz chrome clock, and decoding nine GIF first-frames
+    /// from disk per tick was 180 file opens a second (line pass P0).
+    @State private var thumbs: [URL: CGImage] = [:]
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(srgb8: Ink.black).ignoresSafeArea()
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     CellText("LIBRARY", rows: TypeRows.display)
@@ -43,7 +47,7 @@ struct LibraryView: View {
                         shareButton(data).place(GridLayout.libShare)
                         deleteButton.place(GridLayout.libDelete)
                     } else if urls.isEmpty {
-                        CellText("no gifs yet — record one",
+                        CellText("no gifs yet, record one",
                                  rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
                             .place(GridLayout.libInfo)
                     }
@@ -59,6 +63,9 @@ struct LibraryView: View {
 
     private func reload() {
         urls = Array(GIFLibrary.list().prefix(9))
+        thumbs = urls.reduce(into: [:]) { acc, url in
+            acc[url] = GIFLibrary.thumbnail(of: url)
+        }
         if let selected, !urls.contains(selected) {
             self.selected = nil
             selectedData = nil
@@ -81,12 +88,12 @@ struct LibraryView: View {
             Button(action: { select(url) }) {
                 ZStack {
                     Group {
-                        if let thumb = GIFLibrary.thumbnail(of: url) {
+                        if let thumb = thumbs[url] {
                             Image(decorative: thumb, scale: 1.0)
                                 .interpolation(.none)
                                 .resizable()
                         } else {
-                            Color(srgb8: CellChecker.dark)
+                            Color(srgb8: Ink.void)
                         }
                     }
                     .frame(width: Lattice.gif(16), height: Lattice.gif(16))
@@ -100,8 +107,9 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("GIF \(index + 1) of \(urls.count)")
+            .accessibilityAddTraits(url == selected ? .isSelected : [])
         } else {
-            Color(srgb8: CellChecker.dark)
+            Color(srgb8: Ink.void)
                 .frame(width: Lattice.gif(16), height: Lattice.gif(16))
                 .frame(width: Lattice.gif(20), height: Lattice.gif(20))
         }
@@ -114,8 +122,24 @@ struct LibraryView: View {
         return VStack(alignment: .leading, spacing: Lattice.pt(2)) {
             CellText("\(data.count / 1024) kb · \(selected?.lastPathComponent ?? "")",
                      rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
-            CellText(mixture, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
+            CellText(Self.fit(mixture, rows: TypeRows.micro,
+                              toCells: GridLayout.libInfo.w),
+                     rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
         }
+    }
+
+    /// Truncate to the widest prefix whose RASTER fits the region —
+    /// measured through CellText's own snap, no font-metric guesses
+    /// (line pass: the full mixture line overflowed the grid).
+    static func fit(_ text: String, rows: Int, toCells cells: Int) -> String {
+        let maxPt = Lattice.gif(cells)
+        var t = text
+        while t.count > 1,
+              let mask = CellText.snap(t, rows: rows),
+              mask.size.width * Lattice.pt(1) > maxPt {
+            t = String(t.dropLast(max(1, t.count / 8)))
+        }
+        return t
     }
 
     private func shareButton(_ data: Data) -> some View {

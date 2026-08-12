@@ -95,18 +95,19 @@ final class GIFMachineTests: XCTestCase {
     }
 
     func testDyadEmitsPerFrameTables() throws {
-        let gif = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
-                                                   measure: nil,
-                                                   settings: defaultSettings()))
-        XCTAssertEqual(firstDescriptorPackedByte(gif), 0x87,
+        let export = try XCTUnwrap(GIFMachine.makeGIF(frames: frames(withRGB: true),
+                                                      settings: defaultSettings()))
+        XCTAssertEqual(firstDescriptorPackedByte(export.data), 0x87,
                        "every frame carries a 256-entry LCT")
+        XCTAssertGreaterThan(export.measure.colorsUsed, 0,
+                             "the measure describes the emitted cube")
     }
 
     func testIneligibleCaptureProducesNoGIF() {
         XCTAssertNil(GIFMachine.makeGIF(frames: frames(withRGB: false),
-                                        measure: nil, settings: defaultSettings()),
+                                        settings: defaultSettings()),
                      "no rawRGB → honest nil, never a global-table downgrade")
-        XCTAssertNil(GIFMachine.makeGIF(frames: [], measure: nil,
+        XCTAssertNil(GIFMachine.makeGIF(frames: [],
                                         settings: defaultSettings()))
     }
 
@@ -147,11 +148,11 @@ final class GIFMachineTests: XCTestCase {
     func testMirrorSettingChangesTheGIF() throws {
         let capture = frames(withRGB: true)
         let plain = try XCTUnwrap(GIFMachine.makeGIF(
-            frames: capture, measure: nil,
-            settings: ExportSettings(bleed: true, mirror: false)))
+            frames: capture,
+            settings: ExportSettings(bleed: true, mirror: false))).data
         let flipped = try XCTUnwrap(GIFMachine.makeGIF(
-            frames: capture, measure: nil,
-            settings: ExportSettings(bleed: true, mirror: true)))
+            frames: capture,
+            settings: ExportSettings(bleed: true, mirror: true))).data
         XCTAssertNotEqual(plain, flipped, "mirror must change the bytes")
         // Same palette work either way: identical GCT (frame 0's table).
         XCTAssertEqual(Data([UInt8](plain)[13..<781]), Data([UInt8](flipped)[13..<781]))
@@ -171,8 +172,8 @@ final class GIFMachineTests: XCTestCase {
         // The full circle: encode → walk the raw bytes → parse the
         // comment → re-solve the tables → byte-match the embedded LCTs.
         let gif = try XCTUnwrap(GIFMachine.makeGIF(
-            frames: frames(withRGB: true), measure: nil,
-            settings: defaultSettings()))
+            frames: frames(withRGB: true),
+            settings: defaultSettings())).data
         let b = [UInt8](gif)
 
         var comments: [String] = []

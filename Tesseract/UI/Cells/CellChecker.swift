@@ -6,8 +6,9 @@ import simd
 /// bit) flips which parity is "on", giving a 20 Hz shimmer with zero
 /// alpha; a fixed phase gives the static disabled/busy checker.
 enum CellChecker {
-    static let bright = SIMD3<UInt8>(235, 235, 235)
-    static let dark = SIMD3<UInt8>(16, 16, 16)
+    /// The checker's off-parity ink — an alias of Ink.void (the one
+    /// owner of the 16,16,16 byte value; UI/UX line pass 2026-08-12).
+    static let dark = Ink.void
 
     /// Parity of the 2×2 block containing cell (c,r), flipped by `phase`.
     @inline(__always) static func on(_ c: Int, _ r: Int, phase: Int = 0) -> Bool {

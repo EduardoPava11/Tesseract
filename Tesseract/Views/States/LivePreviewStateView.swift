@@ -56,7 +56,7 @@ struct LivePreviewStateView: View {
                            height: Lattice.gif(TesseractLattice.previewCells))
             } else {
                 ZStack {
-                    Color(srgb8: CellChecker.dark)
+                    Color(srgb8: Ink.void)
                     CellText("64 × 64", rows: TypeRows.label,
                              ink: Color(srgb8: Ink.ledGhost))
                 }

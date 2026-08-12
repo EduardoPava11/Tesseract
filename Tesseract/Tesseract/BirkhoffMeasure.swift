@@ -29,17 +29,6 @@ struct BirkhoffMeasure {
         order / max(complexity, 0.001)
     }
 
-    // MARK: - Binomial null model
-
-    /// Expected count per palette entry: 4096 / 256 = 16
-    static let binomialExpected: Float = 16.0
-
-    /// Expected deviation magnitude for noise: √(256 × Var) ≈ 63.9
-    static let noiseDeviation: Float = {
-        let variance: Float = 4096.0 * (1.0 / 256.0) * (255.0 / 256.0)
-        return sqrt(256.0 * variance)
-    }()
-
     // MARK: - Compute from frame data
 
     /// Compute Birkhoff measure from a palette index histogram (256 bins).
@@ -88,4 +77,3 @@ struct BirkhoffMeasure {
     }
 }
 
-// MARK: - Frame Deviation (per-color breakdown)

@@ -43,10 +43,9 @@ enum GridLayout {
     // SIMPLICITY DECREE (2026-08-09): no shared chrome. The main
     // surface is preview + record + settings, nothing else. Mode
     // selection moved into the settings scene.
-    static let chrome: [GridRegion] = []
 
     /// The one piece of surface chrome: the settings button, top-right.
-    static let settingsButton = GridRegion("settingsButton", col: 73, row: 14, w: 24, h: 13, interactive: true)
+    static let settingsButton = GridRegion("settingsButton", col: 73, row: 14, w: 24, h: TesseractLattice.buttonRowCells, interactive: true)
 
     // ── Capture scene (CameraState.previewing, LIVE) ──
     static let preview = GridRegion("preview", col: 18, row: 48, w: 64, h: 64)
@@ -71,7 +70,7 @@ enum GridLayout {
     static let recProgress = GridRegion("recProgress", col: 18, row: 134, w: 64, h: 4)
     static let recTime = GridRegion("recTime", col: 18, row: 142, w: 64, h: 5)
 
-    static let recordingScene: [GridRegion] = chrome + [
+    static let recordingScene: [GridRegion] = [
         preview, recCounter, recProgress, recTime,
     ]
 
@@ -84,20 +83,20 @@ enum GridLayout {
     static let procPct = GridRegion("procPct", col: 18, row: 124, w: 64, h: 10)
     static let procPhase = GridRegion("procPhase", col: 10, row: 138, w: 80, h: 12)
 
-    static let processingScene: [GridRegion] = chrome + [
+    static let processingScene: [GridRegion] = [
         procTitle, procBoards, procPalette, procBar, procPct, procPhase,
     ]
 
     // ── Result scene (shared LIVE + FACE) ──
     static let resultGif = GridRegion("resultGif", col: 18, row: 48, w: 64, h: 64)
     static let resultMetrics = GridRegion("resultMetrics", col: 18, row: 116, w: 64, h: 10)
-    static let resultShare = GridRegion("resultShare", col: 5, row: 172, w: 27, h: 13, interactive: true)
-    static let resultKeep = GridRegion("resultKeep", col: 36, row: 172, w: 27, h: 13, interactive: true)
-    static let resultRetake = GridRegion("resultRetake", col: 67, row: 172, w: 27, h: 13, interactive: true)
+    static let resultShare = GridRegion("resultShare", col: 5, row: 172, w: 27, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let resultKeep = GridRegion("resultKeep", col: 36, row: 172, w: 27, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let resultRetake = GridRegion("resultRetake", col: 67, row: 172, w: 27, h: TesseractLattice.buttonRowCells, interactive: true)
     /// Second register for KEEP outcomes (photos denied / save failed).
     static let resultNote = GridRegion("resultNote", col: 10, row: 130, w: 80, h: 6)
 
-    static let resultScene: [GridRegion] = chrome + [
+    static let resultScene: [GridRegion] = [
         resultGif, resultMetrics, resultShare, resultKeep, resultRetake,
         resultNote,
     ]
@@ -108,17 +107,17 @@ enum GridLayout {
     static let idleBusy = GridRegion("idleBusy", col: 44, row: 118, w: 12, h: 12)
     static let idleHint = GridRegion("idleHint", col: 18, row: 134, w: 64, h: 5)
 
-    static let idleScene: [GridRegion] = chrome + [
+    static let idleScene: [GridRegion] = [
         idleTitle, idleSub, idleBusy, idleHint,
     ]
 
     // ── Error scene (shared LIVE + FACE) ──
     static let errTitle = GridRegion("errTitle", col: 18, row: 88, w: 64, h: 8)
     static let errMsg = GridRegion("errMsg", col: 10, row: 100, w: 80, h: 14)
-    static let errRetry = GridRegion("errRetry", col: 20, row: 120, w: 26, h: 13, interactive: true)
-    static let errSettings = GridRegion("errSettings", col: 54, row: 120, w: 26, h: 13, interactive: true)
+    static let errRetry = GridRegion("errRetry", col: 20, row: 120, w: 26, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let errSettings = GridRegion("errSettings", col: 54, row: 120, w: 26, h: TesseractLattice.buttonRowCells, interactive: true)
 
-    static let errorScene: [GridRegion] = chrome + [
+    static let errorScene: [GridRegion] = [
         errTitle, errMsg, errRetry, errSettings,
     ]
 
@@ -129,15 +128,15 @@ enum GridLayout {
     // keeping the 17-row rhythm.
     static let setTitle = GridRegion("setTitle", col: 18, row: 20, w: 64, h: 10)
     static let setModeLabel = GridRegion("setModeLabel", col: 18, row: 44, w: 64, h: 6)
-    static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 28, h: 13, interactive: true)
-    static let setModeFace = GridRegion("setModeFace", col: 54, row: 54, w: 28, h: 13, interactive: true)
+    static let setModeLive = GridRegion("setModeLive", col: 18, row: 54, w: 28, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let setModeFace = GridRegion("setModeFace", col: 54, row: 54, w: 28, h: TesseractLattice.buttonRowCells, interactive: true)
     // The two useful-and-simple toggles: DYAD background bleed,
     // export mirroring. Both persisted (ExportSettings).
-    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 78, w: 64, h: 13, interactive: true)
-    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 95, w: 64, h: 13, interactive: true)
+    static let toggleBleed = GridRegion("toggleBleed", col: 18, row: 78, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 95, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
     /// The GIF archive entry (2026-08-10): review old GIFs + palettes.
-    static let setLibrary = GridRegion("setLibrary", col: 18, row: 112, w: 64, h: 13, interactive: true)
-    static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: 13, interactive: true)
+    static let setLibrary = GridRegion("setLibrary", col: 18, row: 112, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: TesseractLattice.buttonRowCells, interactive: true)
 
     static let settingsScene: [GridRegion] = [
         setTitle, setModeLabel, setModeLive, setModeFace,
@@ -161,9 +160,9 @@ enum GridLayout {
     static let libDetailGif = GridRegion("libDetailGif", col: 6, row: 104, w: 44, h: 44)
     static let libDetailPalette = GridRegion("libDetailPalette", col: 56, row: 108, w: 32, h: 32)
     static let libInfo = GridRegion("libInfo", col: 6, row: 152, w: 88, h: 12)
-    static let libShare = GridRegion("libShare", col: 14, row: 168, w: 27, h: 13, interactive: true)
-    static let libDelete = GridRegion("libDelete", col: 59, row: 168, w: 27, h: 13, interactive: true)
-    static let libClose = GridRegion("libClose", col: 38, row: 197, w: 24, h: 13, interactive: true)
+    static let libShare = GridRegion("libShare", col: 14, row: 168, w: 27, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let libDelete = GridRegion("libDelete", col: 59, row: 168, w: 27, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let libClose = GridRegion("libClose", col: 38, row: 197, w: 24, h: TesseractLattice.buttonRowCells, interactive: true)
 
     static let libCells: [GridRegion] = [
         libCell0, libCell1, libCell2, libCell3, libCell4,

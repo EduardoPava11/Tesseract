@@ -117,8 +117,8 @@ final class DyadHarmonyTests: XCTestCase {
 
     func testDyadExportCarriesHarmonyComment() throws {
         let gif = try XCTUnwrap(GIFMachine.makeGIF(
-            frames: frames(withRGB: true), measure: nil,
-            settings: ExportSettings(bleed: true, mirror: false)))
+            frames: frames(withRGB: true),
+            settings: ExportSettings(bleed: true, mirror: false))).data
         XCTAssertNotNil(gif.range(of: Data("DYAD HARMONY".utf8)),
                         "dyad stream carries the harmony trace comment")
     }

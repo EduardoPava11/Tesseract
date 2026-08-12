@@ -33,7 +33,7 @@ struct ContentView: View {
     // Mode selection lives inside the settings cover.
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(srgb8: Ink.black).ignoresSafeArea()
 
             // THE GRID CANVAS: the exact 100×218 atom grid (400×872 pt)
             // centered in the live screen. Everything inside is either a
@@ -106,7 +106,7 @@ struct ContentView: View {
 
     private var liveBody: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(srgb8: Ink.black).ignoresSafeArea()
 
             switch camera.state {
             case .idle:
@@ -185,21 +185,24 @@ struct ContentView: View {
                            detail: "the GIF could not be encoded, record again",
                            onRetry: reshoot)
         case .unknown(let detail):
-            ErrorStateView(message: headline, detail: detail, onRetry: restart)
+            // The second register is lowercase BY LAW — raw system
+            // strings arrive Title-cased (line pass 2026-08-12).
+            ErrorStateView(message: headline,
+                           detail: detail.isEmpty
+                               ? "something went wrong, try again"
+                               : detail.lowercased(),
+                           onRetry: restart)
         }
     }
 
+    /// Defensive fallback for .done without data — speaks the
+    /// machine's refusal voice on the region-placed error scene
+    /// instead of an off-machine, un-placed word (line pass).
     private func resultPlaceholder(onAgain: @escaping () -> Void) -> some View {
-        VStack(spacing: Lattice.gif(4)) {
-            CellText("NO GIF", rows: TypeRows.body)
-            Button(action: onAgain) {
-                CellFrameButton(icon: .retake(), title: "AGAIN", tick: 1,
-                                cols: GridLayout.resultRetake.w,
-                                rows: GridLayout.resultRetake.h)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Retake")
-        }
+        ErrorStateView(
+            message: SurfaceMachine.State.refused(.exportFailed).word,
+            detail: "the GIF could not be encoded, record again",
+            onRetry: onAgain)
     }
 
     // MARK: - FACE: same shared state views, mapped from FaceCaptureState
@@ -211,7 +214,7 @@ struct ContentView: View {
 
     private var faceBody: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(srgb8: Ink.black).ignoresSafeArea()
 
             switch faceCamera.state {
             case .idle:

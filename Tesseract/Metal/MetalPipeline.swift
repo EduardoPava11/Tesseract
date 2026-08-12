@@ -1,7 +1,8 @@
 // MetalPipeline.swift
 // Tesseract
 //
-// Metal compute pipeline: downsample + quantize in one GPU pass.
+// Metal compute pipeline: camera-resolution downsample to the 64² grid
+// plus the aerialPreview kernel dispatch (the 20 Hz GPU preview twin).
 // Logging at every step so we can catch exactly where things break.
 
 import Metal
@@ -41,6 +42,9 @@ final class MetalPipeline {
     private var aerialOutBuffer: MTLBuffer?
     /// ★PAIR TREE P2: 16 depth-4 node means (w = canonical leaf).
     private var aerialNodesBuffer: MTLBuffer?
+    /// CVMetalTexture wrappers for the in-flight frame (see
+    /// makeTexture) — filled per frame, cleared after the wait.
+    private var liveCVTextures: [CVMetalTexture] = []
 
     // MARK: - Texture Cache (CVPixelBuffer → MTLTexture)
 
@@ -200,6 +204,10 @@ final class MetalPipeline {
             return nil
         }
 
+        // Hold the wrapper until this frame's GPU work completes —
+        // dropping it here let the pixel-buffer pool recycle the
+        // texture's backing mid-read (line pass 2026-08-12).
+        liveCVTextures.append(cvTex)
         return texture
     }
 
@@ -264,6 +272,9 @@ final class MetalPipeline {
         // Submit and wait
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
+        // The frame's GPU reads are done: release the CVMetalTexture
+        // wrappers (their backing buffers may now be recycled).
+        liveCVTextures.removeAll(keepingCapacity: true)
 
         if commandBuffer.error != nil { return nil }
 
@@ -421,10 +432,13 @@ struct DownsampleParamsSwift {
 
     /// Compute params from actual buffer dimensions + universal 768 crop.
     /// Crop is FORCED to 768 (RGB) or 256 (depth), centered in buffer.
+    /// Buffers narrower than the crop clamp to origin instead of
+    /// trapping on UInt32(negative) (line pass 2026-08-12) — the
+    /// kernel then reads a smaller region rather than crashing.
     static func fromRGBBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
         let cropSize = CameraConfig.rgbCrop  // 768, always
-        let cropX = (width - cropSize) / 2
-        let cropY = (height - cropSize) / 2
+        let cropX = max(0, (width - cropSize) / 2)
+        let cropY = max(0, (height - cropSize) / 2)
         let step = CameraConfig.rgbStep     // 768 / outputSize, integer
         return DownsampleParamsSwift(
             cropX: UInt32(cropX), cropY: UInt32(cropY),
@@ -435,8 +449,8 @@ struct DownsampleParamsSwift {
 
     static func fromDepthBuffer(width: Int, height: Int) -> DownsampleParamsSwift {
         let cropSize = CameraConfig.depthCrop  // 256, always
-        let cropX = (width - cropSize) / 2
-        let cropY = (height - cropSize) / 2
+        let cropX = max(0, (width - cropSize) / 2)
+        let cropY = max(0, (height - cropSize) / 2)
         let step = CameraConfig.depthStep     // 256 / outputSize, integer
         return DownsampleParamsSwift(
             cropX: UInt32(cropX), cropY: UInt32(cropY),

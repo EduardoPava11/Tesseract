@@ -119,7 +119,6 @@ final class CameraManager: NSObject, ObservableObject {
 
     @Published var state: CameraState = .idle
     @Published var previewImage: CGImage?       // composite quantized preview
-    @Published var previewMeasure: BirkhoffMeasure?
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
     /// Tri-scale ladder telemetry over the realized 64³ cube
@@ -167,6 +166,10 @@ final class CameraManager: NSObject, ObservableObject {
         // so the pipeline is guaranteed ready before the first frame callback.
         processingQueue.async { [weak self] in
             self?._metalPipeline = MetalPipeline()
+            // Warm the DYAD assignment model off the critical path —
+            // it used to load lazily inside the FIRST export's stage-2
+            // dispatch, silently padding that SOLVING screen (line pass).
+            _ = DyadANE.isAvailable
         }
     }
 
@@ -276,7 +279,7 @@ final class CameraManager: NSObject, ObservableObject {
         do {
             let input = try AVCaptureDeviceInput(device: device)
             guard session.canAddInput(input) else {
-                return "Cannot add camera input"
+                return "the camera input could not be added"
             }
             session.addInput(input)
 
@@ -292,13 +295,13 @@ final class CameraManager: NSObject, ObservableObject {
             ]
             videoOutput.alwaysDiscardsLateVideoFrames = true
             guard session.canAddOutput(videoOutput) else {
-                return "Cannot add video output"
+                return "the video output could not be added"
             }
             session.addOutput(videoOutput)
 
             // Depth output
             guard session.canAddOutput(depthOutput) else {
-                return "Cannot add depth output"
+                return "the depth output could not be added"
             }
             session.addOutput(depthOutput)
             depthOutput.isFilteringEnabled = true
@@ -423,15 +426,14 @@ final class CameraManager: NSObject, ObservableObject {
             let depthTex = depthBuffer.flatMap { metal.makeDepthTexture(from: $0) }
 
             if let result = metal.downsampleFrame(rgbTexture: rgbTex, depthTexture: depthTex) {
-                let (img, measure) = makePreview(rgb: result.rgb,
-                                                 depths: result.depth,
-                                                 frameIndex: frameIdx,
-                                                 metal: metal,
-                                                 gpuTexturesReady: depthTex != nil)
+                let img = makePreview(rgb: result.rgb,
+                                      depths: result.depth,
+                                      frameIndex: frameIdx,
+                                      metal: metal,
+                                      gpuTexturesReady: depthTex != nil)
 
                 Task { @MainActor in
                     self.previewImage = img
-                    self.previewMeasure = measure
                 }
 
                 // Recording: store raw data ONLY — no heavy analysis during capture
@@ -504,14 +506,13 @@ final class CameraManager: NSObject, ObservableObject {
             depthValues = readDepth(db, outSize: outSize)
         }
 
-        let depths = depthValues ?? [Float](repeating: 0.5, count: outSize * outSize)
+        let depths = depthValues ?? [Float](repeating: DepthSignal.fill, count: outSize * outSize)
 
-        let (img, measure) = makePreview(rgb: pixels, depths: depths,
-                                         frameIndex: frameIdx)
+        let img = makePreview(rgb: pixels, depths: depths,
+                              frameIndex: frameIdx)
 
         Task { @MainActor in
             self.previewImage = img
-            self.previewMeasure = measure
         }
 
         // Recording: store CapturedFrame for global compute
@@ -542,7 +543,7 @@ final class CameraManager: NSObject, ObservableObject {
         let dW = CVPixelBufferGetWidth(depthBuffer)
         let dH = CVPixelBufferGetHeight(depthBuffer)
         guard let base = CVPixelBufferGetBaseAddress(depthBuffer) else {
-            return [Float](repeating: 0.5, count: outSize * outSize)
+            return [Float](repeating: DepthSignal.fill, count: outSize * outSize)
         }
 
         let formatType = CVPixelBufferGetPixelFormatType(depthBuffer)
@@ -606,7 +607,7 @@ final class CameraManager: NSObject, ObservableObject {
 
             await MainActor.run {
                 self.processProgress = 0
-                self.processPhase = "Analyzing color structure..."
+                self.processPhase = "reading the cube"
             }
 
             for (i, frame) in capturedFrames.enumerated() {
@@ -616,7 +617,7 @@ final class CameraManager: NSObject, ObservableObject {
 
                 await MainActor.run {
                     self.processProgress = Float(i + 1) / Float(totalFrames) * 0.40
-                    self.processPhase = "Go analysis \(i + 1)/\(totalFrames) — complexity \(String(format: "%.2f", eval.complexity)), \(eval.ditherBudget) liberties"
+                    self.processPhase = "go analysis \(i + 1)/\(totalFrames)"
                     self.processBoards = boards
                 }
             }
@@ -627,7 +628,7 @@ final class CameraManager: NSObject, ObservableObject {
             // ════════════════════════════════════════════
 
             await MainActor.run {
-                self.processPhase = "Quantizing tesseract..."
+                self.processPhase = "indexing frames"
             }
 
             var quantizedFrames: [QuantizedFrame] = []
@@ -643,14 +644,14 @@ final class CameraManager: NSObject, ObservableObject {
                     rawRGB: frame.rgb,
                     depths: frame.depths,
                     measure: BirkhoffMeasure(paletteIndices: indices),
-                    subjectAnalysis: PerfectQuantizer.analyzeSubject(depths: frame.depths),
-                    anchorTrace: PerfectQuantizer.findAnchors(indices: indices),
+                    subjectAnalysis: nil,   // no readers (line pass 2026-08-12)
+                    anchorTrace: nil,
                     timestamp: frame.timestamp
                 ))
 
                 await MainActor.run {
                     self.processProgress = 0.4 + Float(i + 1) / Float(totalFrames) * 0.4
-                    self.processPhase = "Quantizing frame \(i + 1)/\(totalFrames)"
+                    self.processPhase = "indexing frame \(i + 1)/\(totalFrames)"
                 }
             }
 
@@ -659,34 +660,27 @@ final class CameraManager: NSObject, ObservableObject {
             // ════════════════════════════════════════════
 
             await MainActor.run {
-                self.processPhase = "Encoding GIF..."
+                self.processPhase = "solving palettes"
                 self.processProgress = 0.85
             }
 
-            let measure: BirkhoffMeasure? = quantizedFrames.isEmpty ? nil : {
-                var totalCounts = [Int](repeating: 0, count: 256)
-                for frame in quantizedFrames {
-                    for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
-                }
-                let perFrame = totalCounts.map { $0 / max(1, quantizedFrames.count) }
-                return BirkhoffMeasure(counts: perFrame)
-            }()
-
             // Encode through the 64³ machine: DYAD per-frame palettes,
             // or nil surfaced honestly (spec/output/ExportMethods.hs).
+            // The measure now describes the EMITTED cube (line pass).
             // The palette is shown as it is created (per-frame tables).
-            let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
+            let export = GIFMachine.makeGIF(frames: quantizedFrames,
                                              settings: ExportSettings.load(),
                                              onFrameTable: { [frameTotal = quantizedFrames.count] f, table in
                 Task { @MainActor in
                     self.liveTable = table
-                    self.processPhase = "Solving palette \(f + 1)/\(frameTotal)"
+                    self.processProgress = 0.85 + 0.15 * Float(f + 1) / Float(max(1, frameTotal))
+                    self.processPhase = "palette \(f + 1)/\(frameTotal)"
                 }
             })
 
             // Archive every successful export — the library reviews old
             // GIFs + their palettes from the exact encoded bytes.
-            if let gifData { GIFLibrary.archive(gifData) }
+            if let export { GIFLibrary.archive(export.data) }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).
@@ -703,12 +697,12 @@ final class CameraManager: NSObject, ObservableObject {
                 self.processProgress = 1.0
                 self.processPhase = ""
                 self.processBoards = nil
-                self.gifData = gifData
-                self.gifMeasure = measure
+                self.gifData = export?.data
+                self.gifMeasure = export?.measure
                 self.rungTelemetry = rungs
                 self.dissonance = diss
                 // Simplicity decree (2026-08-09): capture → result.
-                if gifData != nil {
+                if export != nil {
                     self.state = .done
                 } else {
                     // A nil encode is a failure, not a result.
@@ -731,7 +725,7 @@ final class CameraManager: NSObject, ObservableObject {
     nonisolated private func makePreview(
         rgb: [(Float, Float, Float)], depths: [Float], frameIndex: Int,
         metal: MetalPipeline? = nil, gpuTexturesReady: Bool = false
-    ) -> (CGImage?, BirkhoffMeasure) {
+    ) -> CGImage? {
         // DYAD is the only look (2026-08-12 decree); the lattice
         // quick-quantize below survives solely as the warm-up
         // fallback before the first slow-state table exists.
@@ -744,13 +738,11 @@ final class CameraManager: NSObject, ObservableObject {
             dyadIndices = dyadPreview.assignCPU(rgb: rgb, depths: depths)
         }
         if let dyadIndices {
-            return (buildPreviewImage(indices: dyadIndices, table: dyadPreview.table),
-                    BirkhoffMeasure(paletteIndices: dyadIndices))
+            return buildPreviewImage(indices: dyadIndices, table: dyadPreview.table)
         }
         let indices = PerfectQuantizer.previewQuantize(
             rgb: rgb, depths: depths, frameIndex: frameIndex)
-        return (buildPreviewImage(indices: indices),
-                BirkhoffMeasure(paletteIndices: indices))
+        return buildPreviewImage(indices: indices)
     }
 
     /// Build a preview image from palette indices. With `table`, colors

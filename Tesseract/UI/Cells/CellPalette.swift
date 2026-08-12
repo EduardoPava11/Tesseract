@@ -17,11 +17,13 @@ struct CellPalette: View {
     var body: some View {
         let side = 16 * entryCells
         CellSprite(cols: side, rows: side, cellPt: Lattice.gifPx) { c, r in
-            guard let table, table.count >= 768 else { return CellChecker.dark }
+            guard let table, table.count >= 768 else { return Ink.void }
             let idx = (r / entryCells) * 16 + (c / entryCells)
             let o = table.startIndex + idx * 3
             return SIMD3(table[o], table[o + 1], table[o + 2])
         }
-        .accessibilityLabel("Color palette, 256 entries")
+        .accessibilityLabel(table != nil && table!.count >= 768
+            ? "Color palette, 256 entries"
+            : "Color palette, solving")
     }
 }

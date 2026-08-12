@@ -132,26 +132,3 @@ struct TesseractCoord: Hashable, Equatable, CustomStringConvertible {
 
     var description: String { "(\(d),\(a),\(b),\(c))" }
 }
-
-// MARK: - Quantization
-
-extension TesseractCoord {
-    /// Floor-based 4D quantization: (frame, sRGB) → nearest lattice point.
-    /// Epoch from frame index (16 frames per epoch).
-    /// Color channels by floor(channel × 4).
-    static func quantize(frame: Int, r: Float, g: Float, b: Float) -> TesseractCoord {
-        let d = UInt8(clamping: frame / 16)
-        let a = UInt8(clamping: min(3, Int(r * 4)))
-        let bv = UInt8(clamping: min(3, Int(g * 4)))
-        let c = UInt8(clamping: min(3, Int(b * 4)))
-        return TesseractCoord(d: d, a: a, b: bv, c: c)
-    }
-
-    /// Quantize with explicit epoch (for binomial cadence sampling)
-    static func quantize(epoch: UInt8, r: Float, g: Float, b: Float) -> TesseractCoord {
-        let a = UInt8(clamping: min(3, Int(r * 4)))
-        let bv = UInt8(clamping: min(3, Int(g * 4)))
-        let c = UInt8(clamping: min(3, Int(b * 4)))
-        return TesseractCoord(d: epoch, a: a, b: bv, c: c)
-    }
-}

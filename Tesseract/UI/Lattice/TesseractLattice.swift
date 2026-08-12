@@ -29,6 +29,10 @@ enum TesseractLattice {
     // ── The atom ──
     static let gifPx: Int = 4        // pt per atom (= 1 displayed GIF pixel)
     static let subPt: Int = 2        // half-atom, for fine spacing/gutters
+    /// The sanctioned sub-atom hairline: pixelFrame's 1 pt border —
+    /// the ONE size below the half-atom (line pass 2026-08-12; it
+    /// was the UI layer's only orphan literal).
+    static let frameStrokePt: Int = 1
 
     // ── The grid (iPhone 17 Pro reference: 402 × 874 pt) ──
     static let cols: Int = 100       // 400 pt

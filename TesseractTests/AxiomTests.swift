@@ -583,12 +583,12 @@ final class AxiomTests: XCTestCase {
 
         // Encode through the machine (DYAD per-frame palettes — the
         // only export law; the frames carry rawRGB so it is eligible)
-        let gifData = GIFMachine.makeGIF(
-            frames: frames, measure: nil,
+        let export = GIFMachine.makeGIF(
+            frames: frames,
             settings: ExportSettings(bleed: true, mirror: false))
-        XCTAssertNotNil(gifData, "\(totalFrames)-frame GIF encoding should succeed")
+        XCTAssertNotNil(export, "\(totalFrames)-frame GIF encoding should succeed")
 
-        guard let data = gifData else { return }
+        guard let data = export?.data else { return }
 
         // Verify structure
         XCTAssertEqual(data[0], 0x47, "GIF magic byte 0")  // 'G'

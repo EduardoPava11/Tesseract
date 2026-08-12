@@ -43,9 +43,18 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     // MARK: - Published State
 
-    @Published var state: FaceCaptureState = .idle
+    @Published var state: FaceCaptureState = .idle {
+        didSet {
+            // Preview work is gated off-state (line pass 2026-08-12):
+            // the full CPU pipeline used to keep running at 20 Hz
+            // through SOLVING, SEALED, and REFUSED.
+            switch state {
+            case .previewing, .recording: surfaceLive = true
+            default: surfaceLive = false
+            }
+        }
+    }
     @Published var previewImage: CGImage?       // quantized S×S preview
-    @Published var previewMeasure: BirkhoffMeasure?  // of the preview indices
     @Published var faceDetected: Bool = false
     @Published var gifData: Data?
     @Published var gifMeasure: BirkhoffMeasure?
@@ -68,8 +77,10 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     // Delegate-queue-only state (all delegate callbacks arrive serially
     // on delegateQueue; never touched from any other context).
-    nonisolated(unsafe) private var isProcessingFrame = false  // frame-drop guard
     nonisolated(unsafe) private var lastAcceptedTime: Double = -.greatestFiniteMagnitude
+    /// Mirrors `state` for the delegate queue: true only while the
+    /// surface consumes frames (previewing/recording).
+    nonisolated(unsafe) private var surfaceLive = false
 
     /// Accept a frame only if ≥ 1/21 s after the last accepted one (~20fps).
     nonisolated private static let minFrameSpacing: Double = 1.0 / 21.0
@@ -123,6 +134,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         guard state == .previewing else { return }
         gifData = nil
         gifMeasure = nil
+        // A second capture's SOLVING screen must not open on the
+        // previous capture's palette (line pass 2026-08-12).
+        liveTable = nil
         frameBuffer.startRecording()
         state = .recording(0)
     }
@@ -130,6 +144,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     // MARK: - Frame Processing (delegate queue)
 
     nonisolated private func processFrame(_ frame: ARFrame) {
+        // Only the live surface consumes frames — SOLVING, SEALED,
+        // and REFUSED do not pay the 20 Hz preview pipeline.
+        guard surfaceLive else { return }
         // Throttle to ~20fps by presentation timestamp spacing.
         let timestamp = frame.timestamp
         guard timestamp - lastAcceptedTime >= Self.minFrameSpacing else { return }
@@ -167,11 +184,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         }
         let img = Self.buildPreviewImage(indices: previewIndices, size: outSize,
                                          table: previewTable)
-        let measure = BirkhoffMeasure(paletteIndices: previewIndices)
 
         Task { @MainActor in
             self.previewImage = img
-            self.previewMeasure = measure
             self.faceDetected = hasFace
         }
 
@@ -349,47 +364,41 @@ final class FaceCaptureManager: NSObject, ObservableObject {
                     rawRGB: frame.rgb,
                     depths: frame.depths,
                     measure: BirkhoffMeasure(paletteIndices: indices),
-                    subjectAnalysis: PerfectQuantizer.analyzeSubject(depths: frame.depths),
-                    anchorTrace: PerfectQuantizer.findAnchors(indices: indices),
+                    subjectAnalysis: nil,   // no readers (line pass 2026-08-12)
+                    anchorTrace: nil,
                     timestamp: frame.timestamp
                 ))
 
                 await MainActor.run {
                     self.processProgress = Float(i + 1) / Float(max(1, totalFrames)) * 0.8
-                    self.processPhase = "Quantizing frame \(i + 1)/\(totalFrames)"
+                    self.processPhase = "indexing frame \(i + 1)/\(totalFrames)"
                 }
             }
 
             // Encode GIF (80% → 100%).
             await MainActor.run {
-                self.processPhase = "Encoding GIF..."
+                self.processPhase = "solving palettes"
                 self.processProgress = 0.85
             }
-
-            let measure: BirkhoffMeasure? = quantizedFrames.isEmpty ? nil : {
-                var totalCounts = [Int](repeating: 0, count: 256)
-                for frame in quantizedFrames {
-                    for idx in frame.paletteIndices { totalCounts[Int(idx)] += 1 }
-                }
-                let perFrame = totalCounts.map { $0 / max(1, quantizedFrames.count) }
-                return BirkhoffMeasure(counts: perFrame)
-            }()
 
             // Encode through the 64³ machine: DYAD per-frame palettes,
             // or nil surfaced honestly. The anatomical signal rides the
             // depth slot, so DYAD's face mass = mesh weight here too.
-            let gifData = GIFMachine.makeGIF(frames: quantizedFrames, measure: measure,
+            // The measure describes the EMITTED cube (line pass); the
+            // palette solve owns the 85→100% progress span.
+            let export = GIFMachine.makeGIF(frames: quantizedFrames,
                                              settings: ExportSettings.load(),
                                              onFrameTable: { [frameTotal = quantizedFrames.count] f, table in
                 Task { @MainActor in
                     self.liveTable = table
-                    self.processPhase = "Solving palette \(f + 1)/\(frameTotal)"
+                    self.processProgress = 0.85 + 0.15 * Float(f + 1) / Float(max(1, frameTotal))
+                    self.processPhase = "palette \(f + 1)/\(frameTotal)"
                 }
             })
 
             // Archive every successful export — the library reviews old
             // GIFs + their palettes from the exact encoded bytes.
-            if let gifData { GIFLibrary.archive(gifData) }
+            if let export { GIFLibrary.archive(export.data) }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).
@@ -405,12 +414,12 @@ final class FaceCaptureManager: NSObject, ObservableObject {
             await MainActor.run {
                 self.processProgress = 1.0
                 self.processPhase = ""
-                self.gifData = gifData
-                self.gifMeasure = measure
+                self.gifData = export?.data
+                self.gifMeasure = export?.measure
                 self.rungTelemetry = rungs
                 self.dissonance = diss
                 // A nil encode is a failure, not a result (mirrors LIVE).
-                self.state = gifData == nil
+                self.state = export == nil
                     ? .error(CameraManager.encodeFailedMessage) : .done
             }
         }
@@ -450,9 +459,6 @@ extension FaceCaptureManager: ARSessionDelegate {
     nonisolated func session(_ session: ARSession, didUpdate frame: ARFrame) {
         // Drop frame if still processing previous — prevents ARFrame
         // retention buildup (HaarScope pattern).
-        guard !isProcessingFrame else { return }
-        isProcessingFrame = true
-        defer { isProcessingFrame = false }
 
         processFrame(frame)
     }
@@ -465,7 +471,8 @@ extension FaceCaptureManager: ARSessionDelegate {
         if let arError = error as? ARError, arError.code == .cameraUnauthorized {
             message = CameraManager.cameraDeniedMessage
         } else {
-            message = error.localizedDescription
+            // The second register is lowercase by law (line pass).
+            message = error.localizedDescription.lowercased()
         }
         logger.error("FaceCapture: session failed — \(message)")
         Task { @MainActor in

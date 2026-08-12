@@ -80,8 +80,11 @@ struct GIFEncoder {
         ])
 
         // ── 5. Comment Extension (Birkhoff measure) ──
+        //   The measure describes the EMITTED DYAD cube (line pass
+        //   2026-08-12 — it used to be labeled for the deleted
+        //   tesseract global-table method).
         if let m = measure {
-            let comment = "Tesseract 4^4 | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | R1+R3=R4 sigma=\(String(format: "%.3f", BinomialCadence.sigmaBase))"
+            let comment = "DYAD 64^3 | M=\(String(format: "%.1f", m.beauty)) O=\(String(format: "%.0f", m.order)) C=\(String(format: "%.3f", m.complexity)) dim=\(String(format: "%.2f", m.manifoldDim)) colors=\(m.colorsUsed)/256 | sigma=\(String(format: "%.3f", BinomialCadence.sigmaBase))"
             writeCommentExtension(comment, to: &data)
         }
 
@@ -194,7 +197,13 @@ struct GIFEncoder {
     // MARK: - LZW Compression (adapted from ROTAS)
 
     /// LZW compression for GIF. Writes minCodeSize byte + sub-blocks + terminator.
-    /// Uses [UInt8] dictionary keys for fast hashing.
+    ///
+    /// The dictionary is keyed by (prefix code, next byte) packed into
+    /// one Int — the classic GIF-LZW trick. Byte-identical output to
+    /// the old [UInt8]-keyed version (same phrases, same codes, same
+    /// order), but hashing is O(1) per pixel instead of O(phrase
+    /// length): the SOLVING screen's encode cost no longer grows with
+    /// how well the cube compresses (line pass 2026-08-12).
     private static func lzwEncode(_ pixels: [UInt8], minCodeSize: UInt8) -> Data {
         var result = Data()
         result.append(minCodeSize)
@@ -202,7 +211,9 @@ struct GIFEncoder {
         let clearCode = 1 << Int(minCodeSize)
         let endCode = clearCode + 1
 
-        var dictionary = [[UInt8]: Int]()
+        // Key: (currentCode << 8) | nextByte. Root phrases [b] are the
+        // codes 0..<clearCode themselves — no dictionary entry needed.
+        var dictionary = [Int: Int]()
         var codeSize = Int(minCodeSize) + 1
         var nextCode = endCode + 1
         let maxCode = 4095
@@ -229,9 +240,6 @@ struct GIFEncoder {
 
         func initDictionary() {
             dictionary.removeAll(keepingCapacity: true)
-            for i in 0..<clearCode {
-                dictionary[[UInt8(i)]] = i
-            }
             nextCode = endCode + 1
             codeSize = Int(minCodeSize) + 1
         }
@@ -239,18 +247,19 @@ struct GIFEncoder {
         initDictionary()
         outputCode(clearCode)
 
-        var current = [UInt8]()
-        current.reserveCapacity(16)
+        var currentCode = -1
         for pixel in pixels {
-            current.append(pixel)
-            if dictionary[current] != nil {
-                // current is in dictionary — keep extending
+            if currentCode < 0 {
+                currentCode = Int(pixel)
+                continue
+            }
+            let key = (currentCode << 8) | Int(pixel)
+            if let code = dictionary[key] {
+                currentCode = code
             } else {
-                // Output code for current minus last byte
-                let prev = Array(current.dropLast())
-                outputCode(dictionary[prev]!)
+                outputCode(currentCode)
                 if nextCode <= maxCode {
-                    dictionary[current] = nextCode
+                    dictionary[key] = nextCode
                     nextCode += 1
                     if nextCode > (1 << codeSize) && codeSize < 12 {
                         codeSize += 1
@@ -259,12 +268,12 @@ struct GIFEncoder {
                     outputCode(clearCode)
                     initDictionary()
                 }
-                current = [pixel]
+                currentCode = Int(pixel)
             }
         }
 
-        if !current.isEmpty {
-            outputCode(dictionary[current]!)
+        if currentCode >= 0 {
+            outputCode(currentCode)
         }
         outputCode(endCode)
 
@@ -281,10 +290,12 @@ struct GIFEncoder {
 
     // MARK: - Save to Photos
 
-    /// Save GIF data to a temporary file for sharing.
+    /// Save GIF data to a temporary file for sharing. UUID names:
+    /// whole-second timestamps collided when two different GIFs were
+    /// shared within one second (line pass 2026-08-12).
     static func saveToTempFile(_ data: Data) -> URL? {
         let tempDir = FileManager.default.temporaryDirectory
-        let url = tempDir.appendingPathComponent("tesseract_\(Int(Date().timeIntervalSince1970)).gif")
+        let url = tempDir.appendingPathComponent("tesseract_\(UUID().uuidString).gif")
         do {
             try data.write(to: url)
             return url

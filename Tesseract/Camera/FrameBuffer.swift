@@ -74,10 +74,6 @@ final class FrameBuffer: @unchecked Sendable {
         return capturedFrames.count
     }
 
-    var isFull: Bool {
-        frameCount >= capacity
-    }
-
     // MARK: - Export
 
 }

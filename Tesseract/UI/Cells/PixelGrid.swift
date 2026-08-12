@@ -6,9 +6,10 @@ import simd
 /// cells, no interpolation, no anti-aliasing, no shading/gradient/opacity
 /// on a cell — a cell is exactly one indexed sRGB8 color.
 ///
-/// Scope (perf): the 64×64 GIF is a bitmap (`PixelImage`,
-/// `.interpolation(.none)`), never 4096 Canvas fills. `PixelGrid` Canvas
-/// drawing is for the 256-cell palette only.
+/// Scope (perf): content bitmaps render as images with
+/// `.interpolation(.none)` (GIFPlayerView, the preview CGImage);
+/// the 256-cell palette renders through CellSprite's CGContext
+/// bitmap (CellPalette). This file owns only the frame below.
 
 extension View {
     /// The chrome frame around a content grid: hard square, one opaque
@@ -16,6 +17,7 @@ extension View {
     /// indexed cells — an AA-on-content violation).
     func pixelFrame() -> some View {
         aspectRatio(1, contentMode: .fit)
-            .border(Color(srgb8: Ink.frameStroke), width: 1)
+            .border(Color(srgb8: Ink.frameStroke),
+                    width: CGFloat(TesseractLattice.frameStrokePt))
     }
 }

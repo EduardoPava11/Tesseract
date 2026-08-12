@@ -23,6 +23,8 @@ struct ResultStateView: View {
                        height: Lattice.gif(TesseractLattice.previewCells))
                 .pixelFrame()
                 .place(GridLayout.resultGif)
+                // The screen's main content, visible to VoiceOver.
+                .accessibilityLabel("Your recorded GIF, playing")
 
             metricsRow.place(GridLayout.resultMetrics)
 
@@ -79,6 +81,13 @@ struct ResultStateView: View {
             metric("dim", String(format: "%.1f", measure.manifoldDim))
             metric("col", "\(measure.colorsUsed)")
         }
+        // VoiceOver: one sentence, not six disconnected fragments.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(
+            format: "Beauty %.0f, order %.0f, complexity %.2f, "
+                  + "dimension %.1f, %d colors used",
+            measure.beauty, measure.order, measure.complexity,
+            measure.manifoldDim, measure.colorsUsed))
     }
 
     private func metric(_ label: String, _ value: String) -> some View {

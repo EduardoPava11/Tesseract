@@ -17,6 +17,16 @@ enum Ink {
     /// Selection accent (borders of selected cells, slider knobs).
     static let accent = SIMD3<UInt8>(96, 165, 250)
 
+    /// The canvas black — every full-bleed background routes here
+    /// (UI/UX line pass 2026-08-12: Color.black literals retired).
+    static let black = SIMD3<UInt8>(0, 0, 0)
+    /// The void: placeholder fills, empty tiles, dead preview squares.
+    /// Was CellChecker.dark moonlighting outside its checker role.
+    static let void = SIMD3<UInt8>(16, 16, 16)
+    /// Pure white — the shutter disc's fill (distinct from `ink` 235
+    /// by design: the record button is the brightest thing on screen).
+    static let pure = SIMD3<UInt8>(255, 255, 255)
+
     /// Channel tints (opaque, no `.opacity`) — now serving the Go
     /// board rendering in ProcessingStateView.
     static let chanR = SIMD3<UInt8>(220, 60, 60)

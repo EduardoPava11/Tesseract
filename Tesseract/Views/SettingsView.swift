@@ -21,7 +21,7 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            Color(srgb8: Ink.black).ignoresSafeArea()
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
                     CellText("SETTINGS", rows: TypeRows.display)

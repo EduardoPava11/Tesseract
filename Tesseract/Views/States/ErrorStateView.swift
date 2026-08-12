@@ -55,13 +55,22 @@ struct ErrorStateView: View {
     // CellText is single-line; word-wrap the detail to the region.
     private func detailLines(_ text: String) -> some View {
         VStack(spacing: Lattice.pt(2)) {
-            ForEach(Array(Self.wrap(text, width: 36).enumerated()), id: \.offset) { _, line in
+            ForEach(Array(Self.wrap(text, width: Self.wrapColumns).enumerated()), id: \.offset) { _, line in
                 CellText(line, rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(text)
     }
+
+    /// Wrap width in characters, derived from the errMsg region and
+    /// the label register's ACTUAL monospace advance (measured via
+    /// CellText's raster — no font-metric guesses; line pass).
+    static let wrapColumns: Int = {
+        guard let one = CellText.snap("0", rows: TypeRows.label) else { return 36 }
+        let advancePt = one.size.width * Lattice.pt(1)
+        return max(8, Int((Lattice.gif(GridLayout.errMsg.w) / advancePt).rounded(.down)))
+    }()
 
     static func wrap(_ text: String, width: Int) -> [String] {
         var lines: [String] = []
