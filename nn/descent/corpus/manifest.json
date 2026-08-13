@@ -1,7 +1,7 @@
 {
   "emitter": "spec/output/DescentCorpusEmit.hs",
   "date": "2026-08-12",
-  "samples": 48,
+  "samples": 256,
   "probesPerSample": 192,
   "manifold": "v1 axis-aligned (diagonal covariance, canonical axis directions); full-PCA sampling is J2 and needs mirrored Jacobi + parity gates",
   "teacher": "exhaustive nearest over labs of CLAMPED figure bytes (DL5); coarse labels are quotients of the leaf label (DL2)",
