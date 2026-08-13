@@ -44,7 +44,7 @@
 
 module DescentLadder where
 
-import Data.Bits ((.&.), shiftR, complement)
+import Data.Bits ((.&.), shiftR)
 import Data.List (minimumBy)
 import Data.Ord (comparing)
 

@@ -171,10 +171,7 @@ def value_targets(tree):
     labs = tree["labs"]                       # [P,3]
     leaves = tree["leaves"]                   # [128,3]
     d2 = np.sum((labs[:, None, :] - leaves[None, :, :]) ** 2, axis=2)
-    v1 = np.stack([d2[:, :64].min(axis=1), d2[:, 64:].min(axis=1)], axis=1)
-    v4 = np.stack([d2[:, o * 8:(o + 1) * 8].min(axis=1) for o in range(16)],
-                  axis=1)                     # [P,16]
-    return v1, v4
+    return np.stack([d2[:, :64].min(axis=1), d2[:, 64:].min(axis=1)], axis=1)
 
 def zscore(v):
     m = v.mean(axis=1, keepdims=True)
@@ -182,13 +179,12 @@ def zscore(v):
     return (v - m) / sd
 
 def batch(trees):
-    """Flatten all trees into stage-1 and stage-2 training arrays.
-    Stage 2 is teacher-forced under the TRUE half."""
+    """Flatten all trees into STAGE-1 training arrays (v4: stages
+    2-3 are law -- DL6 -- so only the half choice is trained)."""
     T, C1, S1, K1, D1, Y1, V1 = [], [], [], [], [], [], []
-    C2, S2, K2, D2, Y2, V2 = [], [], [], [], [], []
     for tr in trees:
         P = len(tr["labs"])
-        v1, v4 = value_targets(tr)
+        v1 = value_targets(tr)
         T.append(tr["labs"])
         C1.append(np.repeat(tr["d1"][None], P, 0))
         S1.append(np.repeat(tr["v1"][None], P, 0))
@@ -197,21 +193,11 @@ def batch(trees):
         D1.append(np.repeat(desc1[None], P, 0))
         Y1.append(tr["c2"])
         V1.append(zscore(v1))
-        half = tr["c2"]                        # teacher forcing
-        idx = np.stack([np.arange(h * 8, (h + 1) * 8) for h in half])
-        C2.append(tr["d4"][idx])
-        S2.append(tr["v4"][idx])
-        K2.append(tr["c4"][idx])
-        leaves8 = tr["leaves"].reshape(16, 8, 3)   # each octet's leaves
-        D2.append(leaves8[idx])
-        Y2.append(tr["c16"] % 8)
-        V2.append(zscore(np.take_along_axis(v4, idx, axis=1)))
     def cat(xs): return np.concatenate(xs, axis=0)
     f32 = lambda x: mx.array(cat(x).astype(np.float32))
     i32 = lambda x: mx.array(cat(x).astype(np.int32))
     return (f32(T),
-            (f32(C1), f32(S1), f32(K1), f32(D1), i32(Y1), f32(V1)),
-            (f32(C2), f32(S2), f32(K2), f32(D2), i32(Y2), f32(V2)))
+            (f32(C1), f32(S1), f32(K1), f32(D1), i32(Y1), f32(V1)))
 
 def stage_loss(m, t, c, sp, kids, d, y, vz):
     v = m(t, c, sp, kids, d)                  # predicted value [N,C]
@@ -222,24 +208,20 @@ def stage_loss(m, t, c, sp, kids, d, y, vz):
 # ── Vectorized free descent + baselines + distortion ─────────────
 
 def net_values(model, tr):
+    """Stage-1 corrector values only (v4)."""
     P = len(tr["labs"])
     t = mx.array(tr["labs"].astype(np.float32))
-    def vals(c, sp, k, d):
-        rep = lambda a: mx.array(
-            np.repeat(a[None], P, 0).astype(np.float32))
-        return np.array(model(t, rep(c), rep(sp), rep(k), rep(d)))
+    rep = lambda a: mx.array(np.repeat(a[None], P, 0).astype(np.float32))
     desc1 = tr["d4"].reshape(2, 8, 3)
-    leaves8 = tr["leaves"].reshape(16, 8, 3)
-    return vals(tr["d1"], tr["v1"], tr["c1"], desc1), \
-           vals(tr["d4"], tr["v4"], tr["c4"], leaves8)
+    return np.array(model(t, rep(tr["d1"]), rep(tr["v1"]),
+                          rep(tr["c1"]), rep(desc1)))
 
 def free_descent(model, trees):
     hits = np.zeros(3); n = 0; nest_ok = True
     err_margin, hit_margin = [], []
     excess = []
     for tr in trees:
-        v1, _ = net_values(model, tr)
-        c1 = v1.argmin(axis=1)
+        c1 = net_values(model, tr).argmin(axis=1)
         labs = tr["labs"]; leaves = tr["leaves"]
         d2 = np.sum((labs[:, None, :] - leaves[None, :, :]) ** 2, axis=2)
         # stage 2 is LAW: exact-conditional lookahead over octet minima
@@ -345,7 +327,7 @@ def main():
     model = Scorer()
     n_params = sum(v.size for _, v in tree_flatten(model.parameters()))
 
-    t, st1, st2 = batch(train_trees)
+    t, st1 = batch(train_trees)
 
     def loss_fn(m):
         return stage_loss(m, t, *st1)      # stage 1 ONLY (v4)

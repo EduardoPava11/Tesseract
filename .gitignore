@@ -47,3 +47,5 @@ nn/phase/*.npz
 # SK gene corpus: emitted by spec/output/SKCorpusEmit.hs (make corpus),
 # byte-identical on regeneration — corpora are programs, never repo data.
 nn/sk-gene/corpus/
+nn/descent/corpus/
+nn/descent/DescentAssign.mlpackage/

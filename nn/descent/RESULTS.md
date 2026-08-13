@@ -49,11 +49,20 @@ ANE both are matmul-shaped, so the deployed win is the multi-exit
 ladder semantics + the learned stage-1 slot, not raw eval count —
 the A19 bench decides placement shapes (device-measured doctrine).
 
+## mlpackage fold — DONE (2026-08-12)
+
+`build_model.py` → `DescentAssign.mlpackage` (regenerable; not
+tracked, per the nn/ artifact precedent): ONE fused graph, fixed
+shapes, no loops, no gathers — the conditional selects are one-hot
+masks + global argmin (the DyadAssign role-select pattern, ANE-
+friendly). Corrector weights folded as constants from
+scorer_weights.npz. **Parity gate: 16,384/16,384 = 100% agreement
+with the NumPy v4 reference, zero disagreements** (fp32 CPU verify
+build; the fp16/ANE variant is a device-bench decision).
+
 ## Open (in order)
 
-1. mlpackage fold (MIL Builder): lookahead stages as batched
-   matmul/min ops + the 5.9k-param stage-1 corrector folded as
-   constants; exact-argmin leaf stage in-graph.
-2. Full-PCA corpus manifold (mirrored Jacobi + parity gates).
-3. XP2 parity harness vs the exact CPU search on the Swift side.
-4. Placement: gated on the A19 bench (⌘U) + device pass.
+1. Full-PCA corpus manifold (mirrored Jacobi + parity gates).
+2. XP2 parity harness vs the exact CPU search on the Swift side.
+3. Placement: gated on the A19 bench (⌘U) + device pass — bench
+   the fused graph's dispatch cost against DyadAssign's there.
