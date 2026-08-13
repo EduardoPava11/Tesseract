@@ -208,11 +208,16 @@ sits far below the ANE dispatch floor, so the mlpackage stays the
 Mac-side reference; nn/jepa/export_swift.py is the bridge, parity
 9e-16 via nn/jepa/parity_swift.sh + JepaHParityTests). Placement:
 DyadPipeline.jepaSmoothed pools the 64 per-frame stats to the
-rung-16 ring, steadies the corpus latent (centroid + log-
-diagonals), recombines off-diagonals as r_ij·√(c_ii·c_jj) (PSD by
-construction); frames share one state per slot, so tables hold at
-the 5 Hz cadence the preview already fits at. Bg-moments EMA
-unchanged. Flag CameraConfig.jepaH DEFAULT ON (one-line revert);
+rung-16 ring, steadies ONE 9-dim ring = the corpus latent
+(centroid + log-diagonals) PLUS the bg triple (meanL, meanLnC,
+log sdLnC) — JH4b fix @5d95fd4 after the 11EB44F0 hard review
+caught the split-cadence defect (figure half held per slot, churn
+−14%, logW→0; ground half churned +30% on the 20 Hz EMA). The head
+is per-dim + scale-free ⇒ extra dims need no retraining; off-
+diagonals recombine r_ij·√(c_ii·c_jj) (PSD by construction); bg
+gaps carry-fill around the torus; WHOLE tables hold at the 5 Hz
+cadence the preview already fits at. Flag CameraConfig.jepaH
+DEFAULT ON (one-line revert);
 "DYAD JEPAH v7" trace line = the attribution; trace rebuild stays
 byte-exact (the smoothed numbers ARE the generating state).
 PROMOTION still owed: real-capture RATE LEDGER + HARMONY
