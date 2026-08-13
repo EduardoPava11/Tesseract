@@ -20,12 +20,62 @@ Daniel's to resolve, not the implementer's. Rear work is preserved on
 capability (Haskell specs, the `nn/` Mac-side lab, pure Swift math) is
 welcome on main; rear *capture in the app* is not.
 
+## ★ CENTER STAGE gate — device targeting (Daniel, 2026-08-12)
+
+The app is for iPhones with the square-sensor 18MP Center Stage front
+camera (iPhone 17 / Air / 17 Pro / 17 Pro Max and later). Hardware
+predicate, no naked constants: that camera is the ONLY front-position
+`.builtInUltraWideCamera` ever shipped on iPhone (WWDC26 session 341
+"Support the Center Stage front camera in your iOS app"). Both
+managers gate on it at WAKING; failure = `noCenterStageMessage` →
+SurfaceMachine `.refused(.noCenterStage)` "NO CENTER STAGE", a
+TERMINAL hardware refusal (SM4, spec + Swift + tests all carry it).
+Capture itself still runs on `.builtInTrueDepthCamera` — the 17
+line's Face ID system keeps delivering synchronized RGB+depth, so
+LIVE and FACE are unchanged on eligible devices.
+
+STORE-LEVEL CUT (2026-08-12): UIRequiredDeviceCapabilities =
+[arm64, front-facing-camera, iphone-performance-gaming-tier] via
+INFOPLIST_KEY_ in project.yml (verified in the signed device build's
+Info.plist; the key is emitted for device builds only — simulator
+plists omit it by design). gaming-tier = A17 Pro+ (iPhone 15 Pro and
+later) is the TIGHTEST key Apple publishes — no key exists for
+Center Stage, TrueDepth, or A18/A19 — so 15 Pro/16-line users can
+still install and hit the terminal NO CENTER STAGE screen. The App
+Store description must state "Requires iPhone 17, iPhone Air, or
+later", and App Review notes should say the same + why (reviewers
+on 16-line hardware will see the refusal screen; that is the
+designed behavior, not a bug).
+
+iOS 27 note (researched 2026-08-12): iOS 27 is in beta (releases
+~Sept 2026) and supports the same devices as iOS 26 (iPhone 11+),
+so raising the deployment target buys NO hardware targeting — the
+runtime gate is the mechanism. Deployment target stays iOS 26.0
+(every 17-line device ships with 26); nothing here needs iOS 27
+APIs, and this Mac's Xcode 26.6 has no 27 SDK yet. The new
+Center Stage APIs (dynamicAspectRatio, AVCaptureSmartFramingMonitor,
+sensor mounted PORTRAIT unlike older front cameras) are available
+from iOS 26 if ever wanted.
+
 ## Architecture
 
+★ THE ATLAS (2026-08-13): `docs/ATLAS.md` is the full stage map — all 101
+canonical stages on a MOVEMENT × CATEGORY coordinate (movement = which
+SurfaceMachine word is being spoken when the stage runs; category = SENSE /
+SIGNAL / SOLVE / LEARN / WEAVE / SURFACE / METER / LAW). `docs/ATLAS-TUNABLES.md`
+catalogues all 447 frozen choices with anchors. Read the atlas before adding a
+stage, and give the new stage a name and a coordinate in it. §7 holds the
+ruled next direction (THE OCTAVE — κ/σ over the 64³ spacetime cube; promote
+RUNGING from METER to SIGNAL first, dial last).
+
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (46 files green
-  as of 2026-08-12 — RateLadder.hs + PairTree.hs + SurfaceMachine.hs +
-  DescentLadder.hs + JepaH.hs added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+- `spec/` — runghc axiom suite: `cd spec && make test` (54 files green
+  as of 2026-08-13 — the EDIT-APP arc added RoleAllocation.hs,
+  Octave.hs, EditMachine.hs, FeedCompression.hs, PhaseTiling.hs,
+  WidgetGrid.hs, AttractorRAG.hs, then DetentDial.hs; the tally must
+  stay at zero failures). ★ The harness fails a file on nonzero exit OR **any `✗`
+  it prints** — never use that glyph decoratively in spec output,
+  only in the axiom checklist. The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
   MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
   keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
@@ -54,8 +104,9 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   (capped — the dictionary's role law). Trace "DYAD STATS v2" =
   9 stats + 3 moments + cap per frame; rebuildTables parses v1
   (prior path) AND v2 — the GIF still carries its full generator.
-  DyadPreview fits the same law at the rung-16 cadence. ASSIGNMENT
-  never changed: comp = OKLab negation, DyadAssign ANE untouched.
+  The live surface fits the same law at the rung-16 cadence because
+  it IS this pipeline (EM13). ASSIGNMENT never changed: comp = OKLab
+  negation, DyadAssign ANE untouched.
 - ★ANE LOOPS (2026-08-11, Daniel's ruling; docs/ane-loop-design.md):
   fixed-K exchange sweeps over 4³ spacetime blocks, descent on F.
   spec/neural/ANELoop.hs AL1–AL8 green (M diagonal in Haar bands,
@@ -114,9 +165,9 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   cost), offsets compose o₁+2o₂ so odd phases need fresh fine reads.
   CARRIER stays aligned (only phase 0 telescopes); phases are a READ
   cadence. Phase-cycling telemetry reads (ladder, Dissonance tuning)
-  needs no ruling; offsetting DyadPreview's GIF-shaping slow state
-  AWAITS RULING (and its ≤16 EMA ring must scale with cadence to
-  keep the 3.2 s span law).
+  needs no ruling; offsetting the LIVE solve's GIF-shaping cadence
+  AWAITS RULING (its ring is Rung.coarse.frames, so the 3.2 s span
+  law now scales with the rung by construction).
   Gates: spec TL1–TL12 + TesseractTests/TriScaleLadderTests.
 - THE DISSONANCE WEAVE (2026-08-10, design docs/dissonance-weave-design.md):
   Sethares/Plomp-Levelt roughness ported as ONE kernel, three ports —
@@ -156,6 +207,30 @@ delay = 20 fps. Byte-level contract locked by `DyadGIFContractTests`
 (per-frame LCTs + ground law in every table). DYAD exports carry a
 "DYAD HARMONY" provenance comment (Ou & Luo pair score over all
 frames).
+
+★ THE PREVIEW IS THE GIF (Daniel's decree, 2026-08-13;
+spec/ui/EditMachine.hs EM12/EM13): weave = watch + keep — WATCHING
+and WEAVING run the SAME encoder and differ only in RETENTION, so a
+second preview implementation cannot exist. DyadPreview.swift is
+DELETED; `DyadPipeline.Live` is a DRIVER over `DyadPipeline` itself,
+not a second law. The read pools the fine feed to the coarse rung
+(κ = 4 in space × 4 in time) carrying the within-cell depth variance
+so DM11's τ-lift keeps the band the fine rung's; the solve is
+`DyadPipeline.process` over the 16-frame coarse cube = the last
+3.2 s = one loop (so the surface shows the GIF the last loop would
+have made — with the MS-filtered fits, the derived-α EMA, the ground
+law AND ★JEPA-H, none of which the preview used to get); the 20 Hz
+assignment at the fine rung calls the pipeline's own `stagedField` /
+`assignRoles` / `chaosPool` / `pairDitherFrame`. The ladder is the
+ONLY parameter — solve at rung 16 / 5 Hz (TL8/TL9), assign at rung
+64 / 20 Hz, the same split `process` already obeys. BLEED is read
+live, so the setting now answers on the surface. MetalState moved to
+DyadPipeline; the aerialPreview kernel is unchanged. KNOWN REMAINING
+GAP (deliberate): the live σ-side chaos target pools the CURRENT
+frame only where the export pools the 4-frame S4 group — closing it
+means feeding pooled targets to the kernel as a buffer instead of
+its in-kernel 16-texel pool. DEVICE PASS OWED: the 5 Hz solve now
+costs a pooled EM fit over 4096 coarse samples + 16 per-frame fits.
 
 ★ RATE LADDER (Daniel's ruling, 2026-08-12: "use the math and
 redesign the whole pipeline — in small steps, stratified; 2×2×2 ↔ 1
@@ -247,8 +322,8 @@ function of the traced 13 numbers → DYAD STATS v3 (rings remain
 the v1/v2 rebuild path); σ-side chaos targets = 4×4×4 SPACETIME
 block means (S4) quantized at the 32-LEVEL (16 depth-4 nodes ×
 canonical leaves — prefix law, P2) in all three ports
-(DyadPipeline.pairDither, DyadPreview.assignCPU, aerialPreview
-kernel buffer(3)); CameraConfig.pairTree = true (one-line revert);
+(DyadPipeline.pairDitherFrame — export and live
+surface alike — and the aerialPreview kernel buffer(3)); CameraConfig.pairTree = true (one-line revert);
 PairTreeTests on sim. cL for the ground family = the stats
 centroid (tree T[0] is a corner leaf, not the centroid). DEVICE
 PASS OWED. P3 (Mac lab) / P4 (mlpackage + hierarchical ANE
@@ -269,9 +344,9 @@ renders flat at rung 16 and the Bayer coverage t makes the blur
 emerge exactly as fast as the chaos does — zero new constants,
 seam-death preserved. Spec: DyadPalette.hs §3b/§6c/§6d, DY10/DY11
 (hue-faithful axiom)/DY14 (colinear)/DY16 (blur laws) + PhasePalette
-groundLab — all green. Ports: DyadPipeline.pairDither,
-DyadPreview.assignCPU, Quantize.metal aerialPreview (16-texel block
-pool in-kernel). comp() survives as the §3 map (DY3) but no longer
+groundLab — all green. Ports: DyadPipeline.pairDitherFrame +
+chaosPool (export and live surface alike), Quantize.metal
+aerialPreview (16-texel block pool in-kernel). comp() survives as the §3 map (DY3) but no longer
 routes assignment. ANE DyadAssign untouched. Device pass owed.
 
 ## UI (SIMPLICITY DECREE, 2026-08-09)
@@ -326,10 +401,10 @@ widened. SECOND PASS same day: the whole TypeRows registry grew
   comp(centroid) fill is dead. Known blemish: chroma seam at
   t = 31/32 (band pulled, far raw) — dissolves under the AERIAL
   MIRROR LAW, see docs/depth-color-scales.md.
-- PREVIEW/EXPORT UNIFICATION v1 (DyadPreview.swift): LOOK=dyad
-  previews through the export law — assignment at 20 Hz on 64²,
+- PREVIEW/EXPORT UNIFICATION v1 (was DyadPreview.swift; SUPERSEDED
+  and DELETED by EM13, see ★THE PREVIEW IS THE GIF above): the
+  cadence it established survives — assignment at 20 Hz on 64²,
   mixture/stats/derived-α/table at the 5 Hz rung-16 cadence (TL8/9).
-  FACE preview still lattice quick-quantize (v1 scope).
 - PALETTE-CREATION VISIBILITY: DyadPipeline.process(onFrameTable:) →
   liveTable on both managers → CellPalette swatch (16×16 entries) in
   the processing scene. CellPalette is a Cells primitive.
@@ -344,8 +419,8 @@ widened. SECOND PASS same day: the whole TypeRows registry grew
   (DY9–DY12, DM11/DM12) AND SWIFT+METAL PORT DONE (Daniel's go,
   2026-08-10 late, comp-halo default): DyadPipeline γ-stages every
   pixel + stats-on-ŷ (no band pull, no t=31/32 seam; ANE untouched);
-  DepthMixture.fitLifted (τ-lift); DyadPreview = τ-lifted rung-16
-  fit + γ-staged assignment, FACE unified (CPU); Metal aerialPreview
+  DepthMixture.fitLifted (τ-lift); the live surface = τ-lifted
+  rung-16 fit + γ-staged assignment, FACE unified (CPU); Metal aerialPreview
   kernel = the 20 Hz GPU assignment twin (meters→signal in-kernel,
   anchors from DepthSignal; optional state, CPU fallback). OPEN:
   ruling R4 (comp-halo vs faithful-hue — DY11 measured faithful as

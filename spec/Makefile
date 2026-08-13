@@ -25,7 +25,10 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/PairPermutations.hs \
                quantization/SpectralPalette.hs \
                quantization/PhasePalette.hs \
-               quantization/PairTree.hs
+               quantization/PairTree.hs \
+               quantization/RoleAllocation.hs \
+               quantization/Octave.hs \
+               quantization/AttractorRAG.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -50,7 +53,8 @@ STATISTICS = statistics/BinomialCube.hs \
              statistics/WassersteinPalette.hs \
              statistics/StatsVariance.hs \
              statistics/PhaseEnergy.hs \
-             statistics/Dissonance.hs
+             statistics/Dissonance.hs \
+             statistics/PhaseTiling.hs
 
 # DeviationManifold.hs exceeds default read but compiles fine.
 STATISTICS_EXTRA = statistics/DeviationManifold.hs
@@ -64,7 +68,10 @@ NEURAL = neural/BayerResidual.hs \
          neural/JepaH.hs
 
 UI = ui/CellMechanics.hs \
-     ui/SurfaceMachine.hs
+     ui/SurfaceMachine.hs \
+     ui/EditMachine.hs \
+     ui/WidgetGrid.hs \
+     ui/DetentDial.hs
 
 HARMONY = harmony/SetListDissonance.hs
 
@@ -73,7 +80,8 @@ OUTPUT = output/FrameGeometry.hs \
          output/BreakInvariants.hs \
          output/ExportMethods.hs \
          output/TriScaleLadder.hs \
-         output/RateLadder.hs
+         output/RateLadder.hs \
+         output/FeedCompression.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
 OUTPUT_EXTRA = output/RealTesseract.hs \
