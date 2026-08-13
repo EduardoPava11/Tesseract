@@ -295,6 +295,49 @@ axiom_DL4 = and
                 cands
           in gap : go (path ++ best) rest
 
+-- (DL6) CONDITIONAL EXACTNESS (the v4 law, measured in the lab
+--       run of 2026-08-12 and pinned here): given the half that
+--       contains the teacher's leaf, committing at stage 2 to the
+--       octet with the smallest MIN-LEAF distance and then taking
+--       the exact leaf argmin recovers EXACTLY the teacher's leaf,
+--       for every tree and probe. Stages 2 and 3 are therefore
+--       LAW, not learning; the only learnable blindness left in
+--       the descent is the stage-1 half choice.
+axiom_DL6 :: Bool
+axiom_DL6 = and
+  [ let ls = leaves root
+        e = exhaustive ls p
+        h = e `div` 64
+        octs = [ (minimum [ d2 (ls !! (o * 8 + r)) p | r <- [0 .. 7] ], o)
+               | o <- [h * 8 .. h * 8 + 7] ]
+        o' = snd (minimum octs)
+        leaf' = o' * 8 + snd (minimum
+          [ (d2 (ls !! (o' * 8 + r)) p, r) | r <- [0 .. 7] ])
+    in leaf' == e
+  | root <- gaussTrees, p <- probesFor 80 root ]
+
+-- (DL7) LOOKAHEAD DOMINANCE: the stage-1 lookahead rule (commit to
+--       the half whose depth-4 DESCENDANT layer holds the nearest
+--       node) is at least as accurate as the mean-greedy rule on
+--       every fixture probe set — the lawful baseline any learned
+--       stage-1 correction must beat.
+axiom_DL7 :: Bool
+axiom_DL7 = and
+  [ countRight lookRule root >= countRight meanRule root
+  | root <- gaussTrees ]
+  where
+    countRight rule root = length
+      [ () | p <- probesFor 80 root
+           , rule root p == exhaustive (leaves root) p `div` 64 ]
+    meanRule root p =
+      let m0 = gMean (nodeAt [0] root); m1 = gMean (nodeAt [1] root)
+      in if d2 (toLab m0) p <= d2 (toLab m1) p then 0 else 1
+    lookRule root p =
+      let d4h h = minimum
+            [ d2 (toLab (gMean (nodeAt (bits h k) root))) p | k <- [0 .. 7] ]
+          bits h k = [h] ++ [ (k `shiftR` j) .&. 1 | j <- [2, 1, 0] ]
+      in if d4h 0 <= d4h 1 then 0 else 1
+
 -- (DL5) CORPUS LAW: the sampler is deterministic (same seed, same
 --       probes), its variances are nonnegative by construction
 --       (lawful stats), and labels for ALL exits come from the
@@ -328,6 +371,8 @@ main = do
   check "DL3 separated: descent == exhaustive at every level"        [axiom_DL3]
   check "DL4 near-tie: disagreement ⇒ bounded by the stage gap"      [axiom_DL4]
   check "DL5 corpus: deterministic, lawful, exhaustive teacher only" [axiom_DL5]
+  check "DL6 conditional exactness: stages 2-3 are LAW given the half" [axiom_DL6]
+  check "DL7 lookahead dominance: the lawful stage-1 baseline"        [axiom_DL7]
   putStrLn ""
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn " THE PRINCIPLE"

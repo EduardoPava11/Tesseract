@@ -206,7 +206,7 @@ sampleProbes n (mu, var) seed =
 -- ── Emission ─────────────────────────────────────────────────────
 
 sampleCount, probeCount :: Int
-sampleCount = 256
+sampleCount = 768
 probeCount = 192
 
 jNum :: Double -> String

@@ -53,9 +53,9 @@ def srgb8_to_oklab(rgb8):
     return np.cbrt(lms) @ M2.T
 
 def node_means(mu, var):
-    """Analytic axis-aligned tree: node (mean, remaining-var) at
-    depths 1 and 4 -- the spread is the lookahead radius greedy-L2
-    ignores, and the feature that makes commitment learnable."""
+    """Analytic axis-aligned tree: node (mean, remaining-var, and the
+    two CHILD means -- one-step lookahead geometry, free arithmetic)
+    at depths 1 and 4."""
     def descend(mean, v, depth):
         if depth == 0:
             return [(mean, v)]
@@ -65,13 +65,21 @@ def node_means(mu, var):
         lo = mean.copy(); lo[a] -= off
         hi = mean.copy(); hi[a] += off
         return descend(lo, vv, depth - 1) + descend(hi, vv, depth - 1)
+    def children(mean, v):
+        a = int(np.argmax(v))
+        off = math.sqrt(v[a]) * HALF_MEAN
+        lo = mean.copy(); lo[a] -= off
+        hi = mean.copy(); hi[a] += off
+        return lo, hi
     mu = np.asarray(mu, dtype=np.float64)
     var = np.asarray(var, dtype=np.float64)
     n1 = descend(mu, var, 1)
     n4 = descend(mu, var, 4)
     d1 = np.array([m for m, _ in n1]); v1 = np.array([v for _, v in n1])
     d4 = np.array([m for m, _ in n4]); v4 = np.array([v for _, v in n4])
-    return d1, v1, d4, v4
+    c1 = np.array([np.stack(children(m, v)) for m, v in n1])   # [2,2,3]
+    c4 = np.array([np.stack(children(m, v)) for m, v in n4])   # [16,2,3]
+    return d1, v1, c1, d4, v4, c4
 
 # ── Corpus ───────────────────────────────────────────────────────
 
@@ -83,175 +91,314 @@ def load(path="corpus/samples.jsonl"):
     return samples
 
 def assemble(samples):
-    rows = []
+    trees = []
     for s in samples:
-        d1, v1, d4, v4 = node_means(s["mu"], s["var"])
+        d1, v1, c1, d4, v4, c4 = node_means(s["mu"], s["var"])
         leaf_labs = srgb8_to_oklab(np.array(s["figures"]))
-        for p in s["probes"]:
-            rows.append(dict(
-                lab=np.array(p["lab"]), leaf=p["leaf"], c16=p["c16"],
-                c2=p["c2"], d1=d1, v1=v1, d4=d4, v4=v4,
-                leaves=leaf_labs, seed=s["seed"]))
-    return rows
+        labs = np.stack([p["lab"] for p in s["probes"]])
+        trees.append(dict(
+            seed=s["seed"], labs=labs,
+            leaf=np.array([p["leaf"] for p in s["probes"]]),
+            c16=np.array([p["c16"] for p in s["probes"]]),
+            c2=np.array([p["c2"] for p in s["probes"]]),
+            d1=d1, v1=v1, c1=c1, d4=d4, v4=v4, c4=c4, leaves=leaf_labs))
+    return trees
 
 # ── Model: one shared per-candidate scorer, stage-conditioned ────
 
 class Scorer(nn.Module):
-    """Commitment scorer for stages 1-2 ONLY. Stage 3 (the leaf) is
-    the EXACT L2 argmin -- provably optimal given the octet, so it
-    is law, not learning (the first training run measured exactly
-    this: the net beat greedy at commitment and lost at the leaf)."""
+    """Commitment VALUE model for stages 1-2 ONLY. Stage 3 (the
+    leaf) is the EXACT L2 argmin. Predicts (a z-scored proxy of)
+    each candidate subtree's min leaf distance -- distilling the
+    exact lookahead the greedy descent lacks. Commit = argmin v.
 
-    def __init__(self, hidden=32):
+    v4 (the final contraction): the net corrects STAGE 1 ONLY.
+    Run 3 measured that lookahead-L2 (commit to the candidate whose
+    descendant layer holds the nearest point) is exact at stage 2
+    and 96.5% at stage 1 -- so stages 2-3 are LAW and the learned
+    correction lives solely where the law is blind: the stage-1
+    half choice. Features per candidate: diff(3), |diff|(3), sd(3),
+    Mahalanobis(3), child distances(2), the FULL SORTED descendant
+    distance vector (8 -- reuse of distances the later stages
+    compute anyway), and the target(3) -- 25 dims."""
+
+    def __init__(self, hidden=64):
         super().__init__()
-        # features: diff(3) + |diff|(3) + spread sd(3) + whitened
-        # diff (Mahalanobis, 3) + target(3) — the commitment problem's
-        # natural coordinates
-        self.l1 = nn.Linear(15, hidden)
+        self.l1 = nn.Linear(25, hidden)
         self.l2 = nn.Linear(hidden, hidden)
         self.l3 = nn.Linear(hidden, 1)
 
-    def __call__(self, target, cands, spreads):
-        # target [N,3], cands [N,C,3], spreads [N,C,3] (remaining var)
+    def __call__(self, target, cands, spreads, childs, desc):
+        # target [N,3], cands [N,C,3], spreads [N,C,3],
+        # childs [N,C,2,3], desc [N,C,D,3] (descendant layer)
         N, C, _ = cands.shape
         t = mx.broadcast_to(target[:, None, :], (N, C, 3))
         diff = cands - t
         sd = mx.sqrt(spreads) + 1e-6
+        cd = childs - t[:, :, None, :]                    # [N,C,2,3]
+        cdist = mx.sqrt(mx.sum(cd * cd, axis=-1) + 1e-12)  # [N,C,2]
+        dd = desc - t[:, :, None, :]                       # [N,C,D,3]
+        ddist = mx.sqrt(mx.sum(dd * dd, axis=-1) + 1e-12)  # [N,C,D]
+        dsorted = mx.sort(ddist, axis=-1)                   # [N,C,8]
         x = mx.concatenate(
-            [diff, mx.abs(diff), sd, mx.abs(diff) / sd, t], axis=-1)
+            [diff, mx.abs(diff), sd, mx.abs(diff) / sd, cdist, dsorted, t],
+            axis=-1)
         h = nn.gelu(self.l1(x))
         h = nn.gelu(self.l2(h))
-        return self.l3(h)[..., 0]        # [N,C] logits
+        # RESIDUAL ON THE EXACT LOOKAHEAD: the spine is the
+        # descendant-layer min distance^2 (row-standardized); the MLP
+        # is only a correction. At zero correction the model IS the
+        # lookahead descent -- learning starts from the strongest
+        # lawful baseline instead of from noise.
+        dmin2 = mx.min(ddist, axis=-1) ** 2                 # [N,C]
+        mu = mx.mean(dmin2, axis=1, keepdims=True)
+        sdr = mx.sqrt(mx.var(dmin2, axis=1, keepdims=True)) + 1e-9
+        spine = (dmin2 - mu) / sdr
+        return spine + 0.1 * self.l3(h)[..., 0]  # [N,C] predicted value
 
 def ce(logits, labels):
     return mx.mean(nn.losses.cross_entropy(logits, labels))
 
-# ── Assembly into arrays (teacher-forced stages) ─────────────────
+# ── Batched training data with VALUE targets ────────────────────
+#
+# For every candidate node, the exact lookahead value = min over
+# its descendant leaves of d^2(leaf, probe). Training-time only
+# (numpy, corpus prep) -- the deployed model never pays these
+# evals; it learns to predict them. Targets are z-scored per row
+# across the candidate set (self-normalizing: no scale constant).
 
-def arrays(rows):
-    lab = np.stack([r["lab"] for r in rows])
-    s1_c = np.stack([r["d1"] for r in rows])
-    s1_v = np.stack([r["v1"] for r in rows])
-    s1_y = np.array([r["c2"] for r in rows])
-    s2_c = np.stack([r["d4"][r["c2"] * 8:(r["c2"] + 1) * 8] for r in rows])
-    s2_v = np.stack([r["v4"][r["c2"] * 8:(r["c2"] + 1) * 8] for r in rows])
-    s2_y = np.array([r["c16"] % 8 for r in rows])
-    return (mx.array(lab.astype(np.float32)),
-            [(mx.array(c.astype(np.float32)), mx.array(v.astype(np.float32)),
-              mx.array(y)) for c, v, y in
-             [(s1_c, s1_v, s1_y), (s2_c, s2_v, s2_y)]])
+def value_targets(tree):
+    labs = tree["labs"]                       # [P,3]
+    leaves = tree["leaves"]                   # [128,3]
+    d2 = np.sum((labs[:, None, :] - leaves[None, :, :]) ** 2, axis=2)
+    v1 = np.stack([d2[:, :64].min(axis=1), d2[:, 64:].min(axis=1)], axis=1)
+    v4 = np.stack([d2[:, o * 8:(o + 1) * 8].min(axis=1) for o in range(16)],
+                  axis=1)                     # [P,16]
+    return v1, v4
 
-# ── Free descent (the net drives) + greedy-L2 baseline ───────────
+def zscore(v):
+    m = v.mean(axis=1, keepdims=True)
+    sd = v.std(axis=1, keepdims=True) + 1e-9
+    return (v - m) / sd
 
-def free_descent(model, rows):
-    hits = np.zeros(3, dtype=int)
-    nest_ok = True
+def batch(trees):
+    """Flatten all trees into stage-1 and stage-2 training arrays.
+    Stage 2 is teacher-forced under the TRUE half."""
+    T, C1, S1, K1, D1, Y1, V1 = [], [], [], [], [], [], []
+    C2, S2, K2, D2, Y2, V2 = [], [], [], [], [], []
+    for tr in trees:
+        P = len(tr["labs"])
+        v1, v4 = value_targets(tr)
+        T.append(tr["labs"])
+        C1.append(np.repeat(tr["d1"][None], P, 0))
+        S1.append(np.repeat(tr["v1"][None], P, 0))
+        K1.append(np.repeat(tr["c1"][None], P, 0))
+        desc1 = tr["d4"].reshape(2, 8, 3)      # each half's 8 d4 nodes
+        D1.append(np.repeat(desc1[None], P, 0))
+        Y1.append(tr["c2"])
+        V1.append(zscore(v1))
+        half = tr["c2"]                        # teacher forcing
+        idx = np.stack([np.arange(h * 8, (h + 1) * 8) for h in half])
+        C2.append(tr["d4"][idx])
+        S2.append(tr["v4"][idx])
+        K2.append(tr["c4"][idx])
+        leaves8 = tr["leaves"].reshape(16, 8, 3)   # each octet's leaves
+        D2.append(leaves8[idx])
+        Y2.append(tr["c16"] % 8)
+        V2.append(zscore(np.take_along_axis(v4, idx, axis=1)))
+    def cat(xs): return np.concatenate(xs, axis=0)
+    f32 = lambda x: mx.array(cat(x).astype(np.float32))
+    i32 = lambda x: mx.array(cat(x).astype(np.int32))
+    return (f32(T),
+            (f32(C1), f32(S1), f32(K1), f32(D1), i32(Y1), f32(V1)),
+            (f32(C2), f32(S2), f32(K2), f32(D2), i32(Y2), f32(V2)))
+
+def stage_loss(m, t, c, sp, kids, d, y, vz):
+    v = m(t, c, sp, kids, d)                  # predicted value [N,C]
+    lce = mx.mean(nn.losses.cross_entropy(-v, y))
+    lval = mx.mean((v - vz) ** 2)
+    return lce + lval
+
+# ── Vectorized free descent + baselines + distortion ─────────────
+
+def net_values(model, tr):
+    P = len(tr["labs"])
+    t = mx.array(tr["labs"].astype(np.float32))
+    def vals(c, sp, k, d):
+        rep = lambda a: mx.array(
+            np.repeat(a[None], P, 0).astype(np.float32))
+        return np.array(model(t, rep(c), rep(sp), rep(k), rep(d)))
+    desc1 = tr["d4"].reshape(2, 8, 3)
+    leaves8 = tr["leaves"].reshape(16, 8, 3)
+    return vals(tr["d1"], tr["v1"], tr["c1"], desc1), \
+           vals(tr["d4"], tr["v4"], tr["c4"], leaves8)
+
+def free_descent(model, trees):
+    hits = np.zeros(3); n = 0; nest_ok = True
     err_margin, hit_margin = [], []
-    for r in rows:
-        t = mx.array(r["lab"].astype(np.float32))[None, :]
-        c1 = int(mx.argmax(model(t,
-            mx.array(r["d1"].astype(np.float32))[None],
-            mx.array(r["v1"].astype(np.float32))[None])[0]).item())
-        kids = r["d4"][c1 * 8:(c1 + 1) * 8]
-        kv = r["v4"][c1 * 8:(c1 + 1) * 8]
-        c2 = int(mx.argmax(model(t,
-            mx.array(kids.astype(np.float32))[None],
-            mx.array(kv.astype(np.float32))[None])[0]).item())
-        c16 = c1 * 8 + c2
-        # stage 3 is LAW: exact L2 argmin within the octet
-        leaves = r["leaves"][c16 * 8:(c16 + 1) * 8]
-        c3 = int(np.argmin(np.sum((leaves - r["lab"]) ** 2, axis=1)))
-        leaf = c16 * 8 + c3
-        hits[0] += (c1 == r["c2"])
-        hits[1] += (c16 == r["c16"])
-        hits[2] += (leaf == r["leaf"])
-        nest_ok &= (leaf >> 3 == c16) and (leaf >> 6 == c1)   # DL2
-        d = np.sum((r["leaves"] - r["lab"]) ** 2, axis=1)
-        srt = np.sort(d)
-        margin = math.sqrt(srt[1]) - math.sqrt(srt[0])
-        (hit_margin if leaf == r["leaf"] else err_margin).append(margin)
-    n = len(rows)
-    return hits / n, nest_ok, err_margin, hit_margin
+    excess = []
+    for tr in trees:
+        v1, _ = net_values(model, tr)
+        c1 = v1.argmin(axis=1)
+        labs = tr["labs"]; leaves = tr["leaves"]
+        d2 = np.sum((labs[:, None, :] - leaves[None, :, :]) ** 2, axis=2)
+        # stage 2 is LAW: exact-conditional lookahead over octet minima
+        oct_min = np.stack([d2[:, o * 8:(o + 1) * 8].min(axis=1)
+                            for o in range(16)], axis=1)
+        masked = np.full_like(oct_min, np.inf)
+        for h in (0, 1):
+            sel = c1 == h
+            masked[sel, h * 8:(h + 1) * 8] = oct_min[sel, h * 8:(h + 1) * 8]
+        c16 = masked.argmin(axis=1)
+        oct_mask = np.full_like(d2, np.inf)
+        for p in range(len(labs)):
+            o = c16[p]
+            oct_mask[p, o * 8:(o + 1) * 8] = d2[p, o * 8:(o + 1) * 8]
+        leaf = oct_mask.argmin(axis=1)
+        hits[0] += (c1 == tr["c2"]).sum()
+        hits[1] += (c16 == tr["c16"]).sum()
+        hits[2] += (leaf == tr["leaf"]).sum()
+        nest_ok &= bool(np.all(leaf >> 3 == c16) and np.all(c16 >> 3 == c1))
+        n += len(labs)
+        srt = np.sort(np.sqrt(d2), axis=1)
+        margins = srt[:, 1] - srt[:, 0]
+        wrong = leaf != tr["leaf"]
+        err_margin += margins[wrong].tolist()
+        hit_margin += margins[~wrong].tolist()
+        # excess distortion of the CHOSEN leaf vs the teacher's
+        chosen = np.sqrt(d2[np.arange(len(labs)), leaf])
+        best = np.sqrt(d2[np.arange(len(labs)), tr["leaf"]])
+        excess += (chosen - best).tolist()
+    return hits / n, nest_ok, err_margin, hit_margin, float(np.mean(excess))
 
-def greedy_l2(rows):
-    hits = np.zeros(3, dtype=int)
-    for r in rows:
-        c1 = int(np.argmin(np.sum((r["d1"] - r["lab"]) ** 2, axis=1)))
-        kids = r["d4"][c1 * 8:(c1 + 1) * 8]
-        c2 = int(np.argmin(np.sum((kids - r["lab"]) ** 2, axis=1)))
-        c16 = c1 * 8 + c2
-        leaves = r["leaves"][c16 * 8:(c16 + 1) * 8]
-        c3 = int(np.argmin(np.sum((leaves - r["lab"]) ** 2, axis=1)))
-        leaf = c16 * 8 + c3
-        hits[0] += (c1 == r["c2"]); hits[1] += (c16 == r["c16"])
-        hits[2] += (leaf == r["leaf"])
-    return hits / len(rows)
+def lookahead_l2(trees):
+    """The lawful spine as its own baseline: commit to the candidate
+    whose DESCENDANT LAYER holds the nearest point (stage 1: min
+    over its 8 depth-4 nodes; stage 2: min over its 8 leaves =
+    exact conditional). The net must beat THIS, not just greedy."""
+    hits = np.zeros(3); n = 0; excess = []
+    for tr in trees:
+        labs = tr["labs"]
+        d4c = np.sum((labs[:, None, :] - tr["d4"][None]) ** 2, axis=2)
+        c1 = np.stack([d4c[:, :8].min(axis=1),
+                       d4c[:, 8:].min(axis=1)], axis=1).argmin(axis=1)
+        d2 = np.sum((labs[:, None, :] - tr["leaves"][None]) ** 2, axis=2)
+        oct_min = np.stack([d2[:, o * 8:(o + 1) * 8].min(axis=1)
+                            for o in range(16)], axis=1)
+        masked = np.full_like(oct_min, np.inf)
+        for h in (0, 1):
+            sel = c1 == h
+            masked[sel, h * 8:(h + 1) * 8] = oct_min[sel, h * 8:(h + 1) * 8]
+        c16 = masked.argmin(axis=1)
+        oct_mask = np.full_like(d2, np.inf)
+        for p in range(len(labs)):
+            o = c16[p]
+            oct_mask[p, o * 8:(o + 1) * 8] = d2[p, o * 8:(o + 1) * 8]
+        leaf = oct_mask.argmin(axis=1)
+        hits[0] += (c1 == tr["c2"]).sum()
+        hits[1] += (c16 == tr["c16"]).sum()
+        hits[2] += (leaf == tr["leaf"]).sum()
+        n += len(labs)
+        chosen = np.sqrt(d2[np.arange(len(labs)), leaf])
+        best = np.sqrt(d2[np.arange(len(labs)), tr["leaf"]])
+        excess += (chosen - best).tolist()
+    return hits / n, float(np.mean(excess))
+
+def greedy_l2(trees):
+    hits = np.zeros(3); n = 0; excess = []
+    for tr in trees:
+        labs = tr["labs"]
+        d1c = np.sum((labs[:, None, :] - tr["d1"][None]) ** 2, axis=2)
+        c1 = d1c.argmin(axis=1)
+        d4c = np.sum((labs[:, None, :] - tr["d4"][None]) ** 2, axis=2)
+        masked = np.full_like(d4c, np.inf)
+        for h in (0, 1):
+            sel = c1 == h
+            masked[sel, h * 8:(h + 1) * 8] = d4c[sel, h * 8:(h + 1) * 8]
+        c16 = masked.argmin(axis=1)
+        d2 = np.sum((labs[:, None, :] - tr["leaves"][None]) ** 2, axis=2)
+        oct_mask = np.full_like(d2, np.inf)
+        for p in range(len(labs)):
+            o = c16[p]
+            oct_mask[p, o * 8:(o + 1) * 8] = d2[p, o * 8:(o + 1) * 8]
+        leaf = oct_mask.argmin(axis=1)
+        hits[0] += (c1 == tr["c2"]).sum()
+        hits[1] += (c16 == tr["c16"]).sum()
+        hits[2] += (leaf == tr["leaf"]).sum()
+        n += len(labs)
+        chosen = np.sqrt(d2[np.arange(len(labs)), leaf])
+        best = np.sqrt(d2[np.arange(len(labs)), tr["leaf"]])
+        excess += (chosen - best).tolist()
+    return hits / n, float(np.mean(excess))
 
 # ── Train ────────────────────────────────────────────────────────
 
 def main():
     samples = load()
-    train_rows = assemble([s for s in samples if s["seed"] <= 224])
-    val_rows = assemble([s for s in samples if s["seed"] > 224])
-    print(f"corpus: {len(train_rows)} train / {len(val_rows)} val probes "
-          f"({len(samples)} trees)")
+    n_trees = len(samples)
+    split = int(n_trees * 7 / 8)
+    train_trees = assemble([s for s in samples if s["seed"] <= split])
+    val_trees = assemble([s for s in samples if s["seed"] > split])
+    print(f"corpus: {n_trees} trees -> {split} train / {n_trees - split} val")
 
     mx.random.seed(64)
     model = Scorer()
     n_params = sum(v.size for _, v in tree_flatten(model.parameters()))
 
-    lab, stages = arrays(train_rows)
+    t, st1, st2 = batch(train_trees)
 
     def loss_fn(m):
-        return sum(ce(m(lab, c, v), y) for (c, v, y) in stages)
+        return stage_loss(m, t, *st1)      # stage 1 ONLY (v4)
 
-    # G1 determinism: the seeded first loss must reproduce.
     first = float(loss_fn(model).item())
     mx.random.seed(64)
-    model2 = Scorer()
-    g1 = abs(float(loss_fn(model2).item()) - first) < 1e-6
+    g1 = abs(float(loss_fn(Scorer()).item()) - first) < 1e-6
 
-    opt = optim.adam(learning_rate=3e-3) if hasattr(optim, "adam") \
-        else optim.Adam(learning_rate=3e-3)
+    opt = optim.AdamW(learning_rate=3e-3, weight_decay=1e-4)
     lg = nn.value_and_grad(model, loss_fn)
-    for it in range(900):
+    for it in range(2000):
         l, grads = lg(model)
         opt.update(model, grads)
         mx.eval(model.parameters())
-        if it % 150 == 0:
+        if it % 200 == 0:
             print(f"  iter {it:4d}  loss {float(l.item()):.4f}")
 
-    base_v = greedy_l2(val_rows)
-    acc_v, nest_ok, err_m, hit_m = free_descent(model, val_rows)
-    base_t = greedy_l2(train_rows)
-    acc_t, _, _, _ = free_descent(model, train_rows)
+    base_v, base_ex = greedy_l2(val_trees)
+    look_v, look_ex = lookahead_l2(val_trees)
+    acc_v, nest_ok, err_m, hit_m, net_ex = free_descent(model, val_trees)
+    base_t, _ = greedy_l2(train_trees)
+    look_t, _ = lookahead_l2(train_trees)
+    acc_t, _, _, _, _ = free_descent(model, train_trees)
 
-    g2 = acc_v[2] >= base_v[2]
+    g2 = acc_v[2] >= look_v[2]
     g3 = nest_ok
     med_err = float(np.median(err_m)) if err_m else 0.0
     med_hit = float(np.median(hit_m)) if hit_m else 0.0
-    g4 = (not err_m) or med_err < med_hit    # errors live at tighter margins
+    g4 = (not err_m) or med_err < med_hit
 
     print()
-    print(f"  exits (vs exhaustive teacher), VAL:  "
-          f"net {acc_v.round(4).tolist()}  greedy-L2 {base_v.round(4).tolist()}")
-    print(f"  exits, TRAIN:                        "
-          f"net {acc_t.round(4).tolist()}  greedy-L2 {base_t.round(4).tolist()}")
+    print(f"  exits (vs teacher), VAL:  net {acc_v.round(4).tolist()}  "
+          f"lookahead {look_v.round(4).tolist()}  greedy {base_v.round(4).tolist()}")
+    print(f"  exits, TRAIN:             net {acc_t.round(4).tolist()}  "
+          f"lookahead {look_t.round(4).tolist()}  greedy {base_t.round(4).tolist()}")
+    print(f"  mean EXCESS distortion (val): net {net_ex:.6f}  "
+          f"lookahead {look_ex:.6f}  greedy {base_ex:.6f}")
     print(f"  G1 determinism: {'✓' if g1 else '✗'}")
-    print(f"  G2 net >= greedy on val leaf: {'✓' if g2 else '✗'} "
-          f"({acc_v[2]:.4f} vs {base_v[2]:.4f})")
+    print(f"  G2 net >= LOOKAHEAD on val leaf: {'✓' if g2 else '✗'} "
+          f"({acc_v[2]:.4f} vs {look_v[2]:.4f})")
     print(f"  G3 output nesting structural (DL2): {'✓' if g3 else '✗'}")
     print(f"  G4 errors are near-ties: {'✓' if g4 else '✗'} "
           f"(median margin errors {med_err:.5f} vs hits {med_hit:.5f})")
-    print(f"  G5 params REPORTED: {n_params} "
-          f"(size is a device-measured decision, not a target)")
+    print(f"  G5 params REPORTED: {n_params}")
 
     flat = dict(tree_flatten(model.parameters()))
-    np.savez("scorer_weights.npz",
-             **{k: np.array(v) for k, v in flat.items()})
+    np.savez("scorer_weights.npz", **{k: np.array(v) for k, v in flat.items()})
     json.dump(dict(
+        trees=n_trees,
         train=dict(net=acc_t.tolist(), greedy=base_t.tolist()),
-        val=dict(net=acc_v.tolist(), greedy=base_v.tolist()),
+        val=dict(net=acc_v.tolist(), lookahead=look_v.tolist(),
+                 greedy=base_v.tolist()),
+        excess=dict(net=net_ex, lookahead=look_ex, greedy=base_ex),
         gates=dict(G1=bool(g1), G2=bool(g2), G3=bool(g3), G4=bool(g4)),
         margins=dict(median_error=med_err, median_hit=med_hit,
                      n_errors=len(err_m)),
