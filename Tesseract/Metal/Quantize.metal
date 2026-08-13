@@ -3,7 +3,7 @@
 //
 // GPU downsample kernels (camera-resolution RGB + depth → the 64×64
 // capture grid, 90° CCW baked into the read) + the aerialPreview
-// kernel: the 20 Hz GPU twin of DyadPreview.assignCPU under THE
+// kernel: the 20 Hz GPU twin of DyadPipeline.Live.assign under THE
 // AERIAL MIRROR LAW (spec §6c v5). Export quantization stays CPU/ANE;
 // this kernel serves the live preview only — near-tie fp32 flips vs
 // the CPU reference are the only permitted difference.
@@ -25,7 +25,8 @@ struct AerialParams {
     float4 centroid;   // xyz = OKLab c_F (the γ-staging centroid)
     float4 scalars;    // x = s*, y = τ, z = 1/dNear, w = 1/dFar
     uint4  flags;      // x = twoPhase, y = side (64), z = node count
-                       // (★PAIR TREE: 16 when the 32-level targets ride)
+                       // (★PAIR TREE: 16 when the 32-level targets ride),
+                       // w = BLEED (0 ⇒ hard MAP classes, no dither band)
 };
 
 // sRGB → OKLab (Björn Ottosson's matrices — mirror of DyadPalette.swift).
@@ -88,10 +89,17 @@ kernel void aerialPreview(
     float gamma = 1.0f / (2.0f - s);
     float3 yhat = P.centroid.xyz + gamma * (lab - P.centroid.xyz);
 
-    // Coverage t = mixture posterior (0 when single-phase, R3).
+    // Coverage t = mixture posterior (0 when single-phase, R3), then
+    // the BLEED collapse. Exact mirror of the CPU law
+    // DyadPipeline.coverage(_:fit:twoPhase:bleed:): with BLEED off the
+    // band is not softened but ABSENT — t becomes the hard MAP class,
+    // so no Bayer threshold can route a tile to the σ side mid-band.
+    // Without this the setting answered on the CPU and the export but
+    // not on the LIVE surface, which is the default path.
     float t = 0.0f;
     if (P.flags.x != 0u) {
         t = 1.0f / (1.0f + exp((s - P.scalars.x) / P.scalars.y));
+        if (P.flags.w == 0u) { t = (t < 0.5f) ? 0.0f : 1.0f; }
     }
 
     // σ-routing at coverage t (Bayer threshold on the grid position).
@@ -99,8 +107,8 @@ kernel void aerialPreview(
     // side targets the rung-16 BLOCK MEAN of the staged field — the
     // background blurs as it becomes chaos. The same-hue ground
     // (DY14 v7) makes the plain σ-mirror hue-faithful; the comp
-    // re-route is dead. CPU twins: DyadPreview.assignCPU and
-    // DyadPipeline.pairDither.
+    // re-route is dead. CPU twin: DyadPipeline.pairDitherFrame
+    // (the ONE dither — export and live surface both call it).
     float th = (float(aerialBayer[gid.y % 4][gid.x % 4]) + 0.5f) / 16.0f;
     bool sigmaSide = (th < t);
     uint idx;
@@ -131,7 +139,7 @@ kernel void aerialPreview(
         if (nodeCount > 0u) {
             // ★PAIR TREE P2 (prefix law): 32-level quantization —
             // nearest depth-4 node, emit its canonical leaf's partner
-            // (CPU twins: DyadPreview.assignCPU, DyadPipeline.pairDither).
+            // (CPU twin: DyadPipeline.pairDitherFrame).
             uint best = 0;
             float bestD = INFINITY;
             for (uint c = 0; c < nodeCount; c++) {

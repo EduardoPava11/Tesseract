@@ -165,9 +165,11 @@ final class CameraManager: NSObject, ObservableObject {
 
     private let frameBuffer = FrameBuffer()
     nonisolated(unsafe) private var _metalPipeline: MetalPipeline?
-    /// Preview/export unification v1: the DYAD preview engine. Touched
-    /// ONLY on processingQueue (serial) — no locking.
-    nonisolated(unsafe) private let dyadPreview = DyadPreview()
+    /// ★EM12/EM13: WATCHING is WEAVING without the keeping — the live
+    /// driver over the export encoder itself (DyadPipeline.Live), not
+    /// a preview engine of its own. Touched ONLY on processingQueue
+    /// (serial) — no locking.
+    nonisolated(unsafe) private let live = DyadPipeline.Live()
     nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
@@ -198,6 +200,7 @@ final class CameraManager: NSObject, ObservableObject {
     /// Terminal: this hardware has no TrueDepth camera. ContentView keys
     /// off this string to render the gate (no retry — it cannot succeed).
     nonisolated static let noTrueDepthMessage = "no truedepth camera"
+    nonisolated static let noCenterStageMessage = "no center stage camera"
 
     /// GIFMachine.makeGIF returned nil — surfaced honestly instead of a
     /// "done" state with nothing to show. Shared by LIVE and FACE.
@@ -281,6 +284,22 @@ final class CameraManager: NSObject, ObservableObject {
         // .photo preset: full 4:3 sensor FOV, supports depth output
         session.sessionPreset = .photo
 
+        // CENTER STAGE gate (Daniel's ruling, 2026-08-12): the app is
+        // for iPhones with the square-sensor Center Stage front camera.
+        // Hardware predicate, no naked constants: that camera is the
+        // only front-position ultra-wide ever shipped on iPhone
+        // (iPhone 17 line — WWDC26 session 341). Like TrueDepth it has
+        // no App Store capability key, so the runtime gate is the ship
+        // mechanism (terminal REFUSED state, no dead RETRY).
+        guard AVCaptureDevice.default(
+            .builtInUltraWideCamera, for: .video, position: .front
+        ) != nil else {
+            return Self.noCenterStageMessage
+        }
+
+        // Capture still runs on the TrueDepth device: on the 17 line the
+        // Face ID system keeps delivering the synchronized RGB+depth
+        // stream LIVE mode is built on.
         guard let device = AVCaptureDevice.default(
             .builtInTrueDepthCamera, for: .video, position: .front
         ) else {
@@ -624,7 +643,6 @@ final class CameraManager: NSObject, ObservableObject {
             for (i, frame) in capturedFrames.enumerated() {
                 // Go analysis on first 19×19 = 361 pixels (blockToGoBoards reads up to GoBoard.count)
                 let boards = blockToGoBoards(pixels: frame.rgb)
-                let eval = evaluateBlock(boards)
 
                 await MainActor.run {
                     self.processProgress = Float(i + 1) / Float(totalFrames) * 0.40
@@ -726,30 +744,29 @@ final class CameraManager: NSObject, ObservableObject {
     // MARK: - Preview Images
 
     /// Build the composite quantized preview from palette indices.
-    /// PREVIEW/EXPORT UNIFICATION under the Aerial Mirror Law: LOOK =
-    /// dyad previews through the export's law (γ staging, one search,
-    /// σ-routing). Slow state (τ-lifted rung-16 fit, stats-on-ŷ,
-    /// table) at 5 Hz on CPU; the 20 Hz assignment runs the
-    /// aerialPreview Metal kernel when this frame's textures are
-    /// resident, the CPU reference otherwise. Other looks keep the
-    /// lattice quick-quantize.
+    /// ★EM13 — THE PREVIEW IS THE GIF: the surface runs the export
+    /// encoder (DyadPipeline) and drops the result. The read pools
+    /// the feed to the coarse rung and `process` solves it at 5 Hz
+    /// (TL8/TL9); the 20 Hz assignment runs the aerialPreview Metal
+    /// kernel when this frame's textures are resident, the pipeline's
+    /// own CPU assignment otherwise.
     nonisolated private func makePreview(
         rgb: [(Float, Float, Float)], depths: [Float], frameIndex: Int,
         metal: MetalPipeline? = nil, gpuTexturesReady: Bool = false
     ) -> CGImage? {
         // DYAD is the only look (2026-08-12 decree); the lattice
         // quick-quantize below survives solely as the warm-up
-        // fallback before the first slow-state table exists.
-        dyadPreview.refreshIfDue(rgb: rgb, depths: depths)
+        // fallback before the first solve exists.
+        live.read(rgb: rgb, depths: depths)
         let dyadIndices: [UInt8]?
-        if gpuTexturesReady, let metal, let st = dyadPreview.metalState,
+        if gpuTexturesReady, let metal, let st = live.metalState,
            let gpu = metal.aerialAssign(state: st) {
             dyadIndices = gpu
         } else {
-            dyadIndices = dyadPreview.assignCPU(rgb: rgb, depths: depths)
+            dyadIndices = live.assign(rgb: rgb, depths: depths)
         }
         if let dyadIndices {
-            return buildPreviewImage(indices: dyadIndices, table: dyadPreview.table)
+            return buildPreviewImage(indices: dyadIndices, table: live.table)
         }
         let indices = PerfectQuantizer.previewQuantize(
             rgb: rgb, depths: depths, frameIndex: frameIndex)

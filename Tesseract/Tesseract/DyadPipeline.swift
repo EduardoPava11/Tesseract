@@ -14,6 +14,19 @@
 // figure's OWN hue (the blue-haze negation is dead — DY14 v7);
 // no solid fill, no chroma seam (DY9–DY16).
 //
+// ★ EM12/EM13 — THE PREVIEW IS THE GIF (Daniel's decree, spec/ui/
+// EditMachine.hs, 2026-08-13): weave = watch + keep. WATCHING and
+// WEAVING run the SAME encoder and differ only in RETENTION, so a
+// second preview implementation cannot exist — DyadPreview.swift is
+// DELETED and `Live` (below) is a DRIVER, not a second law: it reads
+// the live feed at the coarse rung, hands that cube to this file's
+// own `process`, and assigns the fine frame through this file's own
+// `stagedField` / `assignRoles` / `chaosPool` / `pairDitherFrame`.
+// The ladder is the only thing parameterised: the solve runs at
+// rung 16 / 5 Hz (TL8/TL9 — the resolution of depth), the assignment
+// at rung 64 / 20 Hz, exactly the cadence split the export already
+// obeys. Nothing else about the live path differs from the export.
+//
 // THE ROLE LAW IS CONSTANT-FREE (Daniel's decree, 2026-08-10; spec
 // temporal/DepthMixture.hs DM1–DM10). No faceThreshold, no bleedWidth,
 // no bleedGamma: the pull coverage t is the posterior of a two-phase
@@ -28,11 +41,31 @@
 // fallback path anymore (2026-08-12 decree).
 
 import Foundation
+import simd
 
 enum DyadPipeline {
 
+    /// What the caller KEEPS — not which encoder runs. Stages 0–1
+    /// solve the generating state; stage 2 turns it into the artifact.
+    ///
+    /// EM12 says weave = watch + keep, so the two dispositions must
+    /// share every law. They do: `.generatingState` stops at the stage
+    /// boundary and runs stages 0–1 byte for byte, which
+    /// `testGeneratingStateMatchesArtifactSolves` gates.
+    ///
+    /// `Live` wants `.generatingState` because the assignment it shows
+    /// is taken at the FINE rung by `assign`, 20 Hz, from the live
+    /// frame — never at the coarse rung the solve is read at. Running
+    /// stage 2 in the solve produced coarse-rung indices that were
+    /// discarded unexamined, on the capture callback's budget.
+    enum Disposition: Sendable {
+        case artifact          // the export: index frames + tables
+        case generatingState   // the live solve: tables + solves only
+    }
+
     struct Output: Sendable {
-        /// One index frame per input frame, role law applied.
+        /// One index frame per input frame, role law applied. EMPTY
+        /// under `.generatingState` — stage 2 never ran.
         let indexFrames: [[UInt8]]
         /// One 768-byte Local Color Table per frame, involution law inside.
         let tables: [Data]
@@ -60,6 +93,54 @@ enum DyadPipeline {
         /// new rebuild law — the traced per-frame numbers ARE the
         /// smoothed generating state.
         let jepaH: Bool
+        /// ★EM13: the per-frame generating state the assignment ran
+        /// on. WEAVING keeps the index frames; WATCHING keeps only
+        /// this — the same solve, dropped instead of written.
+        let solves: [FrameSolve]
+    }
+
+    /// Everything one frame's assignment needs, and nothing else:
+    /// the solved figures, the 32-level prefix nodes, the table the
+    /// surface draws with, and the role law that routes coverage.
+    /// Produced by the solve (stages 0–1c) at whatever rung the
+    /// caller read; consumed by the assignment at the fine rung.
+    struct FrameSolve: Sendable {
+        /// The 128 figure primaries, OKLab (tree leaves since P1).
+        let primaries: [OKLabColor]
+        /// ★PAIR TREE P2: the 16 depth-4 node means (prefix law), and
+        /// each node's canonical FIGURE leaf. Empty when the tree is off.
+        let nodes16: [OKLabColor]
+        let canonical16: [Int]
+        /// The 256 entries, before `gifColorTable` packs them.
+        let table: [(UInt8, UInt8, UInt8)]
+        let moments: DyadPalette.GroundMoments
+        /// c_F — the γ-staging centroid this frame's pixels staged about.
+        let centroid: OKLabColor
+        /// The role law as this frame saw it (MS-filtered per frame).
+        let mixture: DepthMixture.Fit
+        let twoPhase: Bool
+        /// The BLEED setting the coverage was routed under.
+        let bleed: Bool
+    }
+
+    /// Everything the aerialPreview Metal kernel needs for one 20 Hz
+    /// assignment — the GPU twin of `assignRoles` + `pairDitherFrame`.
+    struct MetalState {
+        var primaries: [SIMD4<Float>]   // 128 OKLab primaries (xyz)
+        /// ★PAIR TREE P2: the 16 depth-4 node means (xyz) with the
+        /// node's canonical FIGURE leaf index in w — the σ side's
+        /// 32-level targets. Empty when the tree is off.
+        var nodes: [SIMD4<Float>]
+        var centroid: SIMD3<Float>      // the γ-staging centroid c_F
+        var sStar: Float                // mixture crossover
+        var tau: Float                  // mixture temperature
+        var twoPhase: Bool
+        /// The BLEED setting the coverage rides under. The kernel must
+        /// collapse t to hard MAP classes when this is off, exactly as
+        /// `coverage(_:fit:twoPhase:bleed:)` does — without it the GPU
+        /// surface answers a different setting than the CPU and the
+        /// export, which is the one thing EM13 forbids.
+        var bleed: Bool
     }
 
     /// Standard Bayer 4×4 thresholds, normalized to the midpoints
@@ -77,6 +158,12 @@ enum DyadPipeline {
     /// none can show the primary side.
     static let coverageFloor = Double(bayer4.flatMap { $0 }.min()!)   // 1/32
     static let coverageCeil = Double(bayer4.flatMap { $0 }.max()!)    // 31/32
+
+    /// The σ-side chaos rung: the block a fine cell pools into for the
+    /// blur target. κ = 2×2×2 applied twice (OV10 / TriScaleLadder §8)
+    /// — the ladder's own step from the fine rung to the coarse one,
+    /// never a second number.
+    static var chaosRung: Int { Rung.fine.side / Rung.coarse.side }
 
     // MARK: - THE AERIAL MIRROR LAW (spec §6c v5, ported 2026-08-10)
 
@@ -100,9 +187,47 @@ enum DyadPipeline {
                           b: c.b + (lab.b - c.b) * g)
     }
 
+    /// The staged field of ONE frame (the DY12 construction): every
+    /// pixel γ-staged about c_F and round-tripped through sRGB8, so
+    /// spec and Swift see the same bytes. Export and preview call
+    /// this — there is no second staging.
+    static func stagedField(samples: [(UInt8, UInt8, UInt8)], depths: [Float],
+                            about cF: OKLabColor) -> [(UInt8, UInt8, UInt8)] {
+        zip(samples, depths).map { rgb, d in
+            DyadPalette.srgb8(from: stageAerial(
+                DyadPalette.oklab(fromSRGB8: rgb),
+                s: Double(d), about: cF))
+        }
+    }
+
+    /// The σ coverage of one pixel — the ONE reading of the role law.
+    /// Single-phase ⇒ all-face (R3); `bleed: false` ⇒ MAP classes
+    /// only, no dither band (role law v1, a lawful subset).
+    static func coverage(_ d: Float, fit: DepthMixture.Fit,
+                         twoPhase: Bool, bleed: Bool) -> Double {
+        guard twoPhase else { return 0 }
+        let t = fit.pull(Double(d))
+        return bleed ? t : (t < 0.5 ? 0 : 1)
+    }
+
     /// Build per-frame DYAD tables + index frames from a capture.
     /// Requires rawRGB on every frame (present in the record path);
     /// returns nil otherwise so callers keep the lattice output.
+    static func process(frames: [QuantizedFrame], bleed: Bool = true,
+                        chaosLoop: Bool = false,
+                        onFrameTable: ((Int, Data) -> Void)? = nil) -> Output? {
+        guard !frames.isEmpty,
+              frames.allSatisfy({ $0.rawRGB != nil }) else { return nil }
+        return process(rgb: frames.map { $0.rawRGB! },
+                       depths: frames.map { $0.depths },
+                       bleed: bleed, chaosLoop: chaosLoop,
+                       onFrameTable: onFrameTable)
+    }
+
+    /// The encoder itself, over a cube of raw frames at ANY rung —
+    /// the export hands it the fine capture, `Live` hands it the
+    /// coarse read of the live feed (EM12: one encoder, two
+    /// dispositions).
     ///
     /// Stages, split on the law boundary (ExportMethods XP1–XP2):
     /// stage 0 solves the role law (pooled fit for R3/provenance +
@@ -116,22 +241,35 @@ enum DyadPipeline {
     /// background pixel is the hard σ-mirror of its own staged
     /// primary (no solid fill on either setting).
     ///
+    /// `withinVariance` (DM11, the τ-LIFT): the mean within-cell depth
+    /// variance that pooling to a coarser rung removed. nil at the
+    /// fine rung — there the field IS the read, and the fit is
+    /// untouched. A coarse read MUST pass it: the naive pooled τ
+    /// collapses and the band hardens (spec §4b, law of total
+    /// variance — an identity, not a tunable).
+    ///
     /// `onFrameTable` (palette-creation visibility, 2026-08-10): called
     /// once per frame as its warm-started table is solved, BEFORE
     /// assignment — the UI shows the palette being created.
     /// `chaosLoop` (ruling R3, flag-gated, default OFF): after the
     /// band post-pass, fully-far blocks are rearranged by the ANE
     /// exchange loop (descent on F; face/band bytes untouched).
-    static func process(frames: [QuantizedFrame], bleed: Bool = true,
-                        chaosLoop: Bool = false,
+    static func process(rgb: [[(Float, Float, Float)]], depths: [[Float]],
+                        withinVariance: Double? = nil,
+                        bleed: Bool = true, chaosLoop: Bool = false,
+                        keeping disposition: Disposition = .artifact,
                         onFrameTable: ((Int, Data) -> Void)? = nil) -> Output? {
-        guard !frames.isEmpty,
-              frames.allSatisfy({ $0.rawRGB != nil }) else { return nil }
+        guard !rgb.isEmpty, rgb.count == depths.count else { return nil }
+        let frameCount = rgb.count
 
         // ── Stage 0: THE ROLE LAW ──
-        let pooled = frames.flatMap { $0.depths.map { Double($0) } }
-        let mixture = DepthMixture.fit(pooled)
-        let twoPhase = DepthMixture.isTwoPhase(pooled, fit: mixture)
+        let pooled = depths.flatMap { $0.map { Double($0) } }
+        let base = DepthMixture.fit(pooled)
+        let twoPhase = DepthMixture.isTwoPhase(pooled, fit: base)
+        // The BIC verdict is read off the fit of the data actually in
+        // hand; only the PULL is lifted (DM11), so a coarse read
+        // decides two-phase exactly as the preview always has.
+        let mixture = withinVariance.map { DepthMixture.lift(base, byWithinVariance: $0) } ?? base
 
         // ★MS — the mixture local-level law (spec MixtureStability.hs
         // MS1–MS7, ruled 2026-08-11 on the first 17 Pro export): the
@@ -141,17 +279,10 @@ enum DyadPipeline {
         // the derived gain (R2's law on the mixture state) freezes
         // flicker. R3's capture-level two-phase decision and the
         // pooled provenance fit are unchanged.
-        let (msFits, msGain) = DepthMixture.filtered(
-            frames.map { DepthMixture.fit($0.depths.map { Double($0) }) })
-
-        // Coverage of the σ side per pixel, from the FILTERED
-        // per-frame state. Single-phase ⇒ all-face (R3). Bleed off
-        // ⇒ v1: MAP classes, no band.
-        func coverage(_ d: Float, _ f: Int) -> Double {
-            guard twoPhase else { return 0 }
-            let t = msFits[f].pull(Double(d))
-            return bleed ? t : (t < 0.5 ? 0 : 1)
-        }
+        let (msFits, msGain) = DepthMixture.filtered(depths.map { frame in
+            let f = DepthMixture.fit(frame.map { Double($0) })
+            return withinVariance.map { DepthMixture.lift(f, byWithinVariance: $0) } ?? f
+        })
 
         // ── Stage 1a: v5 AERIAL STAGING + stats-on-ŷ (DY12) ──
         // Per frame: (1) raw (1−t)-weighted stats give the staging
@@ -163,19 +294,19 @@ enum DyadPipeline {
         var stagedAll: [[(UInt8, UInt8, UInt8)]] = []
         var tsAll: [[Double]] = []
         var rawStats: [DyadPalette.Stats] = []
-        stagedAll.reserveCapacity(frames.count)
-        for (fi, frame) in frames.enumerated() {
-            let samples = frame.rawRGB!.map { srgb8(from: $0) }
-            let ts = frame.depths.map { coverage($0, fi) }
+        var centroids: [OKLabColor] = []
+        stagedAll.reserveCapacity(frameCount)
+        for fi in 0..<frameCount {
+            let samples = rgb[fi].map { srgb8(from: $0) }
+            let ts = depths[fi].map {
+                coverage($0, fit: msFits[fi], twoPhase: twoPhase, bleed: bleed)
+            }
             let weights = ts.map { 1 - $0 }
             let cF = DyadPalette.analyze(samples, weights: weights).centroid
-            let staged = zip(samples, frame.depths).map { rgb, d in
-                DyadPalette.srgb8(from: stageAerial(
-                    DyadPalette.oklab(fromSRGB8: rgb),
-                    s: Double(d), about: cF))
-            }
+            let staged = stagedField(samples: samples, depths: depths[fi], about: cF)
             stagedAll.append(staged)
             tsAll.append(ts)
+            centroids.append(cF)
             rawStats.append(DyadPalette.analyze(staged, weights: weights))
         }
 
@@ -186,7 +317,7 @@ enum DyadPipeline {
         // JEPA bg ring needs them before the table loop).
         let stagedLabsAll = stagedAll.map { $0.map { DyadPalette.oklab(fromSRGB8: $0) } }
         let bgPerFrame: [(meanL: Double, meanLnC: Double, sdLnC: Double)?] =
-            (0..<frames.count).map { f in
+            (0..<frameCount).map { f in
                 twoPhase ? DyadPalette.backgroundMoments(labs: stagedLabsAll[f],
                                                          weights: tsAll[f])
                          : nil
@@ -202,7 +333,7 @@ enum DyadPipeline {
         // alternative wrong — figure half held at 5 Hz while the
         // ground half churned at 20 Hz, +30% ground churn). Tables
         // then hold WHOLLY at the 5 Hz cadence — the resolution of
-        // depth (TL9), the cadence DyadPreview already fits at.
+        // depth (TL9), the cadence the live read is taken at.
         // nil (flag off or partial capture) ⇒ the EMA law stands.
         let jepa = CameraConfig.jepaH ? jepaSmoothed(rawStats, bg: bgPerFrame) : nil
 
@@ -216,18 +347,12 @@ enum DyadPipeline {
         // pixels on the σ side because t > every threshold.
         var tables: [Data] = []
         var frameStats: [DyadPalette.Stats] = []
-        var frameMoments: [DyadPalette.GroundMoments] = []
-        var labPrimaries: [[OKLabColor]] = []
+        var solves: [FrameSolve] = []
         var labs: [[OKLabColor]] = []
         var masks: [[Bool]] = []
         var fars: [[Bool]] = []
         var pulls: [[Float]] = []
-        // ★PAIR TREE (P2): the per-frame 32-level nodes + their
-        // canonical figure leaves — the prefix-law targets the
-        // σ side quantizes against.
-        var nodes16All: [[OKLabColor]] = []
-        var canon16All: [[Int]] = []
-        tables.reserveCapacity(frames.count)
+        tables.reserveCapacity(frameCount)
 
         var smoothed: DyadPalette.Stats?
         // Ground-law state (ruling R2): the background's (mean L,
@@ -253,31 +378,13 @@ enum DyadPipeline {
             // reads the SAME steadied slot state as its figures.
             let bgForFrame = jepa != nil ? jepa!.bg[f] : smoothedBg
 
-            // ★PAIR TREE (P1): figures = the analytic dyadic tree of
-            // the warm-started stats (closed-form Gaussian splits —
-            // PairTree.swift); rings remain only as the v1/v2
-            // rebuild path. cL anchors the ground family at the
-            // FIGURE CENTROID's lightness — for rings that was T[0];
-            // the tree's T[0] is a corner leaf, so read the centroid
-            // from the stats themselves (same number, honest source).
-            let tree = CameraConfig.pairTree ? PairTree.solveFigures(stats: warm) : nil
-            let prims8 = tree?.figures8 ?? DyadPalette.primaries(stats: warm)
-            let prims = tree?.figures ?? prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
-            let cL = tree != nil ? warm.centroid.l : DyadPalette.centroidL(prims8)
-            let gm = bgForFrame.map {
-                DyadPalette.groundMoments(centroidL: cL, primsLab: prims,
-                                          background: $0)
-            } ?? DyadPalette.priorMoments(centroidL: cL)
-            frameMoments.append(gm)
-
-            let table = tree.map { PairTree.table(figures8: $0.figures8, moments: gm) }
-                ?? DyadPalette.table(stats: warm, moments: gm)
-            tables.append(DyadPalette.gifColorTable(table))
-            nodes16All.append(tree?.nodes16 ?? [])
-            canon16All.append(tree?.canonical16 ?? [])
+            let solve = solveFrame(warm: warm, background: bgForFrame,
+                                   centroid: centroids[f], mixture: msFits[f],
+                                   twoPhase: twoPhase, bleed: bleed)
+            tables.append(DyadPalette.gifColorTable(solve.table))
             onFrameTable?(f, tables[f])
             frameStats.append(warm)
-            labPrimaries.append(prims)
+            solves.append(solve)
 
             var frameMask = [Bool]()
             var frameFar = [Bool]()
@@ -313,40 +420,19 @@ enum DyadPipeline {
         // does. Assignment/ANE stay untouched — blur and prefix
         // live entirely in this post-pass.
         func pairDither(_ engineOut: [[UInt8]]) -> [[UInt8]] {
-            let frameCount = engineOut.count
             guard let first = engineOut.first else { return engineOut }
             let side = Int(Double(first.count).squareRoot())
-            let rung = 4
-            let bSide = side / rung
-            let blockCount = bSide * bSide
+            let rung = chaosRung
+            let blockCount = (side / rung) * (side / rung)
             // Per-frame spatial rung-16 pools of the staged field.
-            var spatial = [[OKLabColor]]()
-            spatial.reserveCapacity(frameCount)
-            for f in 0..<frameCount {
-                var pooled = [OKLabColor](
-                    repeating: OKLabColor(l: 0, a: 0, b: 0), count: blockCount)
-                for by in 0..<bSide {
-                    for bx in 0..<bSide {
-                        var sl = 0.0, sa = 0.0, sb = 0.0
-                        for dy in 0..<rung {
-                            for dx in 0..<rung {
-                                let lab = labs[f][(by * rung + dy) * side + bx * rung + dx]
-                                sl += lab.l; sa += lab.a; sb += lab.b
-                            }
-                        }
-                        let n = Double(rung * rung)
-                        pooled[by * bSide + bx] = OKLabColor(l: sl / n, a: sa / n, b: sb / n)
-                    }
-                }
-                spatial.append(pooled)
-            }
+            let spatial = (0..<engineOut.count).map { chaosPool(labs: labs[$0], side: side) }
             // Temporal pooling over 4-frame groups (partial tail
             // groups are lawful degenerates; 64 divides exactly).
-            let groupCount = (frameCount + 3) / 4
+            let groupCount = (engineOut.count + rung - 1) / rung
             var spacetime = [[OKLabColor]]()
             spacetime.reserveCapacity(groupCount)
             for g in 0..<groupCount {
-                let lo = 4 * g, hi = min(4 * g + 4, frameCount)
+                let lo = rung * g, hi = min(rung * g + rung, engineOut.count)
                 var pooled = [OKLabColor](
                     repeating: OKLabColor(l: 0, a: 0, b: 0), count: blockCount)
                 for b in 0..<blockCount {
@@ -360,37 +446,9 @@ enum DyadPipeline {
                 spacetime.append(pooled)
             }
             return engineOut.enumerated().map { f, indices in
-                var out = indices
-                let prims = labPrimaries[f]
-                let nodes = nodes16All[f]
-                let canon = canon16All[f]
-                let pooled = spacetime[f / 4]
-                for p in 0..<indices.count where !masks[f][p] && !fars[f][p] {
-                    if bayer4[(p / side) % 4][(p % side) % 4] >= pulls[f][p] {
-                        out[p] = 255 - out[p]
-                    } else {
-                        let target = pooled[((p / side) / rung) * bSide + (p % side) / rung]
-                        if !nodes.isEmpty {
-                            // prefix law: 32-level quantization
-                            var best = 0
-                            var bestD = Double.infinity
-                            for c in 0..<nodes.count {
-                                let d = DyadPalette.dLab2(nodes[c], target)
-                                if d < bestD { bestD = d; best = c }
-                            }
-                            out[p] = UInt8(255 - canon[best])
-                        } else {
-                            var best = 0
-                            var bestD = Double.infinity
-                            for j in 0..<prims.count {
-                                let d = DyadPalette.dLab2(prims[j], target)
-                                if d < bestD { bestD = d; best = j }
-                            }
-                            out[p] = UInt8(255 - best)
-                        }
-                    }
-                }
-                return out
+                pairDitherFrame(indices, pooled: spacetime[f / rung],
+                                solve: solves[f], mask: masks[f],
+                                far: fars[f], pull: pulls[f], side: side)
             }
         }
 
@@ -403,24 +461,138 @@ enum DyadPipeline {
                 tables: tables, coverageCeil: coverageCeil)
         }
 
+        // ── The stage boundary (ExportMethods XP1–XP2) ──
+        // Everything above is the generating state; everything below
+        // turns it into bytes. A caller that keeps only the state
+        // stops HERE rather than assigning a cube it will discard.
+        if disposition == .generatingState {
+            return Output(indexFrames: [], tables: tables,
+                          stats: frameStats, mixture: mixture,
+                          twoPhase: twoPhase, alpha: alpha,
+                          msGain: msGain,
+                          groundMoments: solves.map { $0.moments },
+                          jepaH: jepa != nil, solves: solves)
+        }
+
         // ── Stage 2: assignment — ANE whole-capture, CPU otherwise ──
+        let labPrimaries = solves.map { $0.primaries }
         if let ane = DyadANE.assign(labs: labs, primaries: labPrimaries,
                                     masks: masks, fars: fars) {
             return Output(indexFrames: chaosRefine(pairDither(ane)), tables: tables,
                           stats: frameStats, mixture: mixture,
                           twoPhase: twoPhase, alpha: alpha,
-                          msGain: msGain, groundMoments: frameMoments,
-                          jepaH: jepa != nil)
+                          msGain: msGain,
+                          groundMoments: solves.map { $0.moments },
+                          jepaH: jepa != nil, solves: solves)
         }
-        let cpu = (0..<frames.count).map { f in
+        let cpu = (0..<frameCount).map { f in
             assignRoles(labs: labs[f], mask: masks[f], far: fars[f],
                         labPrimaries: labPrimaries[f])
         }
         return Output(indexFrames: chaosRefine(pairDither(cpu)), tables: tables,
                       stats: frameStats, mixture: mixture,
                       twoPhase: twoPhase, alpha: alpha,
-                      msGain: msGain, groundMoments: frameMoments,
-                      jepaH: jepa != nil)
+                      msGain: msGain,
+                      groundMoments: solves.map { $0.moments },
+                      jepaH: jepa != nil, solves: solves)
+    }
+
+    /// Stage 1c for ONE frame: ★PAIR TREE (P1) figures = the analytic
+    /// dyadic tree of the warm-started stats (closed-form Gaussian
+    /// splits — PairTree.swift); rings remain only as the v1/v2
+    /// rebuild path. cL anchors the ground family at the FIGURE
+    /// CENTROID's lightness — for rings that was T[0]; the tree's
+    /// T[0] is a corner leaf, so read the centroid from the stats
+    /// themselves (same number, honest source).
+    static func solveFrame(
+        warm: DyadPalette.Stats,
+        background: (meanL: Double, meanLnC: Double, sdLnC: Double)?,
+        centroid cF: OKLabColor,
+        mixture: DepthMixture.Fit,
+        twoPhase: Bool,
+        bleed: Bool
+    ) -> FrameSolve {
+        let tree = CameraConfig.pairTree ? PairTree.solveFigures(stats: warm) : nil
+        let prims8 = tree?.figures8 ?? DyadPalette.primaries(stats: warm)
+        let prims = tree?.figures ?? prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
+        let cL = tree != nil ? warm.centroid.l : DyadPalette.centroidL(prims8)
+        let gm = background.map {
+            DyadPalette.groundMoments(centroidL: cL, primsLab: prims, background: $0)
+        } ?? DyadPalette.priorMoments(centroidL: cL)
+        let table = tree.map { PairTree.table(figures8: $0.figures8, moments: gm) }
+            ?? DyadPalette.table(stats: warm, moments: gm)
+        return FrameSolve(primaries: prims,
+                          nodes16: tree?.nodes16 ?? [],
+                          canonical16: tree?.canonical16 ?? [],
+                          table: table, moments: gm, centroid: cF,
+                          mixture: mixture, twoPhase: twoPhase, bleed: bleed)
+    }
+
+    /// The σ side's blur target for ONE frame: the rung-16 block mean
+    /// of the staged field (spec §6d). The export pools these again
+    /// over 4-frame groups (S4); the live read pools the frame it is
+    /// showing. One pooling, two windows.
+    static func chaosPool(labs: [OKLabColor], side: Int) -> [OKLabColor] {
+        let rung = chaosRung
+        let bSide = side / rung
+        var pooled = [OKLabColor](repeating: OKLabColor(l: 0, a: 0, b: 0),
+                                  count: bSide * bSide)
+        for by in 0..<bSide {
+            for bx in 0..<bSide {
+                var sl = 0.0, sa = 0.0, sb = 0.0
+                for dy in 0..<rung {
+                    for dx in 0..<rung {
+                        let lab = labs[(by * rung + dy) * side + bx * rung + dx]
+                        sl += lab.l; sa += lab.a; sb += lab.b
+                    }
+                }
+                let n = Double(rung * rung)
+                pooled[by * bSide + bx] = OKLabColor(l: sl / n, a: sa / n, b: sb / n)
+            }
+        }
+        return pooled
+    }
+
+    /// The band post-pass on ONE frame: the Bayer threshold flips
+    /// coverage 1 − t back to the primary side; what stays on the σ
+    /// side takes the pooled blur target, quantized at the 32-LEVEL
+    /// when the tree is on (prefix law, P2). Export and preview call
+    /// this — there is no second dither.
+    static func pairDitherFrame(_ indices: [UInt8], pooled: [OKLabColor],
+                                solve: FrameSolve, mask: [Bool], far: [Bool],
+                                pull: [Float], side: Int) -> [UInt8] {
+        let rung = chaosRung
+        let bSide = side / rung
+        let prims = solve.primaries
+        let nodes = solve.nodes16
+        let canon = solve.canonical16
+        var out = indices
+        for p in 0..<indices.count where !mask[p] && !far[p] {
+            if bayer4[(p / side) % 4][(p % side) % 4] >= pull[p] {
+                out[p] = 255 - out[p]
+            } else {
+                let target = pooled[((p / side) / rung) * bSide + (p % side) / rung]
+                if !nodes.isEmpty {
+                    // prefix law: 32-level quantization
+                    var best = 0
+                    var bestD = Double.infinity
+                    for c in 0..<nodes.count {
+                        let d = DyadPalette.dLab2(nodes[c], target)
+                        if d < bestD { bestD = d; best = c }
+                    }
+                    out[p] = UInt8(255 - canon[best])
+                } else {
+                    var best = 0
+                    var bestD = Double.infinity
+                    for j in 0..<prims.count {
+                        let d = DyadPalette.dLab2(prims[j], target)
+                        if d < bestD { bestD = d; best = j }
+                    }
+                    out[p] = UInt8(255 - best)
+                }
+            }
+        }
+        return out
     }
 
     /// ★JEPA-H (JH4): the deployed placement law. Pool the per-frame
@@ -443,7 +615,7 @@ enum DyadPipeline {
     /// "before" wraps); no evidence at all ⇒ bg stays nil and the
     /// Wada prior rules downstream. Frames within a slot share one
     /// generating state, so whole tables hold at 5 Hz exactly like
-    /// the preview. Requires the frame count to divide into 16
+    /// the live read. Requires the frame count to divide into 16
     /// equal slots; otherwise nil and the EMA law stands.
     static func jepaSmoothed(
         _ raw: [DyadPalette.Stats],
@@ -562,5 +734,224 @@ enum DyadPipeline {
             UInt8(min(255, max(0, (Double(c) * 255).rounded(.toNearestOrEven))))
         }
         return (to8(f.0), to8(f.1), to8(f.2))
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // MARK: - ★ WATCHING (spec/ui/EditMachine.hs EM12/EM13)
+    //
+    // weave = watch + keep. This is the live driver — the state a
+    // continuous read needs and NOTHING ELSE. Every law it applies
+    // is a call back into this same file:
+    //
+    //   the read    — κ = 2×2×2 twice (4 in space × 4 in time)
+    //                 pools the fine feed to the coarse rung, and
+    //                 carries the within-cell depth variance the
+    //                 pooling removed (DM11's τ-lift is an identity,
+    //                 so the crossover and the band are the fine
+    //                 rung's, not the pooled field's);
+    //   the solve   — `process` itself, over the 16-frame coarse
+    //                 cube = the last 3.2 s = one loop. The preview
+    //                 is the GIF the last loop would have made;
+    //   the assign  — `stagedField` + `assignRoles` + `chaosPool` +
+    //                 `pairDitherFrame`, at the fine rung, 20 Hz.
+    //
+    // The cadence split is the ladder's, not an approximation
+    // invented here: rung 16 IS the resolution of depth (TL8/TL9,
+    // 5 Hz), RGB rides the fine rung at 20 Hz — the same split the
+    // export obeys inside `process`.
+    //
+    // Called ONLY on the owning manager's serial queue — no locking.
+    // ════════════════════════════════════════════════════════════
+
+    final class Live {
+
+        /// Frames per solve: the ladder's own κ step from the fine
+        /// rung to the coarse one — 20 Hz / 4 = the 5 Hz rung-16
+        /// cadence (TL8/TL9). Never a second number.
+        static let refreshStride = Rung.fine.side / Rung.coarse.side
+
+        /// The coarse cube the solve reads: one full loop of coarse
+        /// frames = 16 × 4 fine frames = 3.2 s (FeedFormat's span law).
+        static let ringFrames = Rung.coarse.frames
+
+        private let coarseSide = Rung.coarse.side
+        private var counter = 0
+
+        // The open coarse frame: κ sums in progress. Depth carries its
+        // square sum too — the within-cell variance is the read's, and
+        // pooling is the only thing that could lose it.
+        private var accRGB: [(Double, Double, Double)]
+        private var accDepth: [Double]
+        private var accDepthSq: [Double]
+        private var accN = 0
+
+        // The closed coarse frames: the live feed's rung-16 cube.
+        private var ringRGB: [[(Float, Float, Float)]] = []
+        private var ringDepth: [[Float]] = []
+        private var ringWithin: [Double] = []
+
+        /// The last solve — the generating state the surface is
+        /// showing. nil until the first coarse frame closes.
+        private(set) var solve: FrameSolve?
+
+        init() {
+            let cells = Rung.coarse.side * Rung.coarse.side
+            accRGB = [(Double, Double, Double)](repeating: (0, 0, 0), count: cells)
+            accDepth = [Double](repeating: 0, count: cells)
+            accDepthSq = [Double](repeating: 0, count: cells)
+        }
+
+        /// The 256 entries the surface draws indices with; empty until
+        /// the first solve (callers fall back to the lattice preview).
+        var table: [(UInt8, UInt8, UInt8)] { solve?.table ?? [] }
+
+        /// The current state packaged for the aerialPreview Metal
+        /// kernel, or nil until the first solve.
+        var metalState: MetalState? {
+            guard let solve, solve.primaries.count == DyadPalette.primaryCount
+            else { return nil }
+            return MetalState(
+                primaries: solve.primaries.map {
+                    SIMD4<Float>(Float($0.l), Float($0.a), Float($0.b), 0)
+                },
+                nodes: zip(solve.nodes16, solve.canonical16).map { node, leaf in
+                    SIMD4<Float>(Float(node.l), Float(node.a), Float(node.b),
+                                 Float(leaf))
+                },
+                centroid: SIMD3<Float>(Float(solve.centroid.l),
+                                       Float(solve.centroid.a),
+                                       Float(solve.centroid.b)),
+                sStar: Float(solve.mixture.crossover),
+                tau: Float(solve.mixture.temperature),
+                twoPhase: solve.twoPhase,
+                bleed: solve.bleed)
+        }
+
+        // MARK: - The read (κ pooling) and the 5 Hz solve
+
+        /// Take one fine frame into the read. Always advances the
+        /// cadence counter — call exactly once per frame.
+        func read(rgb: [(Float, Float, Float)], depths: [Float]) {
+            accumulate(rgb: rgb, depths: depths)
+            // Close the coarse frame on the ladder's cadence — the
+            // first fine frame closes one immediately, so the surface
+            // has a real table from the start (a short group is the
+            // same lawful degenerate `process` allows for a partial
+            // tail group).
+            if counter % Self.refreshStride == 0 {
+                closeCoarseFrame()
+                resolve()
+            }
+            counter += 1
+        }
+
+        /// κ pooling, fine → coarse: 4×4 in space now, 4 in time when
+        /// the frame closes (OV10 / TriScaleLadder §8).
+        private func accumulate(rgb: [(Float, Float, Float)], depths: [Float]) {
+            let side = Int(Double(depths.count).squareRoot())
+            let block = side / coarseSide
+            guard block > 0 else { return }
+            for cy in 0..<coarseSide {
+                for cx in 0..<coarseSide {
+                    var r = 0.0, g = 0.0, b = 0.0, d = 0.0, dd = 0.0
+                    for dy in 0..<block {
+                        for dx in 0..<block {
+                            let p = (cy * block + dy) * side + cx * block + dx
+                            r += Double(rgb[p].0); g += Double(rgb[p].1); b += Double(rgb[p].2)
+                            // The depth signal is total: NaN reads the
+                            // neutral fill, exactly as DepthSignal does.
+                            let v = Double(depths[p])
+                            let q = v.isNaN ? Double(DepthSignal.fill) : min(max(v, 0), 1)
+                            d += q; dd += q * q
+                        }
+                    }
+                    let c = cy * coarseSide + cx
+                    let n = Double(block * block)
+                    accRGB[c].0 += r / n; accRGB[c].1 += g / n; accRGB[c].2 += b / n
+                    accDepth[c] += d / n; accDepthSq[c] += dd / n
+                }
+            }
+            accN += 1
+        }
+
+        /// Divide the κ sums, push the coarse frame onto the ring, and
+        /// keep the mean within-cell depth variance the pooling
+        /// removed — the τ-lift's only input (DM11).
+        private func closeCoarseFrame() {
+            guard accN > 0 else { return }
+            let n = Double(accN)
+            let cells = accDepth.count
+            var rgb = [(Float, Float, Float)](repeating: (0, 0, 0), count: cells)
+            var depth = [Float](repeating: 0, count: cells)
+            var within = 0.0
+            for c in 0..<cells {
+                rgb[c] = (Float(accRGB[c].0 / n), Float(accRGB[c].1 / n),
+                          Float(accRGB[c].2 / n))
+                let m = accDepth[c] / n
+                depth[c] = Float(m)
+                within += max(0, accDepthSq[c] / n - m * m)
+                accRGB[c] = (0, 0, 0); accDepth[c] = 0; accDepthSq[c] = 0
+            }
+            accN = 0
+            ringRGB.append(rgb)
+            ringDepth.append(depth)
+            ringWithin.append(within / Double(cells))
+            if ringRGB.count > Self.ringFrames {
+                ringRGB.removeFirst(); ringDepth.removeFirst(); ringWithin.removeFirst()
+            }
+        }
+
+        /// THE SOLVE — `process` on the coarse cube, kept only as the
+        /// generating state (EM12: one encoder, two dispositions).
+        /// BLEED is read here so the live surface answers the same
+        /// setting the export obeys.
+        ///
+        /// `.generatingState` is not a shortcut: stages 0–1 run
+        /// exactly as the export runs them. It declines stage 2,
+        /// which would assign the COARSE cube — indices at the wrong
+        /// rung, discarded unexamined, paid for inside the capture
+        /// callback's 50 ms budget. The assignment the surface shows
+        /// is `assign`'s, at the fine rung, 20 Hz.
+        private func resolve() {
+            guard !ringRGB.isEmpty else { return }
+            let within = ringWithin.reduce(0, +) / Double(ringWithin.count)
+            let out = DyadPipeline.process(rgb: ringRGB, depths: ringDepth,
+                                           withinVariance: within,
+                                           bleed: ExportSettings.load().bleed,
+                                           keeping: .generatingState)
+            if let last = out?.solves.last { solve = last }
+        }
+
+        // MARK: - The 20 Hz assignment (fine rung)
+
+        /// One fine frame under the export's own assignment law, or
+        /// nil until the first solve. Every step is a call back into
+        /// `DyadPipeline` — the preview runs no law of its own.
+        func assign(rgb: [(Float, Float, Float)], depths: [Float]) -> [UInt8]? {
+            guard let solve, !solve.primaries.isEmpty else { return nil }
+            let side = Int(Double(rgb.count).squareRoot())
+            let samples = rgb.map { DyadPipeline.srgb8(from: $0) }
+            let staged = DyadPipeline.stagedField(samples: samples, depths: depths,
+                                                  about: solve.centroid)
+            let labs = staged.map { DyadPalette.oklab(fromSRGB8: $0) }
+            let ts = depths.map {
+                DyadPipeline.coverage($0, fit: solve.mixture,
+                                      twoPhase: solve.twoPhase, bleed: solve.bleed)
+            }
+            let mask = ts.map { $0 < DyadPipeline.coverageFloor }
+            let far = [Bool](repeating: false, count: rgb.count)
+            let engine = DyadPipeline.assignRoles(labs: labs, mask: mask, far: far,
+                                                  labPrimaries: solve.primaries)
+            return DyadPipeline.pairDitherFrame(
+                engine, pooled: DyadPipeline.chaosPool(labs: labs, side: side),
+                solve: solve, mask: mask, far: far,
+                pull: ts.map { Float($0) }, side: side)
+        }
+
+        /// Full CPU path: read + assign (FACE mode, GPU fallback).
+        func process(rgb: [(Float, Float, Float)], depths: [Float]) -> [UInt8]? {
+            read(rgb: rgb, depths: depths)
+            return assign(rgb: rgb, depths: depths)
+        }
     }
 }

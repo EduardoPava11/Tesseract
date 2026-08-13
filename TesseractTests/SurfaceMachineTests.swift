@@ -15,8 +15,8 @@ final class SurfaceMachineTests: XCTestCase {
     private var allStates: [SurfaceMachine.State] {
         [.waking, .watching, .weaving, .solving, .sealed,
          .refused(.cameraOff), .refused(.noTrueDepth),
-         .refused(.noFaceTracking), .refused(.exportFailed),
-         .refused(.unknown("boom"))]
+         .refused(.noCenterStage), .refused(.noFaceTracking),
+         .refused(.exportFailed), .refused(.unknown("boom"))]
     }
 
     // MARK: - SM1: voice
@@ -45,6 +45,10 @@ final class SurfaceMachineTests: XCTestCase {
             SurfaceMachine.state(for: CameraState.error(CameraManager.noTrueDepthMessage),
                                  hasPreview: false),
             .refused(.noTrueDepth))
+        XCTAssertEqual(
+            SurfaceMachine.state(for: CameraState.error(CameraManager.noCenterStageMessage),
+                                 hasPreview: false),
+            .refused(.noCenterStage))
         XCTAssertEqual(
             SurfaceMachine.state(for: CameraState.error("boom"), hasPreview: false),
             .refused(.unknown("boom")))
@@ -85,7 +89,8 @@ final class SurfaceMachineTests: XCTestCase {
 
     func testHardwareRefusalsAreTerminal() {
         let terminals: [SurfaceMachine.State] =
-            [.refused(.noTrueDepth), .refused(.noFaceTracking)]
+            [.refused(.noTrueDepth), .refused(.noCenterStage),
+             .refused(.noFaceTracking)]
         for t in terminals {
             for s in allStates {
                 XCTAssertFalse(SurfaceMachine.canStep(from: t, to: s),
@@ -103,6 +108,7 @@ final class SurfaceMachineTests: XCTestCase {
     /// word with CellText at the register its view uses, and require
     /// the ink to fit the region — mask width × cell pt ≤ region
     /// width pt. No estimates, the actual raster (SM1's teeth).
+    @MainActor
     func testWordsFitTheirRegions() throws {
         // (word, register rows, region) as the state views place them.
         let placements: [(String, Int, GridRegion)] = [
@@ -111,6 +117,7 @@ final class SurfaceMachineTests: XCTestCase {
             (SurfaceMachine.State.solving.word, TypeRows.body, GridLayout.procTitle),
             (SurfaceMachine.State.refused(.cameraOff).word, TypeRows.body, GridLayout.errTitle),
             (SurfaceMachine.State.refused(.noTrueDepth).word, TypeRows.body, GridLayout.errTitle),
+            (SurfaceMachine.State.refused(.noCenterStage).word, TypeRows.body, GridLayout.errTitle),
             (SurfaceMachine.State.refused(.noFaceTracking).word, TypeRows.body, GridLayout.errTitle),
             (SurfaceMachine.State.refused(.exportFailed).word, TypeRows.body, GridLayout.errTitle),
         ]

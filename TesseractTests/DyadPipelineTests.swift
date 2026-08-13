@@ -203,4 +203,163 @@ final class DyadPipelineTests: XCTestCase {
         XCTAssertEqual(Array(b[0..<6]), [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])
         XCTAssertEqual(Data(b[13..<(13 + 768)]), out.tables[0], "GCT = frame 0's table")
     }
+
+    // MARK: - ★ WATCHING (spec/ui/EditMachine.hs EM12/EM13)
+    //
+    // The laws the deleted DyadPreview used to carry, restated on the
+    // path that replaced it: weave = watch + keep, so the live driver
+    // must obey the export's role law, at the export's cadence, as a
+    // pure function of the feed.
+
+    /// EM13: the surface runs the export's role law, not a second one
+    /// — face pixels take primaries, background takes the σ-mirror
+    /// half, exactly as `testRoleLawOnPixels` demands of the export.
+    func testEM13LiveSurfaceObeysTheExportRoleLaw() throws {
+        let live = DyadPipeline.Live()
+        let frames = (0..<frameCount).map { makeFrame(index: $0) }
+        var indices: [UInt8] = []
+        for frame in frames {
+            live.read(rgb: frame.rawRGB!, depths: frame.depths)
+            indices = try XCTUnwrap(live.assign(rgb: frame.rawRGB!, depths: frame.depths))
+        }
+        XCTAssertEqual(indices.count, side * side)
+        XCTAssertEqual(live.table.count, 256, "the surface draws with a solved table")
+
+        let c = Double(side - 1) / 2
+        for p in 0..<indices.count {
+            let x = Double(p % side), y = Double(p / side)
+            let inFace = (x - c) * (x - c) + (y - c) * (y - c) <= 24 * 24
+            if inFace {
+                XCTAssertLessThan(indices[p], 128, "face pixels use primaries only")
+            } else {
+                XCTAssertGreaterThanOrEqual(indices[p], 128,
+                    "background lives in the σ-mirror half (v4 binomial background)")
+            }
+        }
+    }
+
+    /// EM8 + EM11: what the surface shows is render(capture, edit) —
+    /// a pure function of the feed, never of how the read was entered.
+    /// Two drivers fed the same frames must agree bit for bit.
+    func testEM11LiveReadIsAPureFunctionOfTheFeed() throws {
+        let frames = (0..<frameCount).map { makeFrame(index: $0) }
+        func drive() throws -> ([UInt8], [(UInt8, UInt8, UInt8)]) {
+            let live = DyadPipeline.Live()
+            var out: [UInt8] = []
+            for frame in frames {
+                out = try XCTUnwrap(live.process(rgb: frame.rawRGB!, depths: frame.depths))
+            }
+            return (out, live.table)
+        }
+        let (a, ta) = try drive()
+        let (b, tb) = try drive()
+        XCTAssertEqual(a, b)
+        XCTAssertTrue(zip(ta, tb).allSatisfy { $0 == $1 }, "same feed, same table")
+    }
+
+    /// TL8/TL9: the solve rides the coarse rung's rate. The table may
+    /// change only on a stride boundary — the cadence the deleted
+    /// preview's `refreshStride` used to assert by construction.
+    func testEM13SolveRidesTheCoarseRungCadence() throws {
+        let live = DyadPipeline.Live()
+        let stride = DyadPipeline.Live.refreshStride
+        // A moving field: every frame differs, so any table that CAN
+        // change on an off-stride frame will.
+        var previous: [(UInt8, UInt8, UInt8)] = []
+        for i in 0..<(3 * stride) {
+            let n = side * side
+            let shade = Float(i) / Float(3 * stride)
+            var rgb = [(Float, Float, Float)](repeating: (0.1, 0.9, 0.1), count: n)
+            var depths = [Float](repeating: 0, count: n)
+            let c = Double(side - 1) / 2
+            for p in 0..<n {
+                let x = Double(p % side), y = Double(p / side)
+                if (x - c) * (x - c) + (y - c) * (y - c) <= 24 * 24 {
+                    rgb[p] = (0.4 + 0.4 * shade, 0.35 + 0.2 * shade, 0.3 + 0.1 * shade)
+                    depths[p] = 1
+                }
+            }
+            live.read(rgb: rgb, depths: depths)
+            let table = live.table
+            // Frame 0 opens the first (short, lawful-degenerate) coarse
+            // frame; after that only stride boundaries may move it.
+            if i > 0 && i % stride != 0 {
+                XCTAssertTrue(zip(table, previous).allSatisfy { $0 == $1 },
+                              "the table held at frame \(i): off-cadence solve")
+            }
+            previous = table
+        }
+    }
+
+    /// EM12 — ONE ENCODER, TWO DISPOSITIONS. `.generatingState` is a
+    /// stopping point at the stage boundary, never a second code path:
+    /// every law above it runs identically, so the two runs' solves are
+    /// bit-equal and only the artifact carries index frames.
+    ///
+    /// This is the gate that keeps the optimisation honest. Without it
+    /// `Live` could drift from the export and the preview would quietly
+    /// stop being the GIF (EM13) with nothing to catch it.
+    func testEM12GeneratingStateMatchesArtifactSolves() throws {
+        let frames = (0..<frameCount).map { makeFrame(index: $0) }
+        let rgb = frames.map { $0.rawRGB! }
+        let depths = frames.map { $0.depths }
+
+        let artifact = try XCTUnwrap(
+            DyadPipeline.process(rgb: rgb, depths: depths, keeping: .artifact))
+        let state = try XCTUnwrap(
+            DyadPipeline.process(rgb: rgb, depths: depths, keeping: .generatingState))
+
+        // Stage 2 is the ONLY difference.
+        XCTAssertEqual(artifact.indexFrames.count, frameCount)
+        XCTAssertTrue(state.indexFrames.isEmpty,
+                      "generatingState assigned a cube it would discard")
+
+        // Everything the state carries is bit-equal — no tolerance.
+        XCTAssertEqual(state.tables, artifact.tables)
+        XCTAssertEqual(state.twoPhase, artifact.twoPhase)
+        XCTAssertEqual(state.alpha, artifact.alpha)
+        XCTAssertEqual(state.msGain, artifact.msGain)
+        XCTAssertEqual(state.jepaH, artifact.jepaH)
+        XCTAssertEqual(state.mixture.crossover, artifact.mixture.crossover)
+        XCTAssertEqual(state.mixture.temperature, artifact.mixture.temperature)
+        XCTAssertEqual(state.solves.count, artifact.solves.count)
+        for (f, (s, a)) in zip(state.solves, artifact.solves).enumerated() {
+            XCTAssertTrue(zip(s.table, a.table).allSatisfy { $0 == $1 },
+                          "frame \(f): table diverged")
+            XCTAssertEqual(s.twoPhase, a.twoPhase, "frame \(f)")
+            XCTAssertEqual(s.bleed, a.bleed, "frame \(f)")
+            XCTAssertEqual(s.centroid.l, a.centroid.l, "frame \(f)")
+            XCTAssertEqual(s.centroid.a, a.centroid.a, "frame \(f)")
+            XCTAssertEqual(s.centroid.b, a.centroid.b, "frame \(f)")
+            XCTAssertEqual(s.mixture.crossover, a.mixture.crossover, "frame \(f)")
+            XCTAssertEqual(s.primaries.count, a.primaries.count, "frame \(f)")
+            XCTAssertTrue(zip(s.primaries, a.primaries)
+                            .allSatisfy { $0.l == $1.l && $0.a == $1.a && $0.b == $1.b },
+                          "frame \(f): primaries diverged")
+        }
+    }
+
+    /// D1 — the BLEED setting must REACH the GPU. `MetalState` is the
+    /// only channel to the aerialPreview kernel; before the fix it had
+    /// no bleed slot and the kernel computed the soft coverage band
+    /// unconditionally, so with BLEED off the CPU path and the export
+    /// dropped the band while LIVE+Metal — the default shipping path —
+    /// still showed it. One setting, two answers on one screen.
+    func testBleedAndPhaseReachTheMetalState() throws {
+        let live = DyadPipeline.Live()
+        for frame in (0..<frameCount).map({ makeFrame(index: $0) }) {
+            live.read(rgb: frame.rawRGB!, depths: frame.depths)
+        }
+        let solve = try XCTUnwrap(live.solve, "the ring never solved")
+        let metal = try XCTUnwrap(live.metalState, "no state for the kernel")
+
+        // The GPU must ride the SAME coverage law the CPU does — both
+        // flags, or the two surfaces answer different settings.
+        XCTAssertEqual(metal.bleed, solve.bleed,
+                       "the kernel would ignore BLEED")
+        XCTAssertEqual(metal.twoPhase, solve.twoPhase)
+        XCTAssertEqual(metal.sStar, Float(solve.mixture.crossover))
+        XCTAssertEqual(metal.tau, Float(solve.mixture.temperature))
+        XCTAssertEqual(metal.primaries.count, DyadPalette.primaryCount)
+    }
 }

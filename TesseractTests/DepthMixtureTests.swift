@@ -160,6 +160,25 @@ final class DepthMixtureTests: XCTestCase {
                        "the lifted crossover matches full-res")
     }
 
+    /// The lift is a map on the FITTED state, and `fitLifted` is only
+    /// its composition with `fit` — the live read (EM13) fits once and
+    /// lifts, so the two spellings must never fork. w = 0 is the
+    /// identity on σ², which is why a fine read passes no lift at all.
+    func testLiftIsAMapOnTheFittedState() {
+        let xs = (0..<256).map { Double($0 % 7) / 6 }
+        let f = DepthMixture.fit(xs)
+        let w = 0.01
+        let a = DepthMixture.fitLifted(means: xs, meanWithinVariance: w)
+        let b = DepthMixture.lift(f, byWithinVariance: w)
+        XCTAssertEqual(a.sigma, b.sigma)
+        XCTAssertEqual(a.crossover, b.crossover)
+        XCTAssertEqual(DepthMixture.lift(f, byWithinVariance: 0).sigma, f.sigma,
+                       accuracy: f.sigma * 1e-15,
+                       "w = 0 is the identity on σ (round-trip through √ aside)")
+        XCTAssertGreaterThan(b.temperature, f.temperature,
+                             "a coarse read's band is SOFTER than the pooled field's")
+    }
+
     // MARK: - The original bug, as a regression law
 
     /// A binary portrait field (face 1, wall 0) must come out

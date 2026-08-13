@@ -177,6 +177,13 @@ struct ContentView: View {
             // from these devices, so the gate states the requirement.
             ErrorStateView(message: headline,
                            detail: "tesseract needs the Face ID camera, and this iPhone has none")
+        case .noCenterStage:
+            // The device-targeting gate (Daniel, 2026-08-12): the app is
+            // for iPhones with the square-sensor Center Stage selfie
+            // camera. No capability key exists, so the gate states the
+            // requirement — terminal, no RETRY (SM4).
+            ErrorStateView(message: headline,
+                           detail: "tesseract needs the center stage selfie camera of iPhone 17 or later")
         case .noFaceTracking:
             ErrorStateView(message: headline,
                            detail: "this device cannot track the ARKit face mesh")

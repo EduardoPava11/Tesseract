@@ -18,6 +18,9 @@ settings:
     # Refine.metal's bit-exact CPU/GPU parity contract requires IEEE
     # float ops in program order (no reassociation/fma contraction).
     MTL_FAST_MATH: NO
+    # No App Intents in this app — skips the appintentsmetadataprocessor
+    # pass and its "Metadata extraction skipped" warning on every build.
+    LM_SKIP_METADATA_EXTRACTION: YES
     # Daniel Mosquera personal team — the cached wildcard profile (9WANULVN2G.*)
     # on this machine signs device builds offline; no Xcode account needed.
     DEVELOPMENT_TEAM: 9WANULVN2G
@@ -44,6 +47,13 @@ targets:
         # Export compliance: no non-exempt encryption (on-device image
         # processing only) — skips the App Store Connect prompt.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        # Store-level device cut (2026-08-12): Apple has NO capability key
+        # for the Center Stage camera (or TrueDepth), so the App Store
+        # cannot cut exactly at the iPhone 17 line. gaming-tier = A17 Pro
+        # and later (iPhone 15 Pro+) is the tightest published key; the
+        # runtime CENTER STAGE gate finishes the job on 15 Pro/16-line
+        # devices, and the store description states the real requirement.
+        INFOPLIST_KEY_UIRequiredDeviceCapabilities: ["arm64", "front-facing-camera", "iphone-performance-gaming-tier"]
         INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         INFOPLIST_KEY_CFBundleDisplayName: "Tesseract"

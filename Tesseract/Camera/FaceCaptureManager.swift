@@ -86,9 +86,10 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     nonisolated private static let minFrameSpacing: Double = 1.0 / 21.0
 
     private let frameBuffer = FrameBuffer()
-    /// Unified DYAD preview engine (CPU; ARKit frames have no Metal
-    /// pipeline). Touched ONLY on delegateQueue (serial) — no locking.
-    nonisolated(unsafe) private let dyadPreview = DyadPreview()
+    /// ★EM12/EM13: the export encoder driven live (CPU; ARKit frames
+    /// have no Metal pipeline). Touched ONLY on delegateQueue
+    /// (serial) — no locking.
+    nonisolated(unsafe) private let live = DyadPipeline.Live()
 
     // MARK: - Lifecycle
 
@@ -103,6 +104,15 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         // a revoked permission surfaces as a raw ARKit error string.
         if case .denied = AVCaptureDevice.authorizationStatus(for: .video) {
             state = .error(CameraManager.cameraDeniedMessage)
+            return
+        }
+        // CENTER STAGE gate — same hardware predicate as the LIVE path
+        // (CameraManager.configureSession): the app is for iPhones with
+        // the square-sensor Center Stage front camera (iPhone 17 line).
+        guard AVCaptureDevice.default(
+            .builtInUltraWideCamera, for: .video, position: .front
+        ) != nil else {
+            state = .error(CameraManager.noCenterStageMessage)
             return
         }
         guard ARFaceTrackingConfiguration.isSupported else {
@@ -167,16 +177,16 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         }
         let hasFace = faceAnchor != nil
 
-        // 3. Preview — unified with the export for LOOK = dyad (the
-        // anatomical signal rides the depth slot, so γ staging and the
-        // mixture posterior apply unchanged); lattice quick-quantize
-        // otherwise. FACE has no Metal pipeline: CPU reference path.
+        // 3. Preview — the export encoder itself (EM13; the anatomical
+        // signal rides the depth slot, so γ staging and the mixture
+        // posterior apply unchanged); lattice quick-quantize until the
+        // first solve. FACE has no Metal pipeline: CPU path.
         let frameIdx = frameBuffer.frameCount
         let previewIndices: [UInt8]
         let previewTable: [(UInt8, UInt8, UInt8)]?
-        if let dyadIdx = dyadPreview.process(rgb: rgb, depths: signalGrid) {
+        if let dyadIdx = live.process(rgb: rgb, depths: signalGrid) {
             previewIndices = dyadIdx
-            previewTable = dyadPreview.table
+            previewTable = live.table
         } else {
             previewIndices = PerfectQuantizer.previewQuantize(
                 rgb: rgb, depths: signalGrid, frameIndex: frameIdx)

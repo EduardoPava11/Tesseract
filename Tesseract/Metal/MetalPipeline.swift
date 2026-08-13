@@ -23,7 +23,7 @@ final class MetalPipeline {
     private let downsampleRGBState: MTLComputePipelineState
     private let downsampleDepthState: MTLComputePipelineState
     /// The 20 Hz preview assignment under the Aerial Mirror Law —
-    /// optional: absent kernel ⇒ CPU fallback (DyadPreview.assignCPU).
+    /// optional: absent kernel ⇒ CPU fallback (DyadPipeline.Live.assign).
     private let aerialState: MTLComputePipelineState?
 
     // MARK: - Textures (64×64 working buffers)
@@ -299,7 +299,7 @@ final class MetalPipeline {
         return (rgb: rgbData, depth: depthData)
     }
 
-    // MARK: - Aerial Preview Assignment (20 Hz GPU twin of assignCPU)
+    // MARK: - Aerial Preview Assignment (20 Hz GPU twin of Live.assign)
 
     /// Run the aerialPreview kernel against the CURRENT rgb64/depth64
     /// working textures (call immediately after downsampleFrame on the
@@ -307,7 +307,7 @@ final class MetalPipeline {
     /// 4096 palette indices, or nil (kernel absent / not ready) so the
     /// caller falls back to the CPU reference. Preview-only: near-tie
     /// fp32 flips vs the CPU are the only permitted difference.
-    func aerialAssign(state: DyadPreview.MetalState) -> [UInt8]? {
+    func aerialAssign(state: DyadPipeline.MetalState) -> [UInt8]? {
         guard isReady,
               let aerialState,
               let rgb64 = rgb64Texture, let depth64 = depth64Texture,
@@ -335,7 +335,8 @@ final class MetalPipeline {
                                   1 / Float(DepthSignal.dFar)),
             flags: SIMD4<UInt32>(state.twoPhase ? 1 : 0,
                                  UInt32(CameraConfig.outputSize),
-                                 UInt32(state.nodes.count), 0))
+                                 UInt32(state.nodes.count),
+                                 state.bleed ? 1 : 0))
         paramsBuf.contents().copyMemory(
             from: &params, byteCount: MemoryLayout<AerialParamsSwift>.stride)
 
@@ -418,7 +419,7 @@ final class MetalPipeline {
 struct AerialParamsSwift {
     var centroid: SIMD4<Float>   // xyz = OKLab c_F
     var scalars: SIMD4<Float>    // s*, τ, 1/dNear, 1/dFar
-    var flags: SIMD4<UInt32>     // twoPhase, side
+    var flags: SIMD4<UInt32>     // twoPhase, side, node count, bleed
 }
 
 // Must match Metal DownsampleParams (24 bytes: 6 × UInt32)

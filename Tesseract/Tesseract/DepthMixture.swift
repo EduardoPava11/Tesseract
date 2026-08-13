@@ -114,17 +114,25 @@ enum DepthMixture {
 
     // MARK: - Rung-16 preview fit (DM11/DM12): the τ-lift
 
-    /// Fit on pooled judgment means, then LIFT the tied variance by the
-    /// law of total variance — σ²_total = σ²_between + E[σ²_within], an
-    /// identity, not a tunable (spec §4b). The naive pooled τ collapses
-    /// (means alone lose the within-judgment spread and harden the
-    /// band); the lifted fit recovers the full-resolution (s*, τ).
-    /// EXPORT keeps the full-res pooled fit — measurement-only decree.
-    static func fitLifted(means: [Double], meanWithinVariance: Double) -> Fit {
-        let pooled = fit(means)
-        let sigma2 = pooled.sigma * pooled.sigma + max(0, meanWithinVariance)
-        return Fit(muF: pooled.muF, muB: pooled.muB, piB: pooled.piB,
+    /// LIFT an already-fitted state by the law of total variance —
+    /// σ²_total = σ²_between + E[σ²_within], an identity, not a
+    /// tunable (spec §4b). Separated from the fit itself because a
+    /// coarse read fits ONCE and lifts what the pooling removed; the
+    /// BIC verdict is still read off the unlifted fit of the data in
+    /// hand (DM9 compares models on the samples it was given).
+    static func lift(_ f: Fit, byWithinVariance w: Double) -> Fit {
+        let sigma2 = f.sigma * f.sigma + max(0, w)
+        return Fit(muF: f.muF, muB: f.muB, piB: f.piB,
                    sigma: max(1e-9, sigma2.squareRoot()))
+    }
+
+    /// Fit on pooled judgment means, then lift. The naive pooled τ
+    /// collapses (means alone lose the within-judgment spread and
+    /// harden the band); the lifted fit recovers the full-resolution
+    /// (s*, τ). A FINE read passes no lift at all — there the field
+    /// IS the read, and `fit` stands untouched.
+    static func fitLifted(means: [Double], meanWithinVariance: Double) -> Fit {
+        lift(fit(means), byWithinVariance: meanWithinVariance)
     }
 
     // MARK: - Crossover report (DM6): meters are an OUTPUT, never an input

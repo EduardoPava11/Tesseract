@@ -17,6 +17,7 @@ enum SurfaceMachine {
     enum Refusal: Equatable, Sendable {
         case cameraOff
         case noTrueDepth
+        case noCenterStage
         case noFaceTracking
         case exportFailed
         case unknown(String)
@@ -41,6 +42,7 @@ enum SurfaceMachine {
             case .sealed:                    return "SEALED"
             case .refused(.cameraOff):       return "CAMERA OFF"
             case .refused(.noTrueDepth):     return "NO TRUEDEPTH"
+            case .refused(.noCenterStage):   return "NO CENTER STAGE"
             case .refused(.noFaceTracking):  return "NO FACE TRACKING"
             case .refused(.exportFailed):    return "EXPORT FAILED"
             case .refused(.unknown):         return "ERROR"
@@ -102,6 +104,7 @@ enum SurfaceMachine {
         switch message {
         case CameraManager.cameraDeniedMessage:               return .cameraOff
         case CameraManager.noTrueDepthMessage:                return .noTrueDepth
+        case CameraManager.noCenterStageMessage:              return .noCenterStage
         case FaceCaptureManager.faceTrackingUnsupportedMessage: return .noFaceTracking
         case CameraManager.encodeFailedMessage:               return .exportFailed
         default:                                              return .unknown(message)
@@ -126,6 +129,7 @@ enum SurfaceMachine {
             return true
         case (.waking, .refused(.cameraOff)),
              (.waking, .refused(.noTrueDepth)),
+             (.waking, .refused(.noCenterStage)),
              (.waking, .refused(.noFaceTracking)):
             return true
         case (.solving, .refused(.exportFailed)):

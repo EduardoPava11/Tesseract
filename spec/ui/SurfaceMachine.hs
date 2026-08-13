@@ -34,7 +34,13 @@ import Data.Char (isUpper, isSpace)
 -- § 1. STATES AND WORDS
 -- ════════════════════════════════════════════════════════════════
 
-data Refusal = CameraOff | NoTrueDepth | NoFaceTracking | ExportFailed | Unknown
+-- NoCenterStage (Daniel's ruling, 2026-08-12): the app is for
+-- iPhones with the Center Stage front camera — the square-sensor
+-- selfie camera the iPhone 17 line introduced. The predicate is
+-- hardware-derived (a front-position ultra-wide camera exists),
+-- and like NoTrueDepth it is a terminal hardware refusal.
+data Refusal = CameraOff | NoTrueDepth | NoCenterStage | NoFaceTracking
+             | ExportFailed | Unknown
   deriving (Eq, Show, Enum, Bounded)
 
 data S
@@ -60,6 +66,7 @@ word Solving                  = "SOLVING"
 word Sealed                   = "SEALED"
 word (Refused CameraOff)      = "CAMERA OFF"
 word (Refused NoTrueDepth)    = "NO TRUEDEPTH"
+word (Refused NoCenterStage)  = "NO CENTER STAGE"
 word (Refused NoFaceTracking) = "NO FACE TRACKING"
 word (Refused ExportFailed)   = "EXPORT FAILED"
 word (Refused Unknown)        = "ERROR"
@@ -88,6 +95,7 @@ refusalFrom :: S -> Refusal -> Bool
 refusalFrom (Refused _) _      = False
 refusalFrom s CameraOff        = s == Waking
 refusalFrom s NoTrueDepth      = s == Waking
+refusalFrom s NoCenterStage    = s == Waking
 refusalFrom s NoFaceTracking   = s == Waking
 refusalFrom s ExportFailed     = s == Solving
 refusalFrom s Unknown          = s `elem` [Waking, Watching, Weaving, Solving]
@@ -166,7 +174,7 @@ axiom_SM4 :: Bool
 axiom_SM4 =
      all (\s -> terminal s || reachable s Watching) allStates
   && [ s | s <- allStates, terminal s ]
-       == [Refused NoTrueDepth, Refused NoFaceTracking]
+       == [Refused NoTrueDepth, Refused NoCenterStage, Refused NoFaceTracking]
 
 -- (SM5) SCENE DISCIPLINE: every state has a nonempty scene with no
 --       duplicate regions; SOLVING's scene carries the palette,
