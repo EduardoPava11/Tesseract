@@ -110,6 +110,17 @@ enum CameraConfig {
     // DYAD STATS v3. DEFAULT ON per the ruling; one-line revert;
     // device pass owed. Ring solver stays for v1/v2 rebuilds.
     static let pairTree = true
+
+    // ★JEPA-H (JH4 placement, Daniel's "go hard" 2026-08-12; the ONE
+    // model line, nn/jepa charter): the v7 head steadies the capture's
+    // rung-16 latent ring before the tables solve — pure Swift on CPU
+    // (149 weights, parity 9e-16 vs the training forward; a 16×6 ring
+    // sits far below the ANE dispatch floor). All beauty gates passed
+    // synthetically vs the oracle-gain EMA (churn −11.7%, LZW down,
+    // RMSE better). DEFAULT ON like pairTree: one-line revert; the
+    // real-capture RATE LEDGER + DYAD HARMONY before/after and
+    // Daniel's device pass are the promotion judges (JH4 contract).
+    static let jepaH = true
 }
 
 @MainActor

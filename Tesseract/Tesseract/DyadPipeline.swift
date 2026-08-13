@@ -54,6 +54,12 @@ enum DyadPipeline {
         /// dictionary prior on single-phase. Together with `stats`
         /// these regenerate every table byte (DYAD STATS v2).
         let groundMoments: [DyadPalette.GroundMoments]
+        /// ★JEPA-H (JH4): true when the one model actually steadied
+        /// the rung-16 ring for this capture (flag on AND the frame
+        /// count divided into 16 equal slots). Provenance needs no
+        /// new rebuild law — the traced per-frame numbers ARE the
+        /// smoothed generating state.
+        let jepaH: Bool
     }
 
     /// Standard Bayer 4×4 thresholds, normalized to the midpoints
@@ -176,6 +182,16 @@ enum DyadPipeline {
         // ── Stage 1b: derived EMA gain (R2) over the stats sequence ──
         let alpha = DepthMixture.localLevelAlpha(rawStats.map(statVector))
 
+        // ── Stage 1b′: ★JEPA-H (JH4, flag-gated — the ONE model
+        // line, decree 2026-08-12): pool the per-frame stats to the
+        // rung-16 latent ring and steady it with the v7 head before
+        // any table solves. Tables then hold at the 5 Hz cadence —
+        // the resolution of depth (TL9), the cadence DyadPreview
+        // already fits at. The bg-moments triple keeps its derived-
+        // gain EMA below (the model's latent doesn't cover it).
+        // nil (flag off or partial capture) ⇒ the EMA law stands.
+        let jepaStats = CameraConfig.jepaH ? jepaSmoothed(rawStats) : nil
+
         // ── Stage 1c: warm-started tables + assignment inputs (v5).
         // Every pixel was already γ-staged in 1a; assignment runs ONE
         // search on ŷ for all roles (DY10: the pair {q, 255−q} is a
@@ -207,8 +223,9 @@ enum DyadPipeline {
         // before any exists (or single-phase), the Wada prior rules.
         var smoothedBg: (meanL: Double, meanLnC: Double, sdLnC: Double)?
         for (f, raw) in rawStats.enumerated() {
-            let warm = smoothed.map { DyadPalette.ema(alpha: alpha, raw, $0) } ?? raw
-            smoothed = warm
+            let emaWarm = smoothed.map { DyadPalette.ema(alpha: alpha, raw, $0) } ?? raw
+            smoothed = emaWarm
+            let warm = jepaStats?[f] ?? emaWarm
 
             let stagedLabs = stagedAll[f].map { DyadPalette.oklab(fromSRGB8: $0) }
             if twoPhase,
@@ -377,7 +394,8 @@ enum DyadPipeline {
             return Output(indexFrames: chaosRefine(pairDither(ane)), tables: tables,
                           stats: frameStats, mixture: mixture,
                           twoPhase: twoPhase, alpha: alpha,
-                          msGain: msGain, groundMoments: frameMoments)
+                          msGain: msGain, groundMoments: frameMoments,
+                          jepaH: jepaStats != nil)
         }
         let cpu = (0..<frames.count).map { f in
             assignRoles(labs: labs[f], mask: masks[f], far: fars[f],
@@ -386,7 +404,60 @@ enum DyadPipeline {
         return Output(indexFrames: chaosRefine(pairDither(cpu)), tables: tables,
                       stats: frameStats, mixture: mixture,
                       twoPhase: twoPhase, alpha: alpha,
-                      msGain: msGain, groundMoments: frameMoments)
+                      msGain: msGain, groundMoments: frameMoments,
+                      jepaH: jepaStats != nil)
+    }
+
+    /// ★JEPA-H (JH4): the deployed placement law. Pool the 64
+    /// per-frame stats to the 16-slot ring (slot = 4-frame mean —
+    /// the rung-16 cadence, the resolution of depth), steady the
+    /// 6-dim latent (centroid l,a,b + LOG-diagonals — exactly the
+    /// corpus law the model trained on), rebuild per-slot Stats.
+    /// The model smooths LOCATION and SCALE; SHAPE — the correlation
+    /// coefficients the corpus never modeled — rides the slot pool
+    /// and recombines as c_ij = r_ij·√(c_ii·c_jj), positive-
+    /// semidefinite by construction, no new constants. Frames
+    /// within a slot share one generating state, so tables hold at
+    /// 5 Hz exactly like the preview. Requires the frame count to
+    /// divide into 16 equal slots; otherwise nil.
+    static func jepaSmoothed(_ raw: [DyadPalette.Stats]) -> [DyadPalette.Stats]? {
+        let slots = JepaHHead.slots
+        guard raw.count >= slots, raw.count % slots == 0 else { return nil }
+        let group = raw.count / slots
+        let eps = 1e-12                    // whitening-law epsilon
+        var pooled: [[Double]] = []        // [slot][9], statVector order
+        pooled.reserveCapacity(slots)
+        for s in 0..<slots {
+            var acc = [Double](repeating: 0, count: 9)
+            for f in (s * group)..<((s + 1) * group) {
+                let v = statVector(raw[f])
+                for i in 0..<9 { acc[i] += v[i] }
+            }
+            pooled.append(acc.map { $0 / Double(group) })
+        }
+        let ring = pooled.map { v in
+            [v[0], v[1], v[2],
+             log(max(v[3], eps)), log(max(v[6], eps)), log(max(v[8], eps))]
+        }
+        let shat = JepaHHead.smoothRing(ring)
+        var out: [DyadPalette.Stats] = []
+        out.reserveCapacity(raw.count)
+        for s in 0..<slots {
+            let v = pooled[s], sh = shat[s]
+            let c00 = exp(sh[3]), c11 = exp(sh[4]), c22 = exp(sh[5])
+            func corr(_ cij: Double, _ cii: Double, _ cjj: Double) -> Double {
+                let den = (max(cii, eps) * max(cjj, eps)).squareRoot()
+                return min(1, max(-1, cij / den))
+            }
+            let c01 = corr(v[4], v[3], v[6]) * (c00 * c11).squareRoot()
+            let c02 = corr(v[5], v[3], v[8]) * (c00 * c22).squareRoot()
+            let c12 = corr(v[7], v[6], v[8]) * (c11 * c22).squareRoot()
+            let st = DyadPalette.makeStats(
+                centroid: OKLabColor(l: sh[0], a: sh[1], b: sh[2]),
+                covariance: [[c00, c01, c02], [c01, c11, c12], [c02, c12, c22]])
+            for _ in 0..<group { out.append(st) }
+        }
+        return out
     }
 
     /// Exact CPU assignment on staged labs: face → nearest primary

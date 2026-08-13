@@ -109,6 +109,12 @@ enum GIFMachine {
             m.crossover, m.temperature,
             DepthMixture.metersOf(signal: m.crossover), dyad.alpha,
             dyad.msGain))
+        // ★JEPA-H (JH4): records that the one model steadied the
+        // rung-16 ring — the attribution the promotion law needs
+        // when comparing real-capture ledgers before/after. The
+        // STATS lines below already ARE the smoothed generating
+        // state; rebuild needs no new law.
+        if dyad.jepaH { lines.append("DYAD JEPAH v7 ring=16") }
         // v2 (phase-palette step 3, ruling R2): 9 stats numbers plus
         // the frame's fitted ground moments (deltaL alphaC betaC cap)
         // — 13 per line. The GIF still carries its full generator.

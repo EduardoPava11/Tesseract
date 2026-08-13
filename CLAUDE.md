@@ -201,11 +201,24 @@ ring filter + jump gate (hypernet on ring autocorrelations, no
 slot-content params — structurally cannot memorize; 5,789 params)
 + decoupled JEPA encoder (surprise channel). ALL BEAUTY GATES
 GREEN vs the oracle-gain EMA (churn −11.7%, LZW(LCT) down, RMSE
-better); JepaH.mlpackage folded, parity 2.7e-7. JH4 OPEN: flagged
-placement at SOLVING (smooth the captured rung-16 ring before
-tables), promoted only by real-capture RATE LEDGER + HARMONY +
-Daniel's device pass. nn/descent is RETIRED to lessons (DL6/DL7
-stay law; lookahead-L2 belongs inside DyadAssign if ever shipped).
+better); JepaH.mlpackage folded, parity 2.7e-7. JH4 WIRED
+(2026-08-12 "go hard"): the deployed head is PURE SWIFT ON CPU —
+JepaHHead.swift + JepaHWeights.swift (149 weights; a 16×6 ring
+sits far below the ANE dispatch floor, so the mlpackage stays the
+Mac-side reference; nn/jepa/export_swift.py is the bridge, parity
+9e-16 via nn/jepa/parity_swift.sh + JepaHParityTests). Placement:
+DyadPipeline.jepaSmoothed pools the 64 per-frame stats to the
+rung-16 ring, steadies the corpus latent (centroid + log-
+diagonals), recombines off-diagonals as r_ij·√(c_ii·c_jj) (PSD by
+construction); frames share one state per slot, so tables hold at
+the 5 Hz cadence the preview already fits at. Bg-moments EMA
+unchanged. Flag CameraConfig.jepaH DEFAULT ON (one-line revert);
+"DYAD JEPAH v7" trace line = the attribution; trace rebuild stays
+byte-exact (the smoothed numbers ARE the generating state).
+PROMOTION still owed: real-capture RATE LEDGER + HARMONY
+before/after + Daniel's device pass. nn/descent is RETIRED to
+lessons (DL6/DL7 stay law; lookahead-L2 belongs inside DyadAssign
+if ever shipped).
 
 ★DESCENT LADDER (Daniel's alignment rulings 2026-08-12, after the
 adversarial review docs/jepa-h-adversarial-review-2026-08-12.md
