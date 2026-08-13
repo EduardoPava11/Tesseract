@@ -23,9 +23,9 @@ welcome on main; rear *capture in the app* is not.
 ## Architecture
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (45 files green
+- `spec/` — runghc axiom suite: `cd spec && make test` (46 files green
   as of 2026-08-12 — RateLadder.hs + PairTree.hs + SurfaceMachine.hs +
-  DescentLadder.hs added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
+  DescentLadder.hs + JepaH.hs added; the tally must stay at zero failures). The 2026-08-11 UNIFICATION removed the pre-pivot gene-NN/
   MAP-Elites/VoxelCube/KataGo-era specs and dead Swift (git history
   keeps everything); spec/README.md is the current map.
   New mechanisms get a spec with axioms BEFORE the Swift port.
@@ -192,6 +192,21 @@ ASSIST MODEL planned (nn/pair-tree/): distill the exact split
 algorithm from the rung-16 slow state (SKGene G1–G6 grounding
 pattern; corpora = synthetic GIF89a statistical variance per
 ★NO-CAPTURE-TRAINING).
+★JEPA-H — THE ONE MODEL LINE (Daniel's decree 2026-08-12: no more
+parallel paths; MLX JEPA-H → iPhone; BEAUTY is the objective):
+nn/jepa is the only model lab. JH0–JH3 SHIPPED (commit eb4ead9):
+spec/neural/JepaH.hs JH1–JH6; self-gating trajectory emitter
+(make corpus-jepa, jump law); v7 = regime-conditioned symmetric
+ring filter + jump gate (hypernet on ring autocorrelations, no
+slot-content params — structurally cannot memorize; 5,789 params)
++ decoupled JEPA encoder (surprise channel). ALL BEAUTY GATES
+GREEN vs the oracle-gain EMA (churn −11.7%, LZW(LCT) down, RMSE
+better); JepaH.mlpackage folded, parity 2.7e-7. JH4 OPEN: flagged
+placement at SOLVING (smooth the captured rung-16 ring before
+tables), promoted only by real-capture RATE LEDGER + HARMONY +
+Daniel's device pass. nn/descent is RETIRED to lessons (DL6/DL7
+stay law; lookahead-L2 belongs inside DyadAssign if ever shipped).
+
 ★DESCENT LADDER (Daniel's alignment rulings 2026-08-12, after the
 adversarial review docs/jepa-h-adversarial-review-2026-08-12.md
 killed the research synthesis 0/6): the capture-assist model's
