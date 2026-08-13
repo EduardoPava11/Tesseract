@@ -93,12 +93,16 @@ final class JepaHParityTests: XCTestCase {
         }
     }
 
-    /// The placement contract: 64 stats → 64, frames within a
-    /// 4-frame slot share ONE generating state, covariances stay
-    /// PSD (positive diagonals, |r| ≤ 1 recombination), and a
+    /// The placement contract (ONE ring for ALL generating state,
+    /// ruling R2): 64 stats + bg triples → 64, frames within a
+    /// 4-frame slot share ONE state — stats AND bg — covariances
+    /// stay PSD (positive diagonals, |r| ≤ 1 recombination),
+    /// bg gaps fill around the torus, sdLnC stays positive, an
+    /// all-nil bg stays nil (the prior rules downstream), and a
     /// partial capture refuses (nil ⇒ the EMA law stands).
     func testJepaSmoothedStructure() {
         var raw: [DyadPalette.Stats] = []
+        var bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?] = []
         for f in 0..<64 {
             let x = Double(f) / 63.0
             let cov = [[0.004 + 0.002 * x, 0.0005, 0.0002],
@@ -107,16 +111,26 @@ final class JepaHParityTests: XCTestCase {
             raw.append(DyadPalette.makeStats(
                 centroid: OKLabColor(l: 0.5 + 0.3 * x, a: 0.03, b: 0.06 + 0.04 * x),
                 covariance: cov))
+            // slots 3..5 (frames 12..23) carry no background evidence
+            bg.append((12..<24).contains(f) ? nil
+                : (meanL: 0.7 - 0.1 * x, meanLnC: -2.5 + 0.3 * x,
+                   sdLnC: 0.2 + 0.05 * x))
         }
-        guard let out = DyadPipeline.jepaSmoothed(raw) else {
+        guard let out = DyadPipeline.jepaSmoothed(raw, bg: bg) else {
             return XCTFail("full 64-frame capture must smooth")
         }
-        XCTAssertEqual(out.count, 64)
+        XCTAssertEqual(out.stats.count, 64)
+        XCTAssertEqual(out.bg.count, 64)
         for s in 0..<16 {
-            let head = out[s * 4]
+            let head = out.stats[s * 4]
+            let bgHead = out.bg[s * 4]
+            XCTAssertNotNil(bgHead, "torus fill must cover empty slots")
+            XCTAssertGreaterThan(bgHead!.sdLnC, 0)
             for f in (s * 4)..<(s * 4 + 4) {
-                XCTAssertEqual(out[f].centroid.l, head.centroid.l)
-                XCTAssertEqual(out[f].covariance[0][0], head.covariance[0][0])
+                XCTAssertEqual(out.stats[f].centroid.l, head.centroid.l)
+                XCTAssertEqual(out.stats[f].covariance[0][0], head.covariance[0][0])
+                XCTAssertEqual(out.bg[f]!.meanL, bgHead!.meanL)
+                XCTAssertEqual(out.bg[f]!.sdLnC, bgHead!.sdLnC)
             }
             let c = head.covariance
             for i in 0..<3 { XCTAssertGreaterThan(c[i][i], 0) }
@@ -126,7 +140,15 @@ final class JepaHParityTests: XCTestCase {
                 XCTAssertEqual(c[i][j], c[j][i])
             }
         }
-        XCTAssertNil(DyadPipeline.jepaSmoothed(Array(raw.prefix(63))),
+        // single-phase: no bg anywhere ⇒ bg stays nil everywhere
+        let noBg = DyadPipeline.jepaSmoothed(
+            raw, bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?](
+                repeating: nil, count: 64))
+        XCTAssertNotNil(noBg)
+        XCTAssertTrue(noBg!.bg.allSatisfy { $0 == nil })
+        // partial capture refuses
+        XCTAssertNil(DyadPipeline.jepaSmoothed(Array(raw.prefix(63)),
+                                               bg: Array(bg.prefix(63))),
                      "partial capture must refuse and fall back to EMA")
     }
 }

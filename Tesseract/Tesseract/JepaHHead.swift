@@ -34,12 +34,20 @@ enum JepaHHead {
     /// softplus/sigmoid jump gate → de-whiten. Ring-rotation
     /// equivariant end to end (JH4's whitening law + the filter
     /// being a ring convolution): the model has no phase origin.
+    ///
+    /// DIM-AGNOSTIC BY CONSTRUCTION: every operation is per-dim and
+    /// the whitening + autocorrelation regime make the hypernet's
+    /// input scale-free, so the learned regime→kernel map applies
+    /// lawfully to ANY local-level dimension — the corpus's 6 stats
+    /// dims and the bg-moments triple alike (the "one smoothing law
+    /// for all generating state" ruling, R2).
     static func smoothRing(_ y: [[Double]]) -> [[Double]] {
-        precondition(y.count == slots && y.allSatisfy { $0.count == dims })
+        let m = y.first?.count ?? 0
+        precondition(y.count == slots && y.allSatisfy { $0.count == m })
         let n = Double(slots)
         var out = y
 
-        for d in 0..<dims {
+        for d in 0..<m {
             // ── whiten this dim over the ring ──
             var mu = 0.0
             for t in 0..<slots { mu += y[t][d] }
