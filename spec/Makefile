@@ -60,7 +60,8 @@ NEURAL = neural/BayerResidual.hs \
          neural/SKGeneCalculus.hs \
          neural/SKGeneSemantics.hs \
          neural/OctaveCodec.hs \
-         neural/DescentLadder.hs
+         neural/DescentLadder.hs \
+         neural/JepaH.hs
 
 UI = ui/CellMechanics.hs \
      ui/SurfaceMachine.hs
@@ -116,6 +117,10 @@ corpus:
 # Emit the descent-ladder training corpus → nn/descent/corpus/
 corpus-descent:
 	@$(RUNGHC) $(FLAGS) output/DescentCorpusEmit.hs
+
+# Emit the JEPA-H trajectory corpus → nn/jepa/corpus/
+corpus-jepa:
+	@$(RUNGHC) $(FLAGS) output/JepaCorpusEmit.hs
 
 test-verbose:
 	@for f in $(CORE); do \

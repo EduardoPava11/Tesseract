@@ -49,3 +49,5 @@ nn/phase/*.npz
 nn/sk-gene/corpus/
 nn/descent/corpus/
 nn/descent/DescentAssign.mlpackage/
+nn/jepa/corpus/
+nn/jepa/JepaH.mlpackage/
