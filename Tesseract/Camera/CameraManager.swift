@@ -16,6 +16,27 @@ import os.log
 
 private let logger = Logger(subsystem: "com.tesseract.app", category: "Camera")
 
+/// ★ C3 — the sRGB transfer, outside the @MainActor class because the
+/// sensor read is nonisolated. A box prefilter must average LINEAR
+/// light: averaging gamma-encoded bytes biases every mixed block dark,
+/// which is a different operation wearing the same name.
+enum SRGBTransfer {
+    /// byte → linear. The camera delivers 8-bit sRGB, so 256 entries is
+    /// the WHOLE domain — the table is exact, not an approximation, and
+    /// it keeps `pow` out of the 589,824-sample inner loop (4096 cells
+    /// × 144 samples per frame at rung 64).
+    static let toLinear: [Float] = (0...255).map { i in
+        let c = Float(i) / 255
+        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+
+    /// linear → sRGB, once per OUTPUT pixel (4096 per frame).
+    static func toSRGB(_ c: Float) -> Float {
+        let v = min(1, max(0, c))
+        return v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055
+    }
+}
+
 /// Camera state machine — the SIMPLICITY arc (2026-08-09): capture goes
 /// straight to the result. (The three-phase A/B explore/compose/refine
 /// states were excised 2026-08-10 with the rest of the gene arc.)
@@ -120,7 +141,26 @@ enum CameraConfig {
     // RMSE better). DEFAULT ON like pairTree: one-line revert; the
     // real-capture RATE LEDGER + DYAD HARMONY before/after and
     // Daniel's device pass are the promotion judges (JH4 contract).
-    static let jepaH = true
+    //
+    // ★ FLIPPED OFF 2026-08-14 — Daniel's ruling, twice over:
+    //   (1) "follow the scene — match the true motion". Measured on
+    //       the synthetic corpus: the head lands at churn 7.921
+    //       against a TRUE 9.592 — it holds the palette 17.4%
+    //       STEADIER than the scene actually is, and sits 2.67×
+    //       further from truth than the oracle-EMA baseline it
+    //       replaced (new gate B5 in nn/jepa/train.py: ✗). Every
+    //       shipped gate passed because every shipped gate compared
+    //       the model to a BASELINE and none to TRUTH.
+    //   (2) "the model should not dictate HOW we capture — it should
+    //       help us create the data from which we make the editing
+    //       possible." Smoothing the ring HERE (DyadPipeline:378,
+    //       before the tables solve) is the model deciding bytes at
+    //       capture time. That placement is retired; the model's
+    //       home is the EDIT path. See docs/model-placement.md.
+    // Capture now retains the scene's own motion. Re-enable only
+    // after the truth-referenced retrain AND a placement that reads
+    // the state without writing it.
+    static let jepaH = false
 }
 
 @MainActor
@@ -434,6 +474,14 @@ final class CameraManager: NSObject, ObservableObject {
     nonisolated(unsafe) private static var _frameCounter: Int = 0
     nonisolated(unsafe) private static var _depthFrames: Int = 0
     nonisolated(unsafe) private static var _noDepthFrames: Int = 0
+    /// C4: the RGB dimensions the registration probe compares against —
+    /// captured where they are read, consumed where depth is read.
+    nonisolated(unsafe) private static var _lastRGBWidth: Int = 0
+    nonisolated(unsafe) private static var _lastRGBHeight: Int = 0
+    /// Fires the registration verdict exactly once per session (same
+    /// nonisolated(unsafe) pattern as the counters above — the probe
+    /// is a log line, and a duplicate log is harmless).
+    nonisolated(unsafe) private static var _registrationProbed = false
     nonisolated(unsafe) private static var _lastTimestamp: CFTimeInterval = 0
     nonisolated(unsafe) private static var _fpsAccum: Double = 0
     nonisolated(unsafe) private static var _fpsCount: Int = 0
@@ -441,6 +489,8 @@ final class CameraManager: NSObject, ObservableObject {
     nonisolated func processFrame(rgbBuffer: CVPixelBuffer, depthBuffer: CVPixelBuffer?) {
         let rgbW = CVPixelBufferGetWidth(rgbBuffer)
         let rgbH = CVPixelBufferGetHeight(rgbBuffer)
+        Self._lastRGBWidth = rgbW          // C4: the probe's other half
+        Self._lastRGBHeight = rgbH
         Self._frameCounter += 1
 
         // ── Frame timing ──
@@ -533,7 +583,6 @@ final class CameraManager: NSObject, ObservableObject {
         let cropX = (rgbW - cropSize) / 2
         let cropY = (rgbH - cropSize) / 2
         let step = CameraConfig.rgbStep     // 768 / outSize, integer
-        let half = step / 2
 
         CVPixelBufferLockBaseAddress(rgbBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(rgbBuffer, .readOnly) }
@@ -545,16 +594,47 @@ final class CameraManager: NSObject, ObservableObject {
         var pixels = [(Float, Float, Float)]()
         pixels.reserveCapacity(outSize * outSize)
 
+        // ★ C3 BOX PREFILTER (docs/model-placement.md §3; rate-ladder
+        // step S2). This read used to take the CENTRE pixel of each
+        // step×step block — one sample in 144 at rung 64 — and throw
+        // the other 143 away. That is not a downsample, it is a
+        // decimation: everything above the output Nyquist folds back
+        // as alias, and no later stage can undo it. Since the capture's
+        // job is colour diversity (Daniel, 2026-08-14), an aliased read
+        // is diversity the scene had and the cube never sees.
+        //
+        // The box average is taken in LINEAR LIGHT — averaging
+        // gamma-encoded bytes is a different (and wrong) operation, it
+        // biases every mixed block dark. Decode is a 256-entry table
+        // (the source is 8-bit, so the table is exact and there is no
+        // pow() in the inner loop); the single re-encode per output
+        // pixel keeps the stored value in the sRGB [0,1] the rest of
+        // the pipeline expects. `half` is no longer used: the block
+        // IS the sample.
+        let lut = SRGBTransfer.toLinear
         for y in 0..<outSize {
             for x in 0..<outSize {
-                let srcX = cropX + y * step + half
-                let srcY = cropY + (outSize - 1 - x) * step + half
-                guard srcX < rgbW && srcY < rgbH else { pixels.append((0,0,0)); continue }
-                let off = srcY * bytesPerRow + srcX * 4
-                let b = Float(buffer[off]) / 255.0
-                let g = Float(buffer[off + 1]) / 255.0
-                let r = Float(buffer[off + 2]) / 255.0
-                pixels.append((r, g, b))
+                let x0 = cropX + y * step
+                let y0 = cropY + (outSize - 1 - x) * step
+                var sr = Float(0), sg = Float(0), sb = Float(0), n = Float(0)
+                for dy in 0..<step {
+                    let sy = y0 + dy
+                    if sy < 0 || sy >= rgbH { continue }
+                    let row = sy * bytesPerRow
+                    for dx in 0..<step {
+                        let sx = x0 + dx
+                        if sx < 0 || sx >= rgbW { continue }
+                        let off = row + sx * 4
+                        sb += lut[Int(buffer[off])]
+                        sg += lut[Int(buffer[off + 1])]
+                        sr += lut[Int(buffer[off + 2])]
+                        n += 1
+                    }
+                }
+                guard n > 0 else { pixels.append((0, 0, 0)); continue }
+                pixels.append((SRGBTransfer.toSRGB(sr / n),
+                               SRGBTransfer.toSRGB(sg / n),
+                               SRGBTransfer.toSRGB(sb / n)))
             }
         }
 
@@ -605,6 +685,32 @@ final class CameraManager: NSObject, ObservableObject {
 
         let dW = CVPixelBufferGetWidth(depthBuffer)
         let dH = CVPixelBufferGetHeight(depthBuffer)
+
+        // ★ C4 REGISTRATION PROBE (docs/model-placement.md §3).
+        // The crops are pinned — rgbCrop 768 / depthCrop 256 = 3 — and
+        // NOTHING has ever compared that to what the device delivers.
+        // The two dimensions were logged in different functions and
+        // never met. If the delivered ratio is not 3, every crop lands
+        // on a different region of the scene in each modality, so the
+        // role split is applied to a mis-scaled field: the figure mask
+        // and the colours it selects describe different pictures. Every
+        // measurement in the occupancy programme would then be about
+        // the wrong image, which is why this fires ONCE per session,
+        // loudly, with an explicit verdict rather than raw numbers.
+        if !Self._registrationProbed {
+            Self._registrationProbed = true
+            let ratio = Double(Self._lastRGBWidth) / Double(max(1, dW))
+            let pinned = Double(CameraConfig.scaleFactor)
+            let ok = abs(ratio - pinned) < 0.01
+            let verdict = ok
+                ? "MATCH"
+                : "MISMATCH - every role decision lands on a mis-scaled field; rgbCrop/depthCrop are wrong"
+            let line = "REGISTRATION PROBE: RGB \(Self._lastRGBWidth)x\(Self._lastRGBHeight)"
+                + " depth \(dW)x\(dH)"
+                + " ratio=\(String(format: "%.3f", ratio)) pinned=\(Int(pinned)) \(verdict)"
+            logger.info("\(line)")
+        }
+
         guard let base = CVPixelBufferGetBaseAddress(depthBuffer) else {
             return [Float](repeating: DepthSignal.fill, count: outSize * outSize)
         }
@@ -615,35 +721,60 @@ final class CameraManager: NSObject, ObservableObject {
         let dCropX = (dW - dCropSize) / 2
         let dCropY = (dH - dCropSize) / 2
         let dStep = CameraConfig.depthStep    // 256 / outSize, integer
-        let dHalf = dStep / 2
 
         var values = [Float]()
         values.reserveCapacity(outSize * outSize)
 
+        // ★ C3 BOX PREFILTER, depth half. Same decimation as the RGB
+        // read (one sample of every dStep², 16 at rung 64) and the same
+        // fix — with one difference that matters: depth has INVALID
+        // samples (non-finite or ≤ 0 meters), and averaging those in
+        // would drag every block containing a dropout toward the fill.
+        // So the mean is over VALID samples only, and `fill` is used
+        // only when a block has no valid sample at all — the block
+        // then says "no evidence" rather than "middle distance".
+        //
+        // Averaged in SIGNAL space, which is the correct space for
+        // depth: DepthSignal.signal is affine in 1/m, so a mean of
+        // signals IS a mean of disparities. Averaging metres would
+        // bias every depth edge toward the far surface.
+        func pooledSignal(_ sample: (Int, Int) -> Float?, _ x: Int, _ y: Int) -> Float {
+            let x0 = dCropX + y * dStep
+            let y0 = dCropY + (outSize - 1 - x) * dStep
+            var sum = Float(0), n = Float(0)
+            for dy in 0..<dStep {
+                let sy = y0 + dy
+                if sy < 0 || sy >= dH { continue }
+                for dx in 0..<dStep {
+                    let sx = x0 + dx
+                    if sx < 0 || sx >= dW { continue }
+                    guard let m = sample(sx, sy), m.isFinite, m > 0 else { continue }
+                    sum += DepthSignal.signal(meters: m)
+                    n += 1
+                }
+            }
+            return n > 0 ? sum / n : DepthSignal.fill
+        }
+
         if formatType == kCVPixelFormatType_DepthFloat16 {
             let ptr = base.assumingMemoryBound(to: UInt16.self)
             let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 2
+            let sample: (Int, Int) -> Float? = { sx, sy in
+                Float(Float16(bitPattern: ptr[sy * stride + sx]))
+            }
             for y in 0..<outSize {
                 for x in 0..<outSize {
-                    // 90° CCW to match RGB rotation
-                    let srcX = dCropX + y * dStep + dHalf
-                    let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
-                    guard srcX < dW && srcY < dH else { values.append(DepthSignal.fill); continue }
-                    let raw = ptr[srcY * stride + srcX]
-                    values.append(DepthSignal.signalOrFill(meters: Float(Float16(bitPattern: raw))))
+                    values.append(pooledSignal(sample, x, y))
                 }
             }
         } else {
-            // Float32 fallback
+            // Float32 fallback — same box prefilter, same validity rule
             let ptr = base.assumingMemoryBound(to: Float.self)
             let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 4
+            let sample: (Int, Int) -> Float? = { sx, sy in ptr[sy * stride + sx] }
             for y in 0..<outSize {
                 for x in 0..<outSize {
-                    // 90° CCW
-                    let srcX = dCropX + y * dStep + dHalf
-                    let srcY = dCropY + (outSize - 1 - x) * dStep + dHalf
-                    guard srcX < dW && srcY < dH else { values.append(DepthSignal.fill); continue }
-                    values.append(DepthSignal.signalOrFill(meters: ptr[srcY * stride + srcX]))
+                    values.append(pooledSignal(sample, x, y))
                 }
             }
         }
@@ -742,7 +873,15 @@ final class CameraManager: NSObject, ObservableObject {
 
             // Archive every successful export — the library reviews old
             // GIFs + their palettes from the exact encoded bytes.
-            if let export { GIFLibrary.archive(export.data) }
+            // ★ CR1 (2026-08-14): retain the CUBE beside it. The GIF is
+            // the artifact; the cube is what the artifact can be
+            // re-woven FROM. Without this the editable data is freed
+            // when this closure returns and the capture is a one-shot.
+            // 1.75 MiB per capture, kept for every capture (Daniel's
+            // ruling), reclaimed by the library's own DELETE.
+            if let export, let gifURL = GIFLibrary.archive(export.data) {
+                CubeStore.save(frames: quantizedFrames, forGIF: gifURL)
+            }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).

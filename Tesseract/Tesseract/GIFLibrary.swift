@@ -46,8 +46,13 @@ enum GIFLibrary {
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
 
+    /// ★ CR1: a capture is a PAIR — the archived GIF and the retained
+    /// cube it can be re-woven from (CubeStore, keyed by the same
+    /// stem). Deleting one must delete the other, or the library grows
+    /// orphan cubes the user has no way to see or reclaim.
     static func delete(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
+        CubeStore.delete(forGIF: url)
     }
 
     /// The 256-entry global color table (for DYAD exports the GCT is

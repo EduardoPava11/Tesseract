@@ -33,7 +33,10 @@ or should not exist. Layers (see Makefile for the full lists):
 - **ui/** — cell-grid mechanics (lint-gated via scripts/lint-grid.sh).
 - **harmony/** — set-list dissonance ordering.
 - **output/** — the GIF machine's export contracts, frame geometry,
-  tri-scale ladder (TL1–TL12), corpus/icon emitters.
+  tri-scale ladder (TL1–TL12), the ADDITIVE LADDER (AdditiveLadder
+  AD1–AD10: every rung writes bits of every index — index =
+  role·128 + r16·64 + r32·8 + r64; the 1024 invariant; no rung is
+  telemetry), corpus/icon emitters.
 
 House rules: spec files are standalone (verbatim copies over imports;
 parity gates catch drift); no naked constants (every threshold derived

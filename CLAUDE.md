@@ -69,8 +69,15 @@ ruled next direction (THE OCTAVE — κ/σ over the 64³ spacetime cube; promote
 RUNGING from METER to SIGNAL first, dial last).
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (56 files green
-  as of 2026-08-14 — newest are WeaveState.hs (WS1–WS10, the causal
+- `spec/` — runghc axiom suite: `cd spec && make test` (59 files green
+  as of 2026-08-14, verified by a full run — newest are
+  ★AdditiveLadder.hs (AD1–AD10, Daniel's ruling "all rungs require a
+  meaningful additive to the creation of GIFs": index = role·128 +
+  r16·64 + r32·8 + r64, the three views are three STRATA of one index;
+  balanced occupancy = 1024 voxels/class at EVERY rung; the role bit is
+  DERIVED from the Bayer coverage code, 17 tile patterns not 2^16;
+  budget 905574 b vs 2097152 flat = 2.316:1; AD10 no rung is telemetry),
+  WeaveState.hs (WS1–WS10, the causal
   33-number state the capture-assist model may read: rung ladder
   1/4/16, 256! relabelings free in energy AND in LZW bits, the
   64-element orientation group, +31.25% for all three rungs) and

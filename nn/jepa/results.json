@@ -8,13 +8,16 @@
     "lzw_model": 14394.9296875,
     "rmse_ema": 0.057258776865806126,
     "rmse_model": 0.05601540536837867,
-    "rmse_rts": 0.04860915958574404
+    "rmse_rts": 0.04860915958574404,
+    "churn_dist_model": 1.671061197916666,
+    "churn_dist_ema": 0.625572204589842
   },
   "gates": {
     "DET": true,
     "B3": true,
     "B1": true,
-    "FID": true
+    "FID": true,
+    "B5": false
   },
   "params": 5789
 }

@@ -85,6 +85,7 @@ OUTPUT = output/FrameGeometry.hs \
          output/ExportMethods.hs \
          output/TriScaleLadder.hs \
          output/RateLadder.hs \
+         output/AdditiveLadder.hs \
          output/FeedCompression.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.

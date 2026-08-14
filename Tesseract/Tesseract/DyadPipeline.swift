@@ -209,9 +209,15 @@ enum DyadPipeline {
     /// The σ coverage of one pixel — the ONE reading of the role law.
     /// Single-phase ⇒ all-face (R3); `bleed: false` ⇒ MAP classes
     /// only, no dither band (role law v1, a lawful subset).
+    /// ★ C5: a DEGENERATE fit (coincident components — a constant
+    /// depth frame) is the single-phase case by construction, so it
+    /// takes the same `return 0` rather than propagating NaN. The
+    /// totality is stated here as well as in `pull` because this is
+    /// the only reading of the role law: nothing downstream inspects
+    /// the fit again.
     static func coverage(_ d: Float, fit: DepthMixture.Fit,
                          twoPhase: Bool, bleed: Bool) -> Double {
-        guard twoPhase else { return 0 }
+        guard twoPhase, !fit.isDegenerate else { return 0 }
         let t = fit.pull(Double(d))
         return bleed ? t : (t < 0.5 ? 0 : 1)
     }

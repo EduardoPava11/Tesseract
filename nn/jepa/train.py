@@ -27,6 +27,7 @@ estimated gain. Beating the oracle is the honest bar.
 
 import json
 import math
+import os
 import numpy as np
 import mlx.core as mx
 import mlx.nn as nn
@@ -418,6 +419,28 @@ def main():
         t = np.array(tables, dtype=np.int64)
         return float(np.mean(np.abs(t - np.roll(t, -1, axis=0))))
 
+    # Fit the B5 calibration on the TRAIN split only: per dim, the
+    # ratio of the true increment scale to the model's own.
+    #
+    # ★ DEFAULT OFF (2026-08-14). Measured: the calibration PASSES B5
+    # (0.381 vs the baseline's 0.626) and FAILS B3 and FID — churn
+    # rises above oracle-EMA by construction, and cumsum
+    # reconstruction costs state RMSE (0.05602 → 0.07008). That is
+    # not a bad fix, it is proof that B3 and B5 CANNOT both hold for
+    # a smoother: B3 rewards less motion without bound, B5 requires
+    # the motion to match truth. Which one governs is Daniel's
+    # ruling, not a training choice. Set B5_CALIBRATE=1 to reproduce.
+    CAL = None
+    if os.environ.get("B5_CALIBRATE") == "1":
+        num = np.zeros(DIM); den = np.zeros(DIM)
+        for ci in range(split):
+            st = np.array(caps[ci]["states"])
+            sm = model_states(ci)
+            num += np.sqrt(np.mean(np.diff(st, axis=0) ** 2, axis=0))
+            den += np.sqrt(np.mean(np.diff(sm, axis=0) ** 2, axis=0))
+        CAL = np.where(den > 1e-12, num / np.maximum(den, 1e-12), 1.0)
+        print(f"  B5 calibration ON (train split, per dim): {CAL.round(3).tolist()}")
+
     res = {k: [] for k in ["churn_true", "churn_obs", "churn_ema",
                            "churn_model", "lzw_ema", "lzw_model",
                            "rmse_ema", "rmse_model", "rmse_rts"]}
@@ -428,6 +451,19 @@ def main():
         al = np.array([alpha_star(max(qd, 1e-12)) for qd in q])
         s_ema = ema_filter(y, al)
         s_model = model_states(ci)
+        # ── B5 REPAIR: variance-restoring calibration ──────────────
+        # A smoother shrinks the state's slot-to-slot motion; the
+        # optimal shrinkage for RMSE is not the honest one for an
+        # EDIT app, where that motion IS the content. Rescale the
+        # model's own increments so their scale matches the state
+        # the sampler actually generates. One scalar per dim, fitted
+        # ONCE on the training split (no test leakage), applied to
+        # every capture: not a tuned constant but a moment match —
+        # the same move DyadPalette's beta-compander makes on chroma.
+        if CAL is not None:
+            d = np.diff(s_model, axis=0) * CAL
+            s_model = np.concatenate([s_model[:1],
+                                      s_model[:1] + np.cumsum(d, axis=0)], axis=0)
         T = {k: [render_table(v[t]) for t in range(RING)]
              for k, v in [("true", s), ("obs", y),
                           ("ema", s_ema), ("model", s_model)]}
@@ -446,6 +482,17 @@ def main():
     b3 = avg["churn_model"] < avg["churn_ema"]
     b1 = avg["lzw_model"] < avg["lzw_ema"]
     fid = avg["rmse_model"] < avg["rmse_ema"]
+    # B5 CHURN FIDELITY (added 2026-08-14). B3 rewards LESS churn
+    # without bound, so a model that flattens the state entirely
+    # scores best — and the app is an EDIT app, where the motion
+    # being flattened is the thing the user came to shape. The
+    # honest target is the TRUE churn, not zero: the model must land
+    # CLOSER to truth than the baseline it replaces.
+    d_model = abs(avg["churn_model"] - avg["churn_true"])
+    d_ema = abs(avg["churn_ema"] - avg["churn_true"])
+    b5 = d_model <= d_ema
+    avg["churn_dist_model"] = d_model
+    avg["churn_dist_ema"] = d_ema
 
     print()
     print(f"  churn  true {avg['churn_true']:.3f} | obs {avg['churn_obs']:.3f}"
@@ -459,12 +506,15 @@ def main():
     print(f"  B3  churn: model < oracle-EMA: {'✓' if b3 else '✗'}")
     print(f"  B1  LZW:   model < oracle-EMA: {'✓' if b1 else '✗'}")
     print(f"  FID rmse:  model < oracle-EMA: {'✓' if fid else '✗'}")
+    print(f"  B5  churn fidelity |model−true| {d_model:.3f}"
+          f" <= |EMA*−true| {d_ema:.3f}: {'✓' if b5 else '✗'}")
     print(f"  params REPORTED: {n_params}")
 
     flat = dict(tree_flatten(model.parameters()))
     np.savez("jepa_weights.npz", **{k: np.array(v) for k, v in flat.items()})
     json.dump(dict(avg=avg, gates=dict(DET=bool(det), B3=bool(b3),
-                                       B1=bool(b1), FID=bool(fid)),
+                                       B1=bool(b1), FID=bool(fid),
+                                       B5=bool(b5)),
                    params=int(n_params)),
               open("results.json", "w"), indent=2)
     print("  saved jepa_weights.npz + results.json")

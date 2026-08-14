@@ -153,6 +153,17 @@ enum GIFMachine {
             lines.append("\(gm.rot.a) \(gm.rot.b) \(gm.balanced ? 1 : 0)")
         }
         lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
+        // ADDITIVE CENSUS v1 (S1 INSTRUMENT — spec output/AdditiveLadder.hs
+        // AD11/AD12): per-stratum conformance and occupancy of the
+        // ADDITIVE LADDER (Daniel's ruling 2026-08-14, "all rungs
+        // require a meaningful additive to the creation of GIFs").
+        // Today's free fine-rung assignment conforms at the leaf
+        // stratum and nowhere else; this line is the before/after the
+        // S8 port is judged by. Comment bytes only.
+        if !indexFrames.isEmpty {
+            lines.append(AdditiveCensus.trace(indexFrames: indexFrames,
+                                              side: QuantizedFrame.size))
+        }
         // RATE LEDGER v1 (rate-ladder redesign step S0 — measurement
         // only; spec output/RateLadder.hs RL5): H₀ = order-0 entropy
         // of the emitted index cube, K̂ = bits/px the encoder's own
@@ -288,6 +299,38 @@ enum GIFMachine {
                                               chaosLoop: CameraConfig.phaseChaosLoop,
                                               onFrameTable: onFrameTable)
         else { return nil }
+        return finish(dyad, settings: settings, frames: frames)
+    }
+
+    /// ★ THE REWEAVE PATH (CR1/CR3). The same encoder over a RETAINED
+    /// cube instead of a live capture — `frames:` and this differ only
+    /// in where the rgb/depths came from, and both end in `finish`, so
+    /// there is still exactly ONE encoder (EM12/EM13). The trace's
+    /// frame-derived section is absent here because a retained cube
+    /// carries no QuantizedFrame; everything the GIF needs to
+    /// self-describe is in the dyad solve itself.
+    static func makeGIF(
+        rgb: [[(Float, Float, Float)]],
+        depths: [[Float]],
+        settings: ExportSettings = ExportSettings.load(),
+        onFrameTable: ((Int, Data) -> Void)? = nil
+    ) -> (data: Data, measure: BirkhoffMeasure)? {
+        guard !rgb.isEmpty, rgb.count == depths.count,
+              let dyad = DyadPipeline.process(rgb: rgb, depths: depths,
+                                              bleed: settings.bleed,
+                                              chaosLoop: CameraConfig.phaseChaosLoop,
+                                              onFrameTable: onFrameTable)
+        else { return nil }
+        return finish(dyad, settings: settings, frames: [])
+    }
+
+    /// Indices + tables → bytes. The single tail both entry points
+    /// share: mirror, measure, encode, trace.
+    private static func finish(
+        _ dyad: DyadPipeline.Output,
+        settings: ExportSettings,
+        frames: [QuantizedFrame]
+    ) -> (data: Data, measure: BirkhoffMeasure)? {
         var counts = [Int](repeating: 0, count: 256)
         for f in dyad.indexFrames { for i in f { counts[Int(i)] += 1 } }
         let measure = BirkhoffMeasure(

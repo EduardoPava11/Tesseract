@@ -430,7 +430,15 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
             // Archive every successful export — the library reviews old
             // GIFs + their palettes from the exact encoded bytes.
-            if let export { GIFLibrary.archive(export.data) }
+            // ★ CR1 (2026-08-14): retain the CUBE beside it. The GIF is
+            // the artifact; the cube is what the artifact can be
+            // re-woven FROM. Without this the editable data is freed
+            // when this closure returns and the capture is a one-shot.
+            // 1.75 MiB per capture, kept for every capture (Daniel's
+            // ruling), reclaimed by the library's own DELETE.
+            if let export, let gifURL = GIFLibrary.archive(export.data) {
+                CubeStore.save(frames: quantizedFrames, forGIF: gifURL)
+            }
 
             // The 16/32/64 ladder over the realized cube — exact
             // lattice-level sums, telemetry only (TriScaleLadder.swift).

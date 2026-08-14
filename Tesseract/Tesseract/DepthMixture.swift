@@ -33,9 +33,29 @@ enum DepthMixture {
             (muF + muB) / 2 + temperature * log(piB / (1 - piB))
         }
 
-        /// THE PULL. IEEE-total: exp overflow saturates t to 0/1.
+        /// ★ C5 (2026-08-14): the fit is DEGENERATE when its two
+        /// components coincide — μ_F ≯ μ_B, which a frame of constant
+        /// depth produces exactly (FACE reaches it on any tracking
+        /// drop, and unavoidably on frame 0). Then μ_F − μ_B = 0,
+        /// `temperature` is +inf, `crossover` is inf·0 = NaN, and
+        /// `pull` returns NaN for every pixel — the frame collapses
+        /// onto a handful of σ entries and poisons its own table,
+        /// silently, because NaN never trips a comparison.
+        ///
+        /// This is not a new threshold: two coincident components ARE
+        /// one component, so a degenerate fit is the single-phase case
+        /// the role law already rules on (DM ruling R3 — single-phase
+        /// ⇒ all-face). The guard routes it there instead of
+        /// computing an infinity. `sigma` is floored by the fit, so
+        /// separation is the only way to degenerate.
+        var isDegenerate: Bool { !(muF > muB) || !temperature.isFinite }
+
+        /// THE PULL. IEEE-total: exp overflow saturates t to 0/1, and
+        /// a degenerate fit answers with the single-phase reading
+        /// rather than NaN.
         func pull(_ s: Double) -> Double {
-            1 / (1 + exp((s - crossover) / temperature))
+            if isDegenerate { return 0 }
+            return 1 / (1 + exp((s - crossover) / temperature))
         }
     }
 
