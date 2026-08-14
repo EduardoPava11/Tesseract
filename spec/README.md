@@ -23,8 +23,11 @@ or should not exist. Layers (see Makefile for the full lists):
   the temporal loop.
 - **spatial/** — Go-board territory reads over blocks (TesseractGo).
 - **statistics/** — variance laws, phase energies (Ising/crossover),
-  the Sethares dissonance kernel, Wasserstein palettes.
-- **neural/** — the ANE loop calculus (AL1–AL9), the SK gene arc
+  the tiling energy in bits (TilingEntropy TE1–TE10: E = N·log₂K −
+  N·H₀, ground = every color exactly 16×), the Sethares dissonance
+  kernel, Wasserstein palettes.
+- **neural/** — the weave state a capture-assist model may read
+  (WeaveState WS1–WS10), the ANE loop calculus (AL1–AL9), the SK gene arc
   (SKGeneCalculus SK1–SK10, SKGeneSemantics AX1–AX8, OctaveCodec
   CX1–CX7), the Mac-side debayer contract (BayerResidual).
 - **ui/** — cell-grid mechanics (lint-gated via scripts/lint-grid.sh).

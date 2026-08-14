@@ -69,8 +69,15 @@ ruled next direction (THE OCTAVE — κ/σ over the 64³ spacetime cube; promote
 RUNGING from METER to SIGNAL first, dial last).
 
 Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
-- `spec/` — runghc axiom suite: `cd spec && make test` (54 files green
-  as of 2026-08-13 — the EDIT-APP arc added RoleAllocation.hs,
+- `spec/` — runghc axiom suite: `cd spec && make test` (56 files green
+  as of 2026-08-14 — newest are WeaveState.hs (WS1–WS10, the causal
+  33-number state the capture-assist model may read: rung ladder
+  1/4/16, 256! relabelings free in energy AND in LZW bits, the
+  64-element orientation group, +31.25% for all three rungs) and
+  TilingEntropy.hs, TE1–TE10: the
+  energy of 256 colors on the 64×64 in BITS, E = N·log₂K − N·H₀, whose
+  ground state is every color exactly 16× and is therefore surjective
+  for free; the EDIT-APP arc added RoleAllocation.hs,
   Octave.hs, EditMachine.hs, FeedCompression.hs, PhaseTiling.hs,
   WidgetGrid.hs, AttractorRAG.hs, then DetentDial.hs; the tally must
   stay at zero failures). ★ The harness fails a file on nonzero exit OR **any `✗`
