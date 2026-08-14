@@ -303,42 +303,30 @@ struct ContentView: View {
     // permission denials add Open Settings; a failed encode retries.
     @ViewBuilder
     private func errorState(_ refusal: EditMachine.Refusal) -> some View {
-        let headline = EditMachine.State.refused(refusal).word
-        switch refusal {
-        case .cameraOff:
-            ErrorStateView(message: headline,
-                           detail: "allow camera access in Settings to see the preview",
-                           onRetry: restart,
-                           showsSettings: true)
-        case .noTrueDepth:
-            // The gate: Tesseract does not run on non-TrueDepth iPhones
-            // (Daniel, 2026-08-09). No capability key can hide the app
-            // from these devices, so the gate states the requirement.
-            // TERMINAL (EM7) — no RETRY.
-            ErrorStateView(message: headline,
-                           detail: "tesseract needs the Face ID camera, and this iPhone has none")
-        case .noCenterStage:
-            // The device-targeting gate (Daniel, 2026-08-12): the app is
-            // for iPhones with the square-sensor Center Stage selfie
-            // camera. No capability key exists, so the gate states the
-            // requirement — TERMINAL (EM7), no RETRY.
-            ErrorStateView(message: headline,
-                           detail: "tesseract needs the center stage selfie camera of iPhone 17 or later")
-        case .noFaceTracking:
-            ErrorStateView(message: headline,
-                           detail: "this device cannot track the ARKit face mesh")
-        case .exportFailed:
-            ErrorStateView(message: headline,
-                           detail: "the GIF could not be encoded, record again",
-                           onRetry: reshoot)
-        case .unknown(let detail):
-            // The second register is lowercase BY LAW — raw system
-            // strings arrive Title-cased (line pass 2026-08-12).
-            ErrorStateView(message: headline,
-                           detail: detail.isEmpty
-                               ? "something went wrong, try again"
-                               : detail.lowercased(),
-                           onRetry: restart)
+        // ★ ONE SOURCE OF TRUTH. The headline, the explainer and the
+        // recovery all come off the Refusal itself now, so a new
+        // refusal cannot be added with a missing sentence or an
+        // accidental RETRY — the type's switches are total.
+        //
+        // EM7's terminals (the three hardware facts) fall out as
+        // `.none`: no button, because no button could work.
+        let headline = refusal.headline
+        let detail = refusal.explainer
+        switch refusal.recovery {
+        case .none:
+            ErrorStateView(message: headline, detail: detail)
+        case .retry:
+            ErrorStateView(message: headline, detail: detail, onRetry: restart)
+        case .reshoot:
+            ErrorStateView(message: headline, detail: detail, onRetry: reshoot)
+        case .openSettings:
+            ErrorStateView(message: headline, detail: detail,
+                           onRetry: restart, showsSettings: true)
+        case .wait:
+            // An interruption clears itself when the other app lets go
+            // or the device cools; RETRY re-opens the session for the
+            // impatient, and costs nothing if it is not yet free.
+            ErrorStateView(message: headline, detail: detail, onRetry: restart)
         }
     }
 

@@ -53,13 +53,137 @@ enum EditMachine {
     // § 1. THE MACHINE (spec §1)
     // ════════════════════════════════════════════════════════════
 
+    /// ★ THE REFUSAL TYPE owns the whole two-register voice.
+    ///
+    /// Before, a refusal's HEADLINE lived on `State.word`, its
+    /// EXPLAINER lived in a switch inside ContentView, and its
+    /// terminality lived a third time inside `canStep`. Three places,
+    /// no compiler check that they agreed — and a refusal added to one
+    /// could silently miss the others. They are one thing now: adding
+    /// a case here forces all three, because `headline`, `explainer`
+    /// and `recovery` are total switches.
+    ///
+    /// EM7: a refusal is TERMINAL exactly when it has no recovery.
+    /// That is now derived (`isTerminal`) rather than restated.
     enum Refusal: Equatable, Sendable {
+
+        /// Why the session stopped delivering, when the hardware is
+        /// fine and something else took it. These are the ordinary
+        /// iOS interruptions; every one is recoverable by waiting.
+        enum Interruption: Equatable, Sendable {
+            case cameraInUse      // another app holds the capture device
+            case backgrounded     // the device is not available in background
+            case multipleApps     // Split View / Slide Over on iPad-class layouts
+            case overheated       // thermal pressure suspended the session
+        }
+
+        /// What the user can DO about it. `.none` is the terminal
+        /// case: a hardware fact, where offering a dead RETRY button
+        /// would be a lie (the NO-SE decree's mechanism).
+        enum Recovery: Equatable, Sendable {
+            case none
+            case retry            // re-open the session
+            case reshoot          // return to WATCHING and record again
+            case openSettings     // deep-link to the app's own settings pane
+            case wait             // it clears by itself
+        }
+
         case cameraOff
         case noTrueDepth
         case noCenterStage
         case noFaceTracking
+        /// ★ The session stopped mid-capture. Not a defect — the
+        /// ordinary case of a phone call, another camera app, or a
+        /// hot device.
+        case interrupted(Interruption)
+        /// ★ The weave did not receive its full cube. This is the
+        /// failure the 2026-08-13 device audit predicted: the 5 Hz
+        /// solve runs synchronously on the dataOutputSynchronizer
+        /// callback against a 50 ms budget, so an over-budget frame is
+        /// DROPPED — and a dropped frame during WEAVING stretches the
+        /// loop and breaks the temporal uniformity the 5 cs delay
+        /// assumes. A short cube must be refused, not quietly encoded
+        /// as if it were 64 frames.
+        case captureIncomplete(kept: Int, wanted: Int)
         case exportFailed
+        /// ★ The GIF encoded but could not be written.
+        case storageFull
+        /// ★ Photos access was refused, so KEEP cannot complete.
+        case photosDenied
         case unknown(String)
+
+        /// EM6: uppercase letters and spaces only — digits ride
+        /// payload rows, so a count goes in the explainer, never here.
+        var headline: String {
+            switch self {
+            case .cameraOff:          return "CAMERA OFF"
+            case .noTrueDepth:        return "NO TRUEDEPTH"
+            case .noCenterStage:      return "NO CENTER STAGE"
+            case .noFaceTracking:     return "NO FACE TRACKING"
+            case .interrupted(.cameraInUse):  return "CAMERA IN USE"
+            case .interrupted(.backgrounded): return "CAMERA ASLEEP"
+            case .interrupted(.multipleApps): return "CAMERA SHARED"
+            case .interrupted(.overheated):   return "TOO HOT"
+            case .captureIncomplete:  return "SHORT WEAVE"
+            case .exportFailed:       return "EXPORT FAILED"
+            case .storageFull:        return "NO ROOM"
+            case .photosDenied:       return "PHOTOS OFF"
+            case .unknown:            return "REFUSED"
+            }
+        }
+
+        /// The second register: lowercase, one sentence, says what to
+        /// do rather than what went wrong where that is knowable.
+        var explainer: String {
+            switch self {
+            case .cameraOff:
+                return "allow camera access in Settings to see the preview"
+            case .noTrueDepth:
+                return "tesseract needs the Face ID camera, and this iPhone has none"
+            case .noCenterStage:
+                return "tesseract needs the center stage selfie camera of iPhone 17 or later"
+            case .noFaceTracking:
+                return "this device cannot track the ARKit face mesh"
+            case .interrupted(.cameraInUse):
+                return "another app is using the camera, close it and come back"
+            case .interrupted(.backgrounded):
+                return "the camera sleeps while tesseract is in the background"
+            case .interrupted(.multipleApps):
+                return "the camera cannot be shared with another app on screen"
+            case .interrupted(.overheated):
+                return "the iPhone is too warm to keep the camera open, let it cool"
+            case .captureIncomplete(let kept, let wanted):
+                return "the weave kept \(kept) of \(wanted) frames, record again"
+            case .exportFailed:
+                return "the GIF could not be encoded, record again"
+            case .storageFull:
+                return "there is no room left to write the GIF"
+            case .photosDenied:
+                return "allow photo access in Settings to keep this GIF"
+            case .unknown(let detail):
+                return detail.lowercased()
+            }
+        }
+
+        /// EM7's mechanism. A hardware fact offers nothing — a RETRY
+        /// that cannot succeed is worse than no button.
+        var recovery: Recovery {
+            switch self {
+            case .noTrueDepth, .noCenterStage, .noFaceTracking:
+                return .none
+            case .cameraOff, .photosDenied:
+                return .openSettings
+            case .interrupted:
+                return .wait
+            case .captureIncomplete, .exportFailed:
+                return .reshoot
+            case .storageFull, .unknown:
+                return .retry
+            }
+        }
+
+        /// EM7 — derived, not restated.
+        var isTerminal: Bool { recovery == .none }
     }
 
     enum State: Equatable, Sendable {
@@ -90,12 +214,8 @@ enum EditMachine {
             case .solving:                   return "SOLVING"
             case .tuning:                    return "TUNING"
             case .sealed:                    return "SEALED"
-            case .refused(.cameraOff):       return "CAMERA OFF"
-            case .refused(.noTrueDepth):     return "NO TRUEDEPTH"
-            case .refused(.noCenterStage):   return "NO CENTER STAGE"
-            case .refused(.noFaceTracking):  return "NO FACE TRACKING"
-            case .refused(.exportFailed):    return "EXPORT FAILED"
-            case .refused(.unknown):         return "REFUSED"
+            // One source of truth: the refusal owns its own word.
+            case .refused(let r):            return r.headline
             }
         }
 
@@ -248,6 +368,11 @@ enum EditMachine {
     /// read the same table).
     static func erased(_ s: State) -> State {
         if case .refused(.unknown) = s { return .refused(.unknown("")) }
+        // Payload-carrying refusals erase to a canonical representative
+        // so an edge is a statement about the KIND, not the count.
+        if case .refused(.captureIncomplete) = s {
+            return .refused(.captureIncomplete(kept: 0, wanted: 0))
+        }
         return s
     }
 
@@ -287,6 +412,27 @@ enum EditMachine {
             return [.tuning]
         case .refused(.unknown):
             return [.shelving]
+        // ⚠ SPEC DEBT (2026-08-14): the four refusals below are NOT in
+        // spec/ui/EditMachine.hs. They were added Swift-side to cover
+        // real iOS failure modes the machine could not previously
+        // name — a session interruption, a short weave, a full disk, a
+        // Photos denial. Their edges follow each refusal's own
+        // `recovery`, but EM7's terminal SET and `allStates` are
+        // spec-pinned at 13, so these are deliberately NOT in
+        // `allStates` and the totality laws do not yet cover them.
+        // The spec owes these cases before the next axiom pass.
+        case .refused(.interrupted):
+            // .wait — the session re-opens once the other app lets go
+            // or the device cools.
+            return [.waking]
+        case .refused(.captureIncomplete):
+            // .reshoot — the cube is short, so the moment is gone; the
+            // only honest move is back to the live read.
+            return [.watching]
+        case .refused(.storageFull), .refused(.photosDenied):
+            // .retry / .openSettings — the GIF still exists in the
+            // editor, so recovery returns there rather than discarding.
+            return [.tuning]
         // EM7 ★ — the three hardware refusals are TERMINAL. No retry
         // edge exists, because no retry can change the hardware.
         case .refused(.noTrueDepth), .refused(.noCenterStage),
