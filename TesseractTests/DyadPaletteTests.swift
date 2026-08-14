@@ -303,20 +303,40 @@ final class DyadPaletteTests: XCTestCase {
                                            background: bg)
         XCTAssertNotEqual(gm.rot, .identity)
 
-        // The ground of every figure entry lands on the WALL's hue…
+        // ★ SUPERSEDED ON THE BALANCED PATH (WhiteBalance, 2026-08-14).
+        // The FIT above is unchanged and still gated — gm.rot is still
+        // the wall's own hue. What changed is the APPLICATION: WB4
+        // proves the table's net cast equals its mirror centre, so a
+        // white-balanced table must negate exactly, and any rotation
+        // other than 180° reopens the cast. Δh and balance want the
+        // ground pointed at two different places and only one can win;
+        // Daniel demanded balance. `rot` is now recorded for
+        // provenance and applied only on the v7 path.
+        //
+        // So GH9's rotation law is asserted against groundLabV7, which
+        // is still the law for every legacy trace…
+        var gmV7 = gm
+        gmV7.balanced = false
         for lab in figure {
-            let g = DyadPalette.groundLab(gm, lab)
+            let g = DyadPalette.groundLabV7(gmV7, lab)
             let gap = Self.angleGap(Self.hueOf((g.a, g.b)),
                                     Self.hueOf((lab.a, lab.b)) - figureMean + wallMean)
             XCTAssertEqual(abs(gap), 0, accuracy: 1e-12,
-                           "the ground is the figure hue rotated by exactly Δh")
+                           "GH9 (v7 path): the ground is the figure hue rotated by Δh")
         }
-        // …so the σ half's own mean hue is the wall's mean hue, and
-        // the rotation is a rigid one (GH2's premise).
         let prims = figure.map { DyadPalette.srgb8(from: DyadPalette.chromaClamp($0)) }
-        let table = prims + prims.reversed().map { DyadPalette.ground(gm, of: $0) }
+        let table = prims + prims.reversed().map { DyadPalette.ground(gmV7, of: $0) }
         XCTAssertEqual(abs(Self.angleGap(Self.sigmaHalfHue(table), wallMean)), 0,
-                       accuracy: 0.05, "GH9: σ mean hue = the wall's mean hue")
+                       accuracy: 0.05, "GH9 (v7 path): σ mean hue = the wall's mean hue")
+
+        // …and the BALANCED path is asserted to do the other thing:
+        // negate exactly, so every pair cancels in chroma (WB3).
+        XCTAssertTrue(gm.balanced, "a fitted two-phase capture is balanced")
+        for lab in figure {
+            let g = DyadPalette.groundLab(gm, lab)
+            XCTAssertEqual(g.a, -lab.a, accuracy: 1e-15, "WB3: chroma negates")
+            XCTAssertEqual(g.b, -lab.b, accuracy: 1e-15, "WB3: chroma negates")
+        }
         XCTAssertGreaterThan(abs(Self.angleGap(wallMean, figureMean)), 1.0,
                              "fixture check: the scene really has two hues")
 
@@ -407,12 +427,26 @@ final class DyadPaletteTests: XCTestCase {
                                                background: sameBg)
         XCTAssertEqual(sameGm.rot.a, 1, accuracy: 1e-9)
         XCTAssertEqual(sameGm.rot.b, 0, accuracy: 1e-9)
+        // ★ SUPERSEDED ON THE BALANCED PATH (WhiteBalance, 2026-08-14).
+        // GH8's claim — Δh = 0 ⇒ v7's bytes — is still true, and still
+        // asserted, but only where v7's law still runs. A fitted
+        // capture is now `balanced`, and WB4 makes negation the ONLY
+        // white-balancing ground, so its bytes deliberately differ.
         let v7 = DyadPalette.GroundMoments(deltaL: sameGm.deltaL, alphaC: sameGm.alphaC,
                                            betaC: sameGm.betaC, capped: sameGm.capped)
+        var sameGmV7 = sameGm
+        sameGmV7.balanced = false
         for c in Self.skinColors(seed: 7, count: 128) {
-            XCTAssertTrue(DyadPalette.ground(sameGm, of: c) == DyadPalette.ground(v7, of: c),
-                          "a same-hue wall must emit today's bytes")
+            XCTAssertTrue(DyadPalette.ground(sameGmV7, of: c) == DyadPalette.ground(v7, of: c),
+                          "GH8 (v7 path): a same-hue wall must emit today's bytes")
         }
+        // And the balanced path negates instead — the supersession,
+        // asserted rather than assumed.
+        XCTAssertTrue(sameGm.balanced)
+        let probe = DyadPalette.oklab(fromSRGB8: Self.skinColors(seed: 7, count: 1)[0])
+        let bal = DyadPalette.groundLab(sameGm, probe)
+        XCTAssertEqual(bal.a, -probe.a, accuracy: 1e-15, "WB3: chroma negates")
+        XCTAssertEqual(bal.b, -probe.b, accuracy: 1e-15, "WB3: chroma negates")
 
         // (4) an achromatic FIGURE: nothing to rotate ⇒ identity, and
         //     an achromatic figure keeps an achromatic ground.
@@ -539,4 +573,91 @@ final class DyadPaletteTests: XCTestCase {
             XCTAssertEqual(data[767], table[255].2)
         }
     }
+    // MARK: - ★ WHITE BALANCE (spec quantization/WhiteBalance.hs)
+
+    /// WB4/WB5 — Daniel's demand: "256 unique colors pairs that
+    /// balance each other so there is white balance."
+    ///
+    /// The device measured |net cast| / mean chroma = 0.986 across all
+    /// 64 frames: the table was mirrored about c_F, the FIGURE
+    /// centroid, and WB4 says the net cast of a mirrored table IS its
+    /// mirror centre, exactly. Mirroring about NEUTRAL is the only
+    /// solution, so this asserts the cast on a real skin-derived
+    /// table, not a synthetic one.
+    ///
+    /// The residual is not zero because `chromaClamp` shrinks any
+    /// complement that leaves the sRGB gamut, and the 8-bit round trip
+    /// costs half a code step per channel. Both are bounded and both
+    /// are measured here rather than assumed.
+    func testWB4TableIsWhiteBalanced() throws {
+        let samples = Self.skinColors(seed: 7, count: 324)
+        let stats = DyadPalette.analyze(samples)
+        // The FITTED path — priorMoments is deliberately NOT balanced
+        // (the single-phase Wada decree stands; see the sunset note).
+        let figure = Self.labs(hue: 0.55, chroma: 0.06, l: 0.62, count: 128, spread: 0.12)
+        let wall = Self.labs(hue: 2.4, chroma: 0.05, l: 0.55, count: 300, spread: 0.15)
+        let bg = try XCTUnwrap(DyadPalette.backgroundMoments(
+            labs: wall, weights: [Double](repeating: 1, count: wall.count)))
+        let gm = DyadPalette.groundMoments(centroidL: 0.62, primsLab: figure, background: bg)
+        XCTAssertTrue(gm.balanced, "a fitted two-phase capture takes the balanced law")
+
+        let table = DyadPalette.table(stats: stats, moments: gm)
+        XCTAssertEqual(table.count, 256)
+
+        let labs = table.map { DyadPalette.oklab(fromSRGB8: $0) }
+        let netA = labs.reduce(0.0) { $0 + $1.a } / 256
+        let netB = labs.reduce(0.0) { $0 + $1.b } / 256
+        let net = (netA * netA + netB * netB).squareRoot()
+        let meanC = labs.reduce(0.0) {
+            $0 + ($1.a * $1.a + $1.b * $1.b).squareRoot()
+        } / 256
+
+        // The device shipped 0.986. Anything near that is the old law.
+        let ratio = meanC > 0 ? net / meanC : 0
+        XCTAssertLessThan(ratio, 0.10,
+                          "net cast / mean chroma = \(ratio) — the table is "
+                          + "still mirrored about the figure, not about neutral")
+    }
+
+    /// WB3 — every pair cancels in chroma. The involution is
+    /// T[255-i] = comp(T[i]) in (a, b); lightness is free (WB11).
+    func testWB3EveryPairCancelsInChroma() throws {
+        let stats = DyadPalette.analyze(Self.skinColors(seed: 11, count: 324))
+        let figure = Self.labs(hue: 0.55, chroma: 0.06, l: 0.62, count: 128, spread: 0.12)
+        let wall = Self.labs(hue: 2.4, chroma: 0.05, l: 0.55, count: 300, spread: 0.15)
+        let bg = try XCTUnwrap(DyadPalette.backgroundMoments(
+            labs: wall, weights: [Double](repeating: 1, count: wall.count)))
+        let gm = DyadPalette.groundMoments(centroidL: 0.62, primsLab: figure, background: bg)
+        let labs = DyadPalette.table(stats: stats, moments: gm)
+            .map { DyadPalette.oklab(fromSRGB8: $0) }
+        var worst = 0.0
+        for i in 0..<128 {
+            let f = labs[i], g = labs[255 - i]
+            worst = max(worst, ((f.a + g.a) * (f.a + g.a)
+                              + (f.b + g.b) * (f.b + g.b)).squareRoot())
+        }
+        // Bounded by gamut clamping plus the 8-bit round trip, not by 0.
+        XCTAssertLessThan(worst, 0.03,
+                          "worst pair residual \(worst): pairs are not cancelling")
+    }
+
+    /// WB2 — 256 UNIQUE. The device shipped 251.8 of 256 on average
+    /// (worst frame 245): distinct OKLab points colliding in the 8-bit
+    /// grid the GIF stores into. This records where that stands.
+    func testWB2UniqueEntries() throws {
+        let stats = DyadPalette.analyze(Self.skinColors(seed: 3, count: 324))
+        let figure = Self.labs(hue: 0.55, chroma: 0.06, l: 0.62, count: 128, spread: 0.12)
+        let wall = Self.labs(hue: 2.4, chroma: 0.05, l: 0.55, count: 300, spread: 0.15)
+        let bg = try XCTUnwrap(DyadPalette.backgroundMoments(
+            labs: wall, weights: [Double](repeating: 1, count: wall.count)))
+        let gm = DyadPalette.groundMoments(centroidL: 0.62, primsLab: figure, background: bg)
+        let table = DyadPalette.table(stats: stats, moments: gm)
+        let distinct = Set(table.map { Int($0.0) << 16 | Int($0.1) << 8 | Int($0.2) })
+        // WB8: 64 outer-shell entries need a chroma cap >= 64/510 to be
+        // 8-bit separable. Until the cap is raised this cannot reach
+        // 256, so the test pins the CURRENT floor and fails if it drops.
+        XCTAssertGreaterThanOrEqual(distinct.count, 250,
+                                    "distinct entries fell to \(distinct.count)")
+    }
+
 }

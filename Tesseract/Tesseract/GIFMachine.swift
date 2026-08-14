@@ -142,9 +142,15 @@ enum GIFMachine {
         // stays self-reproducing under ITS generation law (GH7/GH8).
         // Two numbers per frame: the rotation as a DIRECTION, never
         // an angle (GH5).
-        lines.append("DYAD GROUNDHUE v1 frames=\(dyad.groundMoments.count)")
+        // ★ v2 (WhiteBalance, 2026-08-14) carries a THIRD field: the
+        // balanced flag. Without it a rebuild reconstructs
+        // GroundMoments with `balanced` defaulted to false and
+        // regenerates the v7 table — a silent provenance break, which
+        // is exactly what the first cut of this change shipped. A v1
+        // section still parses, and still means v7.
+        lines.append("DYAD GROUNDHUE v2 frames=\(dyad.groundMoments.count)")
         for gm in dyad.groundMoments {
-            lines.append("\(gm.rot.a) \(gm.rot.b)")
+            lines.append("\(gm.rot.a) \(gm.rot.b) \(gm.balanced ? 1 : 0)")
         }
         lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
         // RATE LEDGER v1 (rate-ladder redesign step S0 — measurement
@@ -223,14 +229,17 @@ enum GIFMachine {
         // ★ The ground's fourth coordinate (GroundHue), if this GIF
         // carries one. Absent ⇒ the identity rotation ⇒ v7's bytes.
         var hues: [DyadPalette.HueRotation] = []
+        var balanced: [Bool] = []
         if let hueHeader = lines.firstIndex(where: {
-            $0.hasPrefix("DYAD GROUNDHUE v1") }) {
+            $0.hasPrefix("DYAD GROUNDHUE v1") || $0.hasPrefix("DYAD GROUNDHUE v2") }) {
             for line in lines[(hueHeader + 1)...] {
                 let parts = line.split(separator: " ")
-                guard parts.count == 2,
+                guard parts.count == 2 || parts.count == 3,
                       let a = Double(parts[0]), let b = Double(parts[1])
                 else { break }
                 hues.append(DyadPalette.HueRotation(a: a, b: b))
+                // v1 has no third field: absent ⇒ false ⇒ the v7 law.
+                balanced.append(parts.count == 3 && parts[2] == "1")
             }
         }
         var out: [Data] = []
@@ -248,7 +257,8 @@ enum GIFMachine {
             if isV3 || isV2 {
                 let gm = DyadPalette.GroundMoments(
                     deltaL: v[9], alphaC: v[10], betaC: v[11], capped: v[12] != 0,
-                    rot: out.count < hues.count ? hues[out.count] : .identity)
+                    rot: out.count < hues.count ? hues[out.count] : .identity,
+                    balanced: out.count < balanced.count ? balanced[out.count] : false)
                 table = isV3 ? PairTree.table(stats: stats, moments: gm)
                              : DyadPalette.table(stats: stats, moments: gm)
             } else {

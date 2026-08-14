@@ -29,7 +29,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/RoleAllocation.hs \
                quantization/Octave.hs \
                quantization/AttractorRAG.hs \
-               quantization/GroundHue.hs
+               quantization/GroundHue.hs \
+               quantization/WhiteBalance.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
@@ -54,6 +55,7 @@ STATISTICS = statistics/BinomialCube.hs \
              statistics/WassersteinPalette.hs \
              statistics/StatsVariance.hs \
              statistics/PhaseEnergy.hs \
+             statistics/TilingEntropy.hs \
              statistics/Dissonance.hs \
              statistics/PhaseTiling.hs
 
@@ -66,7 +68,8 @@ NEURAL = neural/BayerResidual.hs \
          neural/SKGeneSemantics.hs \
          neural/OctaveCodec.hs \
          neural/DescentLadder.hs \
-         neural/JepaH.hs
+         neural/JepaH.hs \
+         neural/WeaveState.hs
 
 UI = ui/CellMechanics.hs \
      ui/SurfaceMachine.hs \

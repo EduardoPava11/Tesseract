@@ -245,8 +245,15 @@ enum DyadPalette {
         var capped: Bool     // identity cap engaged (prior path only)
         /// ★ Δh — the background's own hue, as a direction. Defaults
         /// to the identity so every prior/legacy construction is the
-        /// v7 path exactly (GH7/GH8).
+        /// v7 path exactly (GH7/GH8). Recorded for provenance on the
+        /// balanced path, where it cannot be applied (WB4).
         var rot: HueRotation = .identity
+        /// ★ WHITE BALANCE (WhiteBalance.hs, 2026-08-14). true ⇒ the
+        /// ground is the partner about NEUTRAL, so the table's net
+        /// cast is exactly zero. Defaults FALSE so a legacy trace
+        /// rebuilds under the law it was recorded with — every
+        /// capture from before this date regenerates byte for byte.
+        var balanced: Bool = false
     }
 
     /// Single-phase / thin-background fallback: the dictionary prior.
@@ -257,7 +264,7 @@ enum DyadPalette {
     static func priorMoments(centroidL cL: Double) -> GroundMoments {
         GroundMoments(deltaL: wadaGroundL - cL,
                       alphaC: wadaAlphaC, betaC: wadaBetaC, capped: true,
-                      rot: .identity)
+                      rot: .identity, balanced: false)
     }
 
     /// The background evidence the ground family reads: v5-W's three
@@ -344,7 +351,8 @@ enum DyadPalette {
                              alphaC: alpha, betaC: beta, capped: false,
                              rot: HueRotation.taking(
                                 figure: chromaResultant(primsLab),
-                                to: background.hue))
+                                to: background.hue),
+                             balanced: true)
     }
 
     /// The ground law in OKLab under fitted (or prior) moments.
@@ -362,6 +370,40 @@ enum DyadPalette {
     /// the radial chroma law and |rot| = 1, so the emitted chroma is
     /// exactly the chroma the power law asked for (GH10).
     static func groundLab(_ gm: GroundMoments, _ lab: OKLabColor) -> OKLabColor {
+        guard gm.balanced else { return groundLabV7(gm, lab) }
+        // ★ WHITE BALANCE (Daniel's demand, 2026-08-14; spec
+        // quantization/WhiteBalance.hs WB3/WB4/WB5).
+        //
+        // The partner about NEUTRAL, exactly: (a, b) -> (-a, -b).
+        //
+        // WB4 is why nothing else will do. For any table where every
+        // entry has a partner x' = 2c - x, the mean of all 256 entries
+        // is EXACTLY c — the free entries cancel out of the sum
+        // identically, so they are irrelevant to the cast. The net
+        // cast IS the mirror centre. The device measured this
+        // directly: mirroring about c_F (the FIGURE centroid, i.e. a
+        // face) gave |net cast| / mean chroma = 0.986. White balance
+        // therefore has exactly ONE solution, c = 0, and any scaling
+        // or rotation other than exact negation reopens the cast.
+        //
+        // So the chroma power law (alphaC/betaC) and the fitted Δh
+        // rotation cannot apply on this path: both change |ab| or its
+        // direction, and either breaks the cancellation. They remain
+        // on the record in GroundMoments for provenance and for the
+        // v7 rebuild path below.
+        //
+        // LIGHTNESS IS FREE (WB11): the mirror is a CHROMA involution,
+        // so deltaL still separates ground from figure and costs the
+        // balance nothing.
+        return OKLabColor(l: lab.l + gm.deltaL, a: -lab.a, b: -lab.b)
+    }
+
+    /// The pre-2026-08-14 ground: L-shift, chroma power law, fitted Δh
+    /// rotation. Kept verbatim so a legacy trace still rebuilds byte
+    /// for byte — DYAD STATS provenance is a contract, and a capture
+    /// recorded under v7 must not silently regenerate under a
+    /// different law.
+    static func groundLabV7(_ gm: GroundMoments, _ lab: OKLabColor) -> OKLabColor {
         let c2 = lab.a * lab.a + lab.b * lab.b
         let l = lab.l + gm.deltaL
         guard c2 > 0 else { return OKLabColor(l: l, a: 0, b: 0) }
