@@ -11,7 +11,11 @@
 // coverage between q and the σ side, whose target is the rung-16
 // BLOCK MEAN of ŷ: the background blurs as it becomes chaos.
 // Face → primaries, background → mirrored binomial shells in the
-// figure's OWN hue (the blue-haze negation is dead — DY14 v7);
+// BACKGROUND's own hue (the blue-haze negation is dead — DY14 v7 —
+// and so, since 2026-08-13, is v7's forced same-hue: the ground
+// family's fourth coordinate Δh is fitted from the background's own
+// chroma-weighted resultant, spec/quantization/GroundHue.hs GH1–GH11.
+// Δh = identity on every degenerate case ⇒ v7's bytes exactly);
 // no solid fill, no chroma seam (DY9–DY16).
 //
 // ★ EM12/EM13 — THE PREVIEW IS THE GIF (Daniel's decree, spec/ui/
@@ -58,7 +62,7 @@ enum DyadPipeline {
     /// frame — never at the coarse rung the solve is read at. Running
     /// stage 2 in the solve produced coarse-rung indices that were
     /// discarded unexamined, on the capture callback's budget.
-    enum Disposition: Sendable {
+    enum Disposition: Sendable, CaseIterable {
         case artifact          // the export: index frames + tables
         case generatingState   // the live solve: tables + solves only
     }
@@ -85,7 +89,9 @@ enum DyadPipeline {
         /// The per-frame ground-law parameters (phase-palette step 3,
         /// ruling R2): scene-fit on two-phase captures, the Wada
         /// dictionary prior on single-phase. Together with `stats`
-        /// these regenerate every table byte (DYAD STATS v2).
+        /// these regenerate every table byte (DYAD STATS + the
+        /// DYAD GROUNDHUE section, which carries the fourth
+        /// coordinate — absent ⇒ identity ⇒ the v7 path).
         let groundMoments: [DyadPalette.GroundMoments]
         /// ★JEPA-H (JH4): true when the one model actually steadied
         /// the rung-16 ring for this capture (flag on AND the frame
@@ -295,7 +301,12 @@ enum DyadPipeline {
         var tsAll: [[Double]] = []
         var rawStats: [DyadPalette.Stats] = []
         var centroids: [OKLabColor] = []
+        // ★ GH4's hue resultant is read on the UNSTAGED field. Kept
+        // separately because every other moment here reads the staged
+        // one, and the difference is not cosmetic — see below.
+        var unstagedLabsAll: [[OKLabColor]] = []
         stagedAll.reserveCapacity(frameCount)
+        unstagedLabsAll.reserveCapacity(frameCount)
         for fi in 0..<frameCount {
             let samples = rgb[fi].map { srgb8(from: $0) }
             let ts = depths[fi].map {
@@ -308,6 +319,9 @@ enum DyadPipeline {
             tsAll.append(ts)
             centroids.append(cF)
             rawStats.append(DyadPalette.analyze(staged, weights: weights))
+            // Same sRGB8 bytes the staging starts from (DY12), just not
+            // contracted about c_F.
+            unstagedLabsAll.append(samples.map { DyadPalette.oklab(fromSRGB8: $0) })
         }
 
         // ── Stage 1b: derived EMA gain (R2) over the stats sequence ──
@@ -316,9 +330,34 @@ enum DyadPipeline {
         // Staged labs, converted ONCE (stage 1c reuses them; the
         // JEPA bg ring needs them before the table loop).
         let stagedLabsAll = stagedAll.map { $0.map { DyadPalette.oklab(fromSRGB8: $0) } }
-        let bgPerFrame: [(meanL: Double, meanLnC: Double, sdLnC: Double)?] =
+        // The background's four moments — three scalars plus ★ GH4's
+        // hue resultant, weighted by the σ coverage t (the background
+        // class's own mass).
+        //
+        // ★ THE HUE RESULTANT READS THE UNSTAGED FIELD. Every other
+        // moment reads the staged one; this one cannot, and the reason
+        // is arithmetic, not taste. Staging is
+        //     ŷ_ab = c_F,ab + γ(s)·(y_ab − c_F,ab),  γ(0) = ½
+        // so a staged background resultant carries an ADDITIVE BIAS
+        //     B·c_F,ab,   B = Σ t(1−γ) ≈ T/2
+        // pointing exactly at the FIGURE's hue. Δh is then fitted
+        // against the figure resultant, which points the same way, and
+        // the two nearly cancel. The failure is not a shrink — it is
+        // not monotone: the fitted Δh peaks near 90° of true
+        // separation and returns to ZERO at 180°, i.e. a blue wall
+        // behind a warm face — the very case this law exists for —
+        // reproduces v7's bytes exactly. Measured on a synthetic
+        // face-disc/wall frame: true 180° ⇒ fitted 0.4° staged,
+        // 179.0° unstaged.
+        //
+        // The earlier comment here claimed the staged read was "a
+        // conservative reading of the scene's own separation, never an
+        // invented one". That was undefended and, in the case that
+        // matters, false. GH14 argues the contraction away rather than
+        // bounding it; it needs reopening now that Δh depends on it.
+        let bgPerFrame: [DyadPalette.BackgroundMoments?] =
             (0..<frameCount).map { f in
-                twoPhase ? DyadPalette.backgroundMoments(labs: stagedLabsAll[f],
+                twoPhase ? DyadPalette.backgroundMoments(labs: unstagedLabsAll[f],
                                                          weights: tsAll[f])
                          : nil
             }
@@ -327,7 +366,8 @@ enum DyadPipeline {
         // line, decree 2026-08-12): pool the per-frame generating
         // state to the rung-16 latent ring and steady it with the
         // v7 head before any table solves. ONE ring for ALL of it —
-        // the 6 stats dims AND the bg-moments triple (ruling R2:
+        // the 6 stats dims AND the background's four moments, hue
+        // resultant included (ruling R2:
         // one smoothing law for all generating state; the first
         // device capture, 11EB44F0, proved the split-cadence
         // alternative wrong — figure half held at 5 Hz while the
@@ -356,11 +396,14 @@ enum DyadPipeline {
 
         var smoothed: DyadPalette.Stats?
         // Ground-law state (ruling R2): the background's (mean L,
-        // mean lnC, sd lnC) triple, EMA'd with the SAME derived gain
-        // as the stats — one smoothing law for all generating state.
-        // Frames without background mass carry the smoothed triple;
-        // before any exists (or single-phase), the Wada prior rules.
-        var smoothedBg: (meanL: Double, meanLnC: Double, sdLnC: Double)?
+        // mean lnC, sd lnC) triple AND its hue resultant (★ the
+        // fourth coordinate), EMA'd with the SAME derived gain as
+        // the stats — one smoothing law for all generating state.
+        // Frames without background mass carry the smoothed state;
+        // before any exists (or single-phase), the Wada prior rules
+        // — and the prior is the identity rotation, so a scene with
+        // no background evidence emits exactly today's bytes (GH7).
+        var smoothedBg: DyadPalette.BackgroundMoments?
         for (f, raw) in rawStats.enumerated() {
             let emaWarm = smoothed.map { DyadPalette.ema(alpha: alpha, raw, $0) } ?? raw
             smoothed = emaWarm
@@ -368,10 +411,17 @@ enum DyadPipeline {
 
             let stagedLabs = stagedLabsAll[f]
             if let rb = bgPerFrame[f] {
+                // ★ GH13: the hue rides this EMA as a VECTOR and is
+                // renormalised where it is read — never as an angle.
+                // An angle EMA across the 0/360 seam returns the
+                // OPPOSITE hue (the GH5 failure, at 5 Hz).
                 smoothedBg = smoothedBg.map { prev in
-                    ( alpha * rb.meanL + (1 - alpha) * prev.meanL
-                    , alpha * rb.meanLnC + (1 - alpha) * prev.meanLnC
-                    , alpha * rb.sdLnC + (1 - alpha) * prev.sdLnC )
+                    DyadPalette.BackgroundMoments(
+                        meanL: alpha * rb.meanL + (1 - alpha) * prev.meanL,
+                        meanLnC: alpha * rb.meanLnC + (1 - alpha) * prev.meanLnC,
+                        sdLnC: alpha * rb.sdLnC + (1 - alpha) * prev.sdLnC,
+                        hueA: alpha * rb.hueA + (1 - alpha) * prev.hueA,
+                        hueB: alpha * rb.hueB + (1 - alpha) * prev.hueB)
                 } ?? rb
             }
             // ★JEPA-H: when the ring engaged, the frame's ground law
@@ -504,9 +554,18 @@ enum DyadPipeline {
     /// CENTROID's lightness — for rings that was T[0]; the tree's
     /// T[0] is a corner leaf, so read the centroid from the stats
     /// themselves (same number, honest source).
+    ///
+    /// ★ GroundHue: the ground family fitted here now carries Δh as
+    /// well, so the σ half is emitted in the BACKGROUND's own hue.
+    /// This is step A of GH12 — a DISPLAY-only rotation: the σ-side
+    /// search still minimises d(node, target) in the figure frame, so
+    /// the index stream is byte-identical and costs nothing in LZW.
+    /// Step B (the pre-image search, which moves pixels) awaits its
+    /// own device pass — GH12 notes that search is already
+    /// suboptimal today at Δh = 0 whenever βC ≠ 1 or ΔL ≠ 0.
     static func solveFrame(
         warm: DyadPalette.Stats,
-        background: (meanL: Double, meanLnC: Double, sdLnC: Double)?,
+        background: DyadPalette.BackgroundMoments?,
         centroid cF: OKLabColor,
         mixture: DepthMixture.Fit,
         twoPhase: Bool,
@@ -601,11 +660,15 @@ enum DyadPipeline {
     /// ring holding ALL of it: the 6 stats dims the corpus trained
     /// on (centroid l,a,b + LOG-diagonals) plus the bg-moments
     /// triple (meanL, meanLnC, LOG sdLnC — location dims raw, scale
-    /// dims in log, the corpus's own convention). The head is
-    /// per-dim and scale-free, so the learned regime→kernel map
-    /// covers the extra dims lawfully — ruling R2, one smoothing
-    /// law for all generating state (the 11EB44F0 capture showed
-    /// the split-cadence alternative churns the ground half).
+    /// dims in log, the corpus's own convention) plus ★ the hue
+    /// RESULTANT's two components (GroundHue GH13: the ground's
+    /// fourth coordinate rides the ring as a vector, never as an
+    /// angle — an angle EMA across the 0/360 seam returns the
+    /// opposite hue). The head is per-dim and scale-free, so the
+    /// learned regime→kernel map covers the extra dims lawfully —
+    /// ruling R2, one smoothing law for all generating state (the
+    /// 11EB44F0 capture showed the split-cadence alternative churns
+    /// the ground half).
     ///
     /// SHAPE — the correlation coefficients the corpus never
     /// modeled — rides the slot pool and recombines as
@@ -619,9 +682,9 @@ enum DyadPipeline {
     /// equal slots; otherwise nil and the EMA law stands.
     static func jepaSmoothed(
         _ raw: [DyadPalette.Stats],
-        bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?]
+        bg: [DyadPalette.BackgroundMoments?]
     ) -> (stats: [DyadPalette.Stats],
-          bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?])? {
+          bg: [DyadPalette.BackgroundMoments?])? {
         let slots = JepaHHead.slots
         guard raw.count >= slots, raw.count % slots == 0,
               bg.count == raw.count else { return nil }
@@ -629,22 +692,30 @@ enum DyadPipeline {
         let eps = 1e-12                    // whitening-law epsilon
         var pooled: [[Double]] = []        // [slot][9], statVector order
         pooled.reserveCapacity(slots)
-        var bgPooled: [(Double, Double, Double)?] = []
+        var bgPooled: [DyadPalette.BackgroundMoments?] = []
         for s in 0..<slots {
             var acc = [Double](repeating: 0, count: 9)
-            var bgAcc = (0.0, 0.0, 0.0)
+            var bgAcc = (0.0, 0.0, 0.0, 0.0, 0.0)
             var bgN = 0.0
             for f in (s * group)..<((s + 1) * group) {
                 let v = statVector(raw[f])
                 for i in 0..<9 { acc[i] += v[i] }
                 if let rb = bg[f] {
                     bgAcc.0 += rb.meanL; bgAcc.1 += rb.meanLnC
-                    bgAcc.2 += rb.sdLnC; bgN += 1
+                    bgAcc.2 += rb.sdLnC
+                    // ★ GH13: the hue pools as a VECTOR (the slot's
+                    // own resultant), never as an angle.
+                    bgAcc.3 += rb.hueA; bgAcc.4 += rb.hueB
+                    bgN += 1
                 }
             }
             pooled.append(acc.map { $0 / Double(group) })
             bgPooled.append(bgN > 0
-                ? (bgAcc.0 / bgN, bgAcc.1 / bgN, bgAcc.2 / bgN) : nil)
+                ? DyadPalette.BackgroundMoments(
+                    meanL: bgAcc.0 / bgN, meanLnC: bgAcc.1 / bgN,
+                    sdLnC: bgAcc.2 / bgN,
+                    hueA: bgAcc.3 / bgN, hueB: bgAcc.4 / bgN)
+                : nil)
         }
 
         // Torus fill: carry the nearest present slot around the ring.
@@ -665,14 +736,20 @@ enum DyadPipeline {
                         log(max(v[8], eps))]
             if haveBg {
                 let b = bgPooled[s]!
-                dims += [b.0, b.1, log(max(b.2, eps))]
+                // Location dims raw, scale dims in log (the corpus's
+                // own convention) — and the hue as its two VECTOR
+                // components (GH13). The head is per-dim and
+                // scale-free, so the learned regime→kernel map covers
+                // them lawfully; a smoothed vector need not stay unit
+                // because only its DIRECTION is read (GH6).
+                dims += [b.meanL, b.meanLnC, log(max(b.sdLnC, eps)), b.hueA, b.hueB]
             }
             return dims
         }
         let shat = JepaHHead.smoothRing(ring)
 
         var outStats: [DyadPalette.Stats] = []
-        var outBg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?] = []
+        var outBg: [DyadPalette.BackgroundMoments?] = []
         outStats.reserveCapacity(raw.count)
         outBg.reserveCapacity(raw.count)
         for s in 0..<slots {
@@ -688,8 +765,11 @@ enum DyadPipeline {
             let st = DyadPalette.makeStats(
                 centroid: OKLabColor(l: sh[0], a: sh[1], b: sh[2]),
                 covariance: [[c00, c01, c02], [c01, c11, c12], [c02, c12, c22]])
-            let bgOut: (meanL: Double, meanLnC: Double, sdLnC: Double)? =
-                haveBg ? (meanL: sh[6], meanLnC: sh[7], sdLnC: exp(sh[8])) : nil
+            let bgOut: DyadPalette.BackgroundMoments? = haveBg
+                ? DyadPalette.BackgroundMoments(
+                    meanL: sh[6], meanLnC: sh[7], sdLnC: exp(sh[8]),
+                    hueA: sh[9], hueB: sh[10])
+                : nil
             for _ in 0..<group {
                 outStats.append(st)
                 outBg.append(bgOut)
@@ -793,6 +873,14 @@ enum DyadPipeline {
         /// The last solve — the generating state the surface is
         /// showing. nil until the first coarse frame closes.
         private(set) var solve: FrameSolve?
+
+        /// How many solves have landed. The surface's instruments
+        /// (the 256-entry table, the coarse reads) are functions of
+        /// the SOLVE, not of the frame, so republishing them at 20 Hz
+        /// would be pure SwiftUI churn: a manager compares this
+        /// counter and publishes only when it moves — i.e. on the
+        /// ladder's own 5 Hz rung-16 cadence (TL8/TL9).
+        private(set) var solveSerial = 0
 
         init() {
             let cells = Rung.coarse.side * Rung.coarse.side
@@ -919,7 +1007,73 @@ enum DyadPipeline {
                                            withinVariance: within,
                                            bleed: ExportSettings.load().bleed,
                                            keeping: .generatingState)
-            if let last = out?.solves.last { solve = last }
+            if let last = out?.solves.last {
+                solve = last
+                solveSerial &+= 1
+            }
+        }
+
+        // MARK: - The coarse reads (32³ and 16³), at the solve cadence
+
+        /// ★ EM2 / WG12: WATCHING reads the live feed at ALL THREE
+        /// rungs at once. The fine read is `assign` above; these are
+        /// the other two, and they are the SAME law — the feed is box
+        /// pooled in space (κ, exactly `accumulate`'s spatial half)
+        /// and then handed to `assign`, which is the export's own
+        /// assignment. ★ Indices are NEVER pooled (the palette index
+        /// is not a linear quantity); the FEED is pooled and then
+        /// assigned, which is what makes the three windows agree.
+        ///
+        /// Cadence: the caller runs this only when `solveSerial`
+        /// moves — rung 16 IS the resolution of depth at 5 Hz
+        /// (TL8/TL9), so the coarse instruments read at the coarse
+        /// clock and cost (1024 + 256)/4 assignments per fine frame
+        /// rather than 1280.
+        func coarseReads(rgb: [(Float, Float, Float)], depths: [Float])
+            -> (mid: [UInt8], coarse: [UInt8])? {
+            let side = Int(Double(depths.count).squareRoot())
+            guard side > 0, side * side == depths.count else { return nil }
+            guard let (r32, d32) = Self.poolSpace(rgb: rgb, depths: depths,
+                                                  from: side, to: Rung.mid.side),
+                  let (r16, d16) = Self.poolSpace(rgb: rgb, depths: depths,
+                                                  from: side, to: Rung.coarse.side),
+                  let mid = assign(rgb: r32, depths: d32),
+                  let coarse = assign(rgb: r16, depths: d16)
+            else { return nil }
+            return (mid, coarse)
+        }
+
+        /// The κ box pool in space: `from`² → `to`² by averaging each
+        /// block. Returns nil when the sides are not commensurate —
+        /// a non-integer block is not a rung of the ladder (FC2).
+        static func poolSpace(rgb: [(Float, Float, Float)], depths: [Float],
+                              from: Int, to: Int)
+            -> (rgb: [(Float, Float, Float)], depths: [Float])? {
+            guard to > 0, from >= to, from % to == 0 else { return nil }
+            let block = from / to
+            if block == 1 { return (rgb, depths) }
+            var outRGB = [(Float, Float, Float)](repeating: (0, 0, 0), count: to * to)
+            var outD = [Float](repeating: 0, count: to * to)
+            let n = Float(block * block)
+            for cy in 0..<to {
+                for cx in 0..<to {
+                    var r: Float = 0, g: Float = 0, b: Float = 0, d: Float = 0
+                    for dy in 0..<block {
+                        for dx in 0..<block {
+                            let p = (cy * block + dy) * from + cx * block + dx
+                            r += rgb[p].0; g += rgb[p].1; b += rgb[p].2
+                            // Total, exactly as `accumulate` is: NaN
+                            // reads the neutral fill (DepthSignal).
+                            let v = depths[p]
+                            d += v.isNaN ? DepthSignal.fill : min(max(v, 0), 1)
+                        }
+                    }
+                    let c = cy * to + cx
+                    outRGB[c] = (r / n, g / n, b / n)
+                    outD[c] = d / n
+                }
+            }
+            return (outRGB, outD)
         }
 
         // MARK: - The 20 Hz assignment (fine rung)

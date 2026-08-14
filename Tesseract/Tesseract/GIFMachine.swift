@@ -130,6 +130,22 @@ enum GIFMachine {
             lines.append((nums.map { "\($0)" } + [gm.capped ? "1" : "0"])
                             .joined(separator: " "))
         }
+        // ★ THE FOURTH COORDINATE (spec/quantization/GroundHue.hs,
+        // 2026-08-13): Δh is generating state too — the σ half cannot
+        // be rebuilt from the 13 numbers above once the ground carries
+        // the background's own hue. It rides its OWN section rather
+        // than a STATS version bump, because the rotation is
+        // orthogonal to the tree/ring rebuild law the version tag
+        // selects: any STATS version may or may not be followed by
+        // this block, and its absence means the identity rotation —
+        // which is v7 exactly, so every GIF written before today
+        // stays self-reproducing under ITS generation law (GH7/GH8).
+        // Two numbers per frame: the rotation as a DIRECTION, never
+        // an angle (GH5).
+        lines.append("DYAD GROUNDHUE v1 frames=\(dyad.groundMoments.count)")
+        for gm in dyad.groundMoments {
+            lines.append("\(gm.rot.a) \(gm.rot.b)")
+        }
         lines.append(DyadEnergy.trace(tables: tables, indexFrames: indexFrames))
         // RATE LEDGER v1 (rate-ladder redesign step S0 — measurement
         // only; spec output/RateLadder.hs RL5): H₀ = order-0 entropy
@@ -189,9 +205,12 @@ enum GIFMachine {
     /// rebuild through the PAIR TREE; v2 lines carry the same 13 and
     /// rebuild through the ring solver; v1 lines carry 9 and rebuild
     /// through the ring prior path — the library's older GIFs stay
-    /// self-reproducing under THEIR generation law. The provenance
-    /// law (tested): the rebuilt tables byte-equal the LCTs embedded
-    /// in the same GIF.
+    /// self-reproducing under THEIR generation law. A DYAD GROUNDHUE
+    /// section, when present, supplies each frame's fourth ground
+    /// coordinate; absent, every frame rebuilds at the identity
+    /// rotation, which is v7 exactly. The provenance law (tested):
+    /// the rebuilt tables byte-equal the LCTs embedded in the same
+    /// GIF.
     static func rebuildTables(fromTrace trace: String) -> [Data]? {
         let lines = trace.split(separator: "\n", omittingEmptySubsequences: false)
         guard let header = lines.firstIndex(where: {
@@ -201,6 +220,19 @@ enum GIFMachine {
         let isV3 = lines[header].hasPrefix("DYAD STATS v3")
         let isV2 = lines[header].hasPrefix("DYAD STATS v2")
         let want = (isV2 || isV3) ? 13 : 9
+        // ★ The ground's fourth coordinate (GroundHue), if this GIF
+        // carries one. Absent ⇒ the identity rotation ⇒ v7's bytes.
+        var hues: [DyadPalette.HueRotation] = []
+        if let hueHeader = lines.firstIndex(where: {
+            $0.hasPrefix("DYAD GROUNDHUE v1") }) {
+            for line in lines[(hueHeader + 1)...] {
+                let parts = line.split(separator: " ")
+                guard parts.count == 2,
+                      let a = Double(parts[0]), let b = Double(parts[1])
+                else { break }
+                hues.append(DyadPalette.HueRotation(a: a, b: b))
+            }
+        }
         var out: [Data] = []
         for line in lines[(header + 1)...] {
             let parts = line.split(separator: " ")
@@ -215,7 +247,8 @@ enum GIFMachine {
             let table: [(UInt8, UInt8, UInt8)]
             if isV3 || isV2 {
                 let gm = DyadPalette.GroundMoments(
-                    deltaL: v[9], alphaC: v[10], betaC: v[11], capped: v[12] != 0)
+                    deltaL: v[9], alphaC: v[10], betaC: v[11], capped: v[12] != 0,
+                    rot: out.count < hues.count ? hues[out.count] : .identity)
                 table = isV3 ? PairTree.table(stats: stats, moments: gm)
                              : DyadPalette.table(stats: stats, moments: gm)
             } else {

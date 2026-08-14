@@ -339,6 +339,71 @@ final class DyadPipelineTests: XCTestCase {
         }
     }
 
+    /// ★ GH4 END TO END — the fitted Δh must track the scene's REAL
+    /// hue separation, through the whole pipeline including γ-staging.
+    ///
+    /// This is the test whose absence let a dead fix ship. Every other
+    /// ground-hue test hands `backgroundMoments` a raw ensemble
+    /// directly; none composed staging with the hue fit. Staging is
+    /// `ŷ_ab = c_F,ab + γ(s)(y_ab − c_F,ab)`, so reading the resultant
+    /// off the STAGED field adds a bias pointing at the FIGURE's hue —
+    /// and the failure is not a shrink but a non-monotonicity: the
+    /// fitted angle peaks near 90° of true separation and returns to
+    /// ZERO at 180°, so a blue wall behind a warm face — the exact
+    /// case the law exists for — reproduced v7 byte for byte.
+    ///
+    /// 180° is therefore the case this asserts.
+    func testGH4FittedHueTracksAWallOpposedToTheFace() throws {
+        // A warm face disc on a wall of the OPPOSITE hue.
+        func scene(wallHueDegrees: Double) -> [([(Float, Float, Float)], [Float])] {
+            let n = side * side
+            let c = Double(side - 1) / 2
+            // Face: lit skin. Wall: same L and chroma, rotated hue.
+            let faceRGB: (Float, Float, Float) = (0.878, 0.675, 0.557)
+            let th = wallHueDegrees * .pi / 180
+            // Build the wall in OKLab then round-trip, so the hue is exact.
+            let faceLab = DyadPalette.oklab(fromSRGB8: DyadPipeline.srgb8(from: faceRGB))
+            let C = (faceLab.a * faceLab.a + faceLab.b * faceLab.b).squareRoot()
+            let h0 = atan2(faceLab.b, faceLab.a)
+            let wallLab = OKLabColor(l: faceLab.l,
+                                     a: C * cos(h0 + th),
+                                     b: C * sin(h0 + th))
+            let w8 = DyadPalette.srgb8(from: wallLab)
+            let wallRGB: (Float, Float, Float) = (Float(w8.0) / 255,
+                                                  Float(w8.1) / 255,
+                                                  Float(w8.2) / 255)
+            return (0..<frameCount).map { _ in
+                var rgb = [(Float, Float, Float)](repeating: wallRGB, count: n)
+                var depths = [Float](repeating: 0, count: n)
+                for p in 0..<n {
+                    let x = Double(p % side), y = Double(p / side)
+                    if (x - c) * (x - c) + (y - c) * (y - c) <= 24 * 24 {
+                        rgb[p] = faceRGB
+                        depths[p] = 1
+                    }
+                }
+                return (rgb, depths)
+            }
+        }
+
+        let frames = scene(wallHueDegrees: 180)
+        let out = try XCTUnwrap(
+            DyadPipeline.process(rgb: frames.map { $0.0 }, depths: frames.map { $0.1 }))
+        let solve = try XCTUnwrap(out.solves.last)
+        let rot = solve.moments.rot
+
+        // The fitted rotation, as an angle.
+        let fitted = abs(atan2(rot.b, rot.a) * 180 / .pi)
+        XCTAssertGreaterThan(
+            fitted, 90,
+            "GH4: a wall opposed to the face fitted only \(fitted)° of rotation — "
+            + "the hue resultant is being read on the γ-staged field, whose bias "
+            + "points at the figure's own hue and cancels the separation")
+        // And it must not be the identity, which is what v7 emitted.
+        XCTAssertNotEqual(rot, DyadPalette.HueRotation.identity,
+                          "GH4: fell back to v7's forced same-hue ground")
+    }
+
     /// D1 — the BLEED setting must REACH the GPU. `MetalState` is the
     /// only channel to the aerialPreview kernel; before the fix it had
     /// no bleed slot and the kernel computed the soft coverage band

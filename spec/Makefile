@@ -28,7 +28,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/PairTree.hs \
                quantization/RoleAllocation.hs \
                quantization/Octave.hs \
-               quantization/AttractorRAG.hs
+               quantization/AttractorRAG.hs \
+               quantization/GroundHue.hs
 
 # TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
 # Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs

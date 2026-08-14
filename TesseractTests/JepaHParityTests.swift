@@ -102,7 +102,7 @@ final class JepaHParityTests: XCTestCase {
     /// partial capture refuses (nil ⇒ the EMA law stands).
     func testJepaSmoothedStructure() {
         var raw: [DyadPalette.Stats] = []
-        var bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?] = []
+        var bg: [DyadPalette.BackgroundMoments?] = []
         for f in 0..<64 {
             let x = Double(f) / 63.0
             let cov = [[0.004 + 0.002 * x, 0.0005, 0.0002],
@@ -113,8 +113,13 @@ final class JepaHParityTests: XCTestCase {
                 covariance: cov))
             // slots 3..5 (frames 12..23) carry no background evidence
             bg.append((12..<24).contains(f) ? nil
-                : (meanL: 0.7 - 0.1 * x, meanLnC: -2.5 + 0.3 * x,
-                   sdLnC: 0.2 + 0.05 * x))
+                : DyadPalette.BackgroundMoments(
+                    meanL: 0.7 - 0.1 * x, meanLnC: -2.5 + 0.3 * x,
+                    sdLnC: 0.2 + 0.05 * x,
+                    // ★ GroundHue GH13: the hue rides the ring as a
+                    // unit VECTOR; here it sweeps 0° → 45° across the
+                    // capture so the extra dims are exercised.
+                    hueA: cos(0.25 * .pi * x), hueB: sin(0.25 * .pi * x)))
         }
         guard let out = DyadPipeline.jepaSmoothed(raw, bg: bg) else {
             return XCTFail("full 64-frame capture must smooth")
@@ -131,6 +136,10 @@ final class JepaHParityTests: XCTestCase {
                 XCTAssertEqual(out.stats[f].covariance[0][0], head.covariance[0][0])
                 XCTAssertEqual(out.bg[f]!.meanL, bgHead!.meanL)
                 XCTAssertEqual(out.bg[f]!.sdLnC, bgHead!.sdLnC)
+                // ★ GroundHue GH13: the hue dims hold at the same
+                // 5 Hz cadence as the rest of the generating state.
+                XCTAssertEqual(out.bg[f]!.hueA, bgHead!.hueA)
+                XCTAssertEqual(out.bg[f]!.hueB, bgHead!.hueB)
             }
             let c = head.covariance
             for i in 0..<3 { XCTAssertGreaterThan(c[i][i], 0) }
@@ -142,7 +151,7 @@ final class JepaHParityTests: XCTestCase {
         }
         // single-phase: no bg anywhere ⇒ bg stays nil everywhere
         let noBg = DyadPipeline.jepaSmoothed(
-            raw, bg: [(meanL: Double, meanLnC: Double, sdLnC: Double)?](
+            raw, bg: [DyadPalette.BackgroundMoments?](
                 repeating: nil, count: 64))
         XCTAssertNotNil(noBg)
         XCTAssertTrue(noBg!.bg.allSatisfy { $0 == nil })
