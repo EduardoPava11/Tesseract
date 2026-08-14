@@ -70,6 +70,19 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     /// frame's 768-byte DYAD table, published as each is solved.
     @Published var liveTable: Data?
 
+    // ── THE LIVE INSTRUMENTS (spec/ui/WidgetGrid.hs WG12) ────────
+    // The FACE twin of CameraManager's instruments — ONE machine and
+    // ONE widget surface serve both capture systems, so both must
+    // publish the same three values on the same 5 Hz solve cadence
+    // (TL8/TL9, keyed on Live.solveSerial).
+
+    /// The 256 entries the surface is DRAWING WITH, packed to 768 B.
+    @Published private(set) var liveFrameTable: Data?
+    /// The mid read (32² = Rung.mid): pooled feed, export assignment.
+    @Published private(set) var preview32: CGImage?
+    /// The coarse read (16² = Rung.coarse): THE RESOLUTION OF DEPTH.
+    @Published private(set) var preview16: CGImage?
+
     // MARK: - ARKit Session
 
     private let session = ARSession()
@@ -90,6 +103,9 @@ final class FaceCaptureManager: NSObject, ObservableObject {
     /// have no Metal pipeline). Touched ONLY on delegateQueue
     /// (serial) — no locking.
     nonisolated(unsafe) private let live = DyadPipeline.Live()
+    /// The last solve serial the instruments were published at —
+    /// delegate-queue-only state, like `live` itself.
+    nonisolated(unsafe) private var publishedSolveSerial = 0
 
     // MARK: - Lifecycle
 
@@ -194,10 +210,16 @@ final class FaceCaptureManager: NSObject, ObservableObject {
         }
         let img = Self.buildPreviewImage(indices: previewIndices, size: outSize,
                                          table: previewTable)
+        let instruments = liveInstruments(rgb: rgb, depths: signalGrid)
 
         Task { @MainActor in
             self.previewImage = img
             self.faceDetected = hasFace
+            if let instruments {
+                self.liveFrameTable = instruments.table
+                self.preview32 = instruments.mid
+                self.preview16 = instruments.coarse
+            }
         }
 
         // 4. Recording: store raw data ONLY — no heavy analysis during capture.
@@ -439,6 +461,27 @@ final class FaceCaptureManager: NSObject, ObservableObject {
 
     /// With a 256-entry `table`, colors come from the live DYAD table
     /// (the unified preview); without, from the tesseract lattice.
+    /// The surface's instruments (WG12), read at the SOLVE cadence —
+    /// the FACE twin of CameraManager.liveInstruments, calling the
+    /// SAME `DyadPipeline.Live` methods. nil when the solve has not
+    /// moved since the last publish.
+    nonisolated private func liveInstruments(
+        rgb: [(Float, Float, Float)], depths: [Float]
+    ) -> (table: Data?, mid: CGImage?, coarse: CGImage?)? {
+        guard live.solveSerial != publishedSolveSerial else { return nil }
+        publishedSolveSerial = live.solveSerial
+        let table = live.table
+        guard let packed = QuantizedImage.packed(table) else { return nil }
+        guard let reads = live.coarseReads(rgb: rgb, depths: depths) else {
+            return (packed, nil, nil)
+        }
+        return (packed,
+                QuantizedImage.make(indices: reads.mid,
+                                    side: Rung.mid.side, table: table),
+                QuantizedImage.make(indices: reads.coarse,
+                                    side: Rung.coarse.side, table: table))
+    }
+
     nonisolated private static func buildPreviewImage(
         indices: [UInt8], size: Int,
         table: [(UInt8, UInt8, UInt8)]? = nil

@@ -14,8 +14,13 @@
 #                       lattice files (sole owner of cell↔point math)
 #   LINT-SINGLE-PITCH   numeric literals in .frame/.padding/spacing/
 #                       minLength must go through Lattice.gif/pt (0 allowed)
+#   LINT-REGION-SOURCE  GridRegion is CONSTRUCTED only in the two lattice
+#                       files that are machine-checked disjoint — a view
+#                       that mints its own rect has hand-positioned
+#                       through the sanctioned door
 #   LINT-GOLDEN-MECHANICS  the control-face algebra exists in BOTH forms
-#                       (spec/ui/CellMechanics.hs + UI/Cells/CellMechanics.swift)
+#                       (spec/ui/CellMechanics.hs + UI/Cells/CellMechanics.swift),
+#                       and the widget/dial specs exist with their ports
 #
 # Primitive allowlist: the cell-vocabulary files (UI/Cells/Cell*.swift,
 # PixelGrid, SurfaceClock, Ink) plus GIFPlayerView are the ONLY files
@@ -41,6 +46,9 @@ Tesseract/Views/States/ResultStateView.swift
 Tesseract/Views/States/LivePreviewStateView.swift
 Tesseract/Views/States/FacePreviewStateView.swift
 Tesseract/Views/LibraryView.swift
+Tesseract/UI/Widgets/InformationWidgets.swift
+Tesseract/UI/Widgets/DetentDial.swift
+Tesseract/UI/Widgets/WidgetSurfaceView.swift
 "
 
 note() { echo "  ✗ $1"; FAIL=1; }
@@ -102,18 +110,50 @@ for f in $GOVERNED_VOCAB; do
 done
 
 # ── LINT-CONTROL-FACE ───────────────────────────────────────────
-# Every interactive region declared in GridLayout must name a face
-# (frame|brackets) in CellMechanics.controlFaces (lawControlFaceTotal).
+# Every interactive region must name a face (frame|brackets) in
+# CellMechanics.controlFaces (lawControlFaceTotal). BOTH declaration
+# files are scanned: GridLayout's static GridRegion rows and the widget
+# vocabulary's WidgetSpec rows (spec/ui/WidgetGrid.hs WG1/WG9). Widget
+# regions are COMPUTED from an Arrangement, so scanning GridLayout alone
+# would silently stop covering the app's three most-touched controls —
+# a weakening by omission. WidgetSpec deliberately mirrors GridRegion's
+# labeled shape so ONE regex reads both files.
+LINT_FACE_SOURCES="Tesseract/UI/Lattice/GridLayout.swift Tesseract/UI/Widgets/Arrangement.swift"
 while IFS= read -r name; do
+  [ -z "$name" ] && continue
   grep -q "\"$name\": \"" Tesseract/UI/Cells/CellMechanics.swift \
     || note "LINT-CONTROL-FACE: interactive region '$name' has no entry in CellMechanics.controlFaces"
-done < <(grep "interactive: true" Tesseract/UI/Lattice/GridLayout.swift \
-         | sed -n 's/.*GridRegion("\([^"]*\)".*/\1/p' | sort -u)
+done < <(grep -h "interactive: true" $LINT_FACE_SOURCES \
+         | sed -n 's/.*\(GridRegion\|WidgetSpec\)("\([^"]*\)".*/\2/p' | sort -u)
+
+# ── LINT-REGION-SOURCE ──────────────────────────────────────────
+# A runtime arrangement opens exactly one hole: a view could fabricate
+# a GridRegion inline and .place() it, laundering hand positioning past
+# LINT-PLACEMENT. Regions are constructed ONLY in the lattice files
+# whose output is machine-checked disjoint (GridLayout.isLawful).
+while IFS= read -r line; do
+  case "$line" in
+    Tesseract/UI/Lattice/GridLayout.swift:*|Tesseract/UI/Widgets/Arrangement.swift:*) continue ;;
+  esac
+  code=$(echo "${line#*:}" | sed 's|//.*||')
+  echo "$code" | grep -q "GridRegion(" || continue
+  note "LINT-REGION-SOURCE: GridRegion constructed outside the lattice:"
+  echo "      $line"
+done < <(grep -rn "GridRegion(" $GOVERNED --include="*.swift" || true)
 
 # ── LINT-GOLDEN-MECHANICS ───────────────────────────────────────
 [ -f "spec/ui/CellMechanics.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/CellMechanics.hs missing"
 [ -f "Tesseract/UI/Cells/CellMechanics.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Cells/CellMechanics.swift missing"
 grep -q "ui/CellMechanics.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: spec not registered in spec/Makefile"
+[ -f "spec/ui/WidgetGrid.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/WidgetGrid.hs missing"
+[ -f "spec/ui/DetentDial.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/DetentDial.hs missing"
+[ -f "spec/ui/EditMachine.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/EditMachine.hs missing"
+grep -q "ui/WidgetGrid.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: WidgetGrid spec not registered in spec/Makefile"
+grep -q "ui/DetentDial.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: DetentDial spec not registered in spec/Makefile"
+grep -q "ui/EditMachine.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: EditMachine spec not registered in spec/Makefile"
+[ -f "Tesseract/UI/Widgets/Arrangement.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Widgets/Arrangement.swift missing"
+[ -f "Tesseract/UI/Widgets/DetentDial.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Widgets/DetentDial.swift missing"
+[ -f "Tesseract/UI/EditMachine.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/EditMachine.swift missing"
 
 if [ $FAIL -eq 0 ]; then
   echo "  ✓ grid lint clean ($(echo $GOVERNED | wc -w | tr -d ' ') governed dirs)"

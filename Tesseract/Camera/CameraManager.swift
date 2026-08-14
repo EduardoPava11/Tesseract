@@ -149,6 +149,23 @@ final class CameraManager: NSObject, ObservableObject {
     /// frame's 768-byte DYAD table, published as each is solved.
     @Published var liveTable: Data?
 
+    // ── THE LIVE INSTRUMENTS (spec/ui/WidgetGrid.hs WG12) ────────
+    // The surface's movable widgets read these. All three are
+    // functions of the SOLVE, so all three republish on the ladder's
+    // own 5 Hz rung-16 cadence (TL8/TL9, keyed on Live.solveSerial) —
+    // never at 20 Hz, which would be SwiftUI churn for a value that
+    // did not change.
+
+    /// The 256 entries the surface is DRAWING WITH, packed to 768
+    /// bytes. `liveTable` above is the EXPORT solve's table and is
+    /// therefore nil during WATCHING — which is exactly why the
+    /// palette was invisible before the shutter.
+    @Published private(set) var liveFrameTable: Data?
+    /// The mid read (32² = Rung.mid): pooled feed, export assignment.
+    @Published private(set) var preview32: CGImage?
+    /// The coarse read (16² = Rung.coarse): THE RESOLUTION OF DEPTH.
+    @Published private(set) var preview16: CGImage?
+
     // MARK: - Capture
 
     // Session objects live on sessionQueue after init (Apple TrueDepthStreamer
@@ -170,6 +187,9 @@ final class CameraManager: NSObject, ObservableObject {
     /// a preview engine of its own. Touched ONLY on processingQueue
     /// (serial) — no locking.
     nonisolated(unsafe) private let live = DyadPipeline.Live()
+    /// The last solve serial the instruments were published at. Read
+    /// and written only on the capture queue (serial), like `live`.
+    nonisolated(unsafe) private var publishedSolveSerial = 0
     nonisolated(unsafe) private static var _loggedOnce = false
 
     override init() {
@@ -461,9 +481,16 @@ final class CameraManager: NSObject, ObservableObject {
                                       frameIndex: frameIdx,
                                       metal: metal,
                                       gpuTexturesReady: depthTex != nil)
+                let instruments = liveInstruments(rgb: result.rgb,
+                                                  depths: result.depth)
 
                 Task { @MainActor in
                     self.previewImage = img
+                    if let instruments {
+                        self.liveFrameTable = instruments.table
+                        self.preview32 = instruments.mid
+                        self.preview16 = instruments.coarse
+                    }
                 }
 
                 // Recording: store raw data ONLY — no heavy analysis during capture
@@ -540,9 +567,15 @@ final class CameraManager: NSObject, ObservableObject {
 
         let img = makePreview(rgb: pixels, depths: depths,
                               frameIndex: frameIdx)
+        let instruments = liveInstruments(rgb: pixels, depths: depths)
 
         Task { @MainActor in
             self.previewImage = img
+            if let instruments {
+                self.liveFrameTable = instruments.table
+                self.preview32 = instruments.mid
+                self.preview16 = instruments.coarse
+            }
         }
 
         // Recording: store CapturedFrame for global compute
@@ -771,6 +804,31 @@ final class CameraManager: NSObject, ObservableObject {
         let indices = PerfectQuantizer.previewQuantize(
             rgb: rgb, depths: depths, frameIndex: frameIndex)
         return buildPreviewImage(indices: indices)
+    }
+
+    /// The surface's instruments (WG12), read at the SOLVE cadence.
+    /// nil when the solve has not moved since the last publish — so
+    /// the coarse reads cost (32² + 16²)/4 assignments per fine frame,
+    /// and the palette bytes cross the actor boundary at 5 Hz.
+    ///
+    /// MUST be called after `makePreview` on the same frame: `live`
+    /// has read that frame and its `solve` is the one the fine image
+    /// was painted with, so all three windows show ONE render.
+    nonisolated private func liveInstruments(
+        rgb: [(Float, Float, Float)], depths: [Float]
+    ) -> (table: Data?, mid: CGImage?, coarse: CGImage?)? {
+        guard live.solveSerial != publishedSolveSerial else { return nil }
+        publishedSolveSerial = live.solveSerial
+        let table = live.table
+        guard let packed = QuantizedImage.packed(table) else { return nil }
+        guard let reads = live.coarseReads(rgb: rgb, depths: depths) else {
+            return (packed, nil, nil)
+        }
+        return (packed,
+                QuantizedImage.make(indices: reads.mid,
+                                    side: Rung.mid.side, table: table),
+                QuantizedImage.make(indices: reads.coarse,
+                                    side: Rung.coarse.side, table: table))
     }
 
     /// Build a preview image from palette indices. With `table`, colors

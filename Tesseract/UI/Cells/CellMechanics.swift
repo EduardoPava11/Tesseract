@@ -62,7 +62,16 @@ enum CellMechanics {
         "toggleBleed": "frame",
         "toggleMirror": "frame",
         "setLibrary": "frame",
+        "setArrange": "frame",
+        "setResetLayout": "frame",
         "setClose": "frame",
+        // The movable widget surface (spec/ui/WidgetGrid.hs WG9 — the
+        // three interactive widgets). Their names are `Widget`'s raw
+        // values, so the spec's vocabulary, the footprint table, the
+        // lint scan and this face table all key off ONE string.
+        "shutter": "frame",
+        "setButton": "frame",
+        "shelfButton": "frame",
         // Library (tiles show GIF content → brackets; actions solid)
         "libCell0": "brackets", "libCell1": "brackets", "libCell2": "brackets",
         "libCell3": "brackets", "libCell4": "brackets", "libCell5": "brackets",

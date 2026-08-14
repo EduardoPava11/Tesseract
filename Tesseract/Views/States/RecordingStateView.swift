@@ -18,7 +18,7 @@ struct RecordingStateView: View {
                 .place(GridLayout.recCounter)
             progressBar.place(GridLayout.recProgress)
             // The machine's word (SM1) + elapsed time: WEAVING n.ns.
-            CellText(SurfaceMachine.State.weaving.word + " "
+            CellText(EditMachine.State.weaving.word + " "
                      + String(format: "%.1fs", Double(frame) / Double(CameraConfig.targetFPS)),
                      rows: TypeRows.label, ink: Color(srgb8: Ink.ledGhost))
                 .place(GridLayout.recTime)

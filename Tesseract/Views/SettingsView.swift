@@ -14,6 +14,13 @@ struct SettingsView: View {
     @Binding var appMode: ContentView.AppMode
     let modeSwitchAllowed: Bool
     let clock: SurfaceClock
+    /// WG3 — enter ARRANGE mode on the widget surface.
+    let onArrange: () -> Void
+    /// WG4 ★ — the escape hatch. It lives HERE, on a static region,
+    /// and never on a movable widget: no arrangement, however bad,
+    /// can make reset unreachable, because reset is not in the
+    /// arrangement.
+    let onResetLayout: () -> Void
     let onClose: () -> Void
 
     @State private var settings = ExportSettings.load()
@@ -47,6 +54,12 @@ struct SettingsView: View {
                     .place(GridLayout.toggleMirror)
 
                     libraryButton.place(GridLayout.setLibrary)
+                    actionRow(title: "ARRANGE", region: GridLayout.setArrange,
+                              enabled: true, action: onArrange)
+                        .place(GridLayout.setArrange)
+                    actionRow(title: "RESET LAYOUT", region: GridLayout.setResetLayout,
+                              enabled: true, action: onResetLayout)
+                        .place(GridLayout.setResetLayout)
                     closeButton.place(GridLayout.setClose)
                 }
                 .gridCentered(in: geo.size)
@@ -71,6 +84,27 @@ struct SettingsView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("GIF library")
+    }
+
+    /// A plain action row in the settings voice — the same face
+    /// algebra as LIBRARY, so the three rows read as one block.
+    private func actionRow(title: String, region: GridRegion,
+                           enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                ControlFrame(cols: region.w, rows: region.h,
+                             state: enabled ? 0 : 3,
+                             tick: clock.tick, reduceMotion: clock.reduceMotion)
+                CellText(title, rows: TypeRows.body,
+                         ink: Color(srgb8: enabled ? Ink.ink : Ink.ledGhost))
+            }
+            .frame(width: Lattice.gif(region.w), height: Lattice.gif(region.h))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityLabel(title)
     }
 
     // MARK: - Rows (the mode-pill vocabulary: accent ring = selected)

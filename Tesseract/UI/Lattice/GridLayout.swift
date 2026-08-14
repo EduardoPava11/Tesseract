@@ -136,11 +136,21 @@ enum GridLayout {
     static let toggleMirror = GridRegion("toggleMirror", col: 18, row: 95, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
     /// The GIF archive entry (2026-08-10): review old GIFs + palettes.
     static let setLibrary = GridRegion("setLibrary", col: 18, row: 112, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
+    /// The widget surface's two controls (spec/ui/WidgetGrid.hs WG3 /
+    /// WG4), keeping the 17-row rhythm of the block above.
+    ///
+    /// ★ RESET LIVES ON A STATIC REGION, NEVER ON A MOVABLE WIDGET.
+    /// That is the whole safety argument for persisting a layout the
+    /// user can rearrange: no arrangement, however bad, can make reset
+    /// unreachable, because reset is not IN the arrangement.
+    static let setArrange = GridRegion("setArrange", col: 18, row: 129, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
+    static let setResetLayout = GridRegion("setResetLayout", col: 18, row: 146, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
     static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: TesseractLattice.buttonRowCells, interactive: true)
 
     static let settingsScene: [GridRegion] = [
         setTitle, setModeLabel, setModeLive, setModeFace,
-        toggleBleed, toggleMirror, setLibrary, setClose,
+        toggleBleed, toggleMirror, setLibrary,
+        setArrange, setResetLayout, setClose,
     ]
 
     // ── Library scene (fullScreenCover — its own canvas) ──
@@ -186,20 +196,60 @@ enum GridLayout {
         ("library", libraryScene),
     ]
 
+    // ── Lawfulness: the ONE bounds ∧ disjoint ∧ touch-floor predicate ──
+    //
+    // A scene is a list of regions whether a human wrote it or an
+    // Arrangement generated it (spec/ui/WidgetGrid.hs WG2), so there is
+    // exactly ONE lawfulness implementation in the app and the runtime
+    // move check is the same proof that ran at launch. The three clauses
+    // below are shared verbatim by `isLawful` (pure) and `check`
+    // (precondition wrapper, which only adds the diagnostic message).
+
+    /// Clause 1: the whole footprint sits on the canvas.
+    static func inBounds(_ r: GridRegion) -> Bool {
+        r.col >= 0 && r.row >= 0
+            && r.col + r.w <= TesseractLattice.cols
+            && r.row + r.h <= TesseractLattice.rows
+    }
+
+    /// Clause 2: a control clears the HIG floor on its SMALLER axis, so
+    /// a thin strip cannot pass by being long (L4 / WidgetGrid WG9).
+    /// Reporting-only regions are exempt.
+    static func meetsTouchFloor(_ r: GridRegion) -> Bool {
+        !r.interactive || min(r.w, r.h) >= TesseractLattice.touchFloorCells
+    }
+
+    /// Clause 3 is `GridRegion.overlaps` — pairwise disjointness.
+    static func isLawful(_ regions: [GridRegion]) -> Bool {
+        for r in regions where !(inBounds(r) && meetsTouchFloor(r)) { return false }
+        for i in regions.indices {
+            for j in regions.indices where j > i {
+                if regions[i].overlaps(regions[j]) { return false }
+            }
+        }
+        return true
+    }
+
     // ── Self-check: disjoint ∧ in-bounds ∧ touch-floor ∧ faces total ──
 
     static func selfCheck() {
         for (name, scene) in allScenes {
             check(scene: scene, named: name)
         }
+        // The shipped widget default is proven by the SAME launch
+        // precondition that covers the static scenes (WidgetGrid WG5).
+        check(scene: Arrangement.default.regions, named: "widgets")
         precondition(preview.w == TesseractLattice.previewCells
                   && preview.h == TesseractLattice.previewCells,
                      "preview region must be exactly the GIF (64×64 cells)")
         precondition(record.w == TesseractLattice.recordCells,
                      "record region must match the shutter footprint")
         // Every interactive region names a face (lawControlFaceTotal —
-        // the runtime mirror of LINT-CONTROL-FACE).
-        for (sceneName, scene) in allScenes {
+        // the runtime mirror of LINT-CONTROL-FACE). The widget
+        // vocabulary is covered too: its interactive regions are
+        // COMPUTED, so without this loop the runtime mirror would stop
+        // covering the app's three most-touched controls.
+        for (sceneName, scene) in allScenes + [("widgets", Arrangement.default.regions)] {
             for r in scene where r.interactive {
                 precondition(CellMechanics.controlFaces[r.name] != nil,
                              "\(sceneName).\(r.name) is interactive but has no control face")
@@ -207,16 +257,12 @@ enum GridLayout {
         }
     }
 
-    private static func check(scene: [GridRegion], named name: String) {
+    static func check(scene: [GridRegion], named name: String) {
         for r in scene {
-            precondition(r.col >= 0 && r.row >= 0
-                      && r.col + r.w <= TesseractLattice.cols
-                      && r.row + r.h <= TesseractLattice.rows,
+            precondition(inBounds(r),
                          "\(name): region \(r.name) out of bounds")
-            if r.interactive {
-                precondition(min(r.w, r.h) >= TesseractLattice.touchFloorCells,
-                             "\(name): interactive region \(r.name) below 44pt touch floor")
-            }
+            precondition(meetsTouchFloor(r),
+                         "\(name): interactive region \(r.name) below 44pt touch floor")
         }
         for i in scene.indices {
             for j in scene.indices where j > i {

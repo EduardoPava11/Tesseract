@@ -17,7 +17,7 @@ struct IdleStateView: View {
             CellBusyTile(sideCells: GridLayout.idleBusy.w)
                 .place(GridLayout.idleBusy)
             // The machine's word (SM1): the grid says what it is doing.
-            CellText(SurfaceMachine.State.waking.word, rows: TypeRows.label,
+            CellText(EditMachine.State.waking.word, rows: TypeRows.label,
                      ink: Color(srgb8: Ink.ledGhost))
                 .place(GridLayout.idleHint)
         }
