@@ -41,8 +41,8 @@
 // all-face (ruling R3).
 //
 // process() returns nil when a capture lacks raw RGB; GIFMachine
-// surfaces that nil honestly (no export) — there is no global-table
-// fallback path anymore (2026-08-12 decree).
+// surfaces that nil honestly (no export). There is no global-table
+// path anymore (2026-08-12 decree).
 
 import Foundation
 import simd
@@ -247,7 +247,7 @@ enum DyadPipeline {
     /// followed, flicker frozen); stage 1 (CPU, exact) solves
     /// statistics → derived-α EMA → tables; stage 2 (assignment) runs
     /// on the ANE in one dispatch for full 64-frame captures, and
-    /// falls back to the identical CPU search otherwise — near-tie
+    /// runs the identical CPU search (its TWIN) otherwise. Near-tie
     /// flips are the only permitted difference.
     /// `bleed: false` = MAP classes only, no dither band: every
     /// background pixel is the hard σ-mirror of its own staged
@@ -530,21 +530,35 @@ enum DyadPipeline {
                           jepaH: jepa != nil, solves: solves)
         }
 
-        // ── Stage 2: assignment — ANE whole-capture, CPU otherwise ──
+        // ── Stage 2: assignment — S8, THE ADDITIVE LADDER ──
+        //
+        // ★ Daniel's ruling 2026-08-14: "all rungs require a meaningful
+        // additive to the creation of GIFs", and "read the incoming
+        // information in 16x16, 32x32 and 64x64 so that we can lift a
+        // coarse intuition into the final 64x64x64 voxel creation."
+        //
+        // The rungs now WRITE the index instead of metering it after
+        // the fact: rung 16 commits bit 6 per 4×4×4 spacetime block,
+        // rung 32 commits bits 5-3 per 2×2×2 block, rung 64 picks the
+        // leaf exactly among that node's 8. AdditiveCensus is the
+        // meter and StrataDescentTests is the gate (conformance 1.0 at
+        // every stratum, against ~0 for the free search this replaces).
+        //
+        // ONE LAW, so there is no engine to choose between: the fine
+        // search is 8 candidates rather than 128, which is 16× less
+        // inner loop, and the whole descent costs roughly 4.5M distance
+        // evaluations against the old 33.5M. DyadANE's fused graph
+        // implements the SUPERSEDED free argmin over all 128 leaves, so
+        // it is no longer this law's twin and is not consulted here.
+        // Rebuilding it for the descent is Mac-lab work (nn/dyad-assign)
+        // and is owed; until then the exact CPU descent IS the law,
+        // not a substitute for it.
         let labPrimaries = solves.map { $0.primaries }
-        if let ane = DyadANE.assign(labs: labs, primaries: labPrimaries,
-                                    masks: masks, fars: fars) {
-            return Output(indexFrames: chaosRefine(pairDither(ane)), tables: tables,
-                          stats: frameStats, mixture: mixture,
-                          twoPhase: twoPhase, alpha: alpha,
-                          msGain: msGain,
-                          groundMoments: solves.map { $0.moments },
-                          jepaH: jepa != nil, solves: solves)
-        }
-        let cpu = (0..<frameCount).map { f in
-            assignRoles(labs: labs[f], mask: masks[f], far: fars[f],
-                        labPrimaries: labPrimaries[f])
-        }
+        let cubeSide = Int(Double(labs[0].count).squareRoot())
+        let cpu = StrataDescent.assign(
+            labs: labs, masks: masks, fars: fars,
+            primaries: labPrimaries, nodes16: solves.map { $0.nodes16 },
+            side: cubeSide)
         return Output(indexFrames: chaosRefine(pairDither(cpu)), tables: tables,
                       stats: frameStats, mixture: mixture,
                       twoPhase: twoPhase, alpha: alpha,
@@ -789,6 +803,28 @@ enum DyadPipeline {
     /// background → exactly 255. The reference the ANE path is
     /// parity-tested against. The band pair dither is NOT here:
     /// process() applies it as a post-pass on both engines.
+    ///
+    /// ★ DO NOT replace this exhaustive argmin with a greedy descent
+    /// down the PairTree. It looks like free speed (7 levels x 2 evals
+    /// instead of 128) and it is not. MEASURED, nn/descent/RESULTS.md,
+    /// 96 held-out trees:
+    ///
+    ///     greedy-L2 (means only)   0.8601 agreement, excess 0.000634
+    ///     lookahead-L2 (DL6/DL7)   0.9652 agreement, excess 0.000076
+    ///     exhaustive (this code)   1.0,              excess 0
+    ///
+    /// Greedy costs 8x the excess distortion. Two further reasons this
+    /// stays exact: (1) it is the PARITY REFERENCE for DyadANE, so an
+    /// approximate reference dissolves the gate that validates the ANE
+    /// path; (2) the lawful log-time form is lookahead-L2, and it does
+    /// not pay where assignment actually runs, because on the ANE both
+    /// 128-exhaustive and 80-eval lookahead are matmul-shaped (the
+    /// honesty note in RESULTS.md). If the CPU path ever needs the
+    /// win (FACE mode and the simulator run here, not on the ANE),
+    /// lookahead-L2 is the ONLY sanctioned form, it ships inside this
+    /// function rather than as a separate artifact per the ONE-MODEL
+    /// decree, and it needs a ruling plus a device pass because it
+    /// changes GIF bytes.
     static func assignRoles(
         labs: [OKLabColor],
         mask: [Bool],
@@ -896,7 +932,7 @@ enum DyadPipeline {
         }
 
         /// The 256 entries the surface draws indices with; empty until
-        /// the first solve (callers fall back to the lattice preview).
+        /// the first solve (callers show the lattice preview, the PRIOR).
         var table: [(UInt8, UInt8, UInt8)] { solve?.table ?? [] }
 
         /// The current state packaged for the aerialPreview Metal
@@ -1100,6 +1136,26 @@ enum DyadPipeline {
             }
             let mask = ts.map { $0 < DyadPipeline.coverageFloor }
             let far = [Bool](repeating: false, count: rgb.count)
+            // ★ OWED, AND SAID OUT LOUD (NO-STUBS decree). The export
+            // moved to the additive ladder (StrataDescent, S8) on
+            // 2026-08-14; this surface has NOT. So right now the app
+            // holds TWO assignment laws: the export descends the rungs,
+            // this frame still searches all 128 leaves freely. That
+            // contradicts EM13 (the preview IS the GIF), and it is a
+            // second law rather than a twin, because the two do not
+            // agree and no parity test claims they do.
+            //
+            // It is written here instead of in a doc because this line
+            // is where the divergence lives.
+            //
+            // THE CLOSE, which the ladder architecture already fits:
+            // stages A and B are decided at the COARSE rung, which this
+            // driver already solves at 5 Hz over the 16-frame cube, so
+            // the half and the node can be committed there and carried
+            // on FrameSolve. Only stage C (the exact 8-way leaf argmin)
+            // then runs per frame at 20 Hz, which is CHEAPER than the
+            // 128-way search on this line today. The GPU twin in
+            // Quantize.metal's aerialPreview needs the same two buffers.
             let engine = DyadPipeline.assignRoles(labs: labs, mask: mask, far: far,
                                                   labPrimaries: solve.primaries)
             return DyadPipeline.pairDitherFrame(
@@ -1108,7 +1164,8 @@ enum DyadPipeline {
                 pull: ts.map { Float($0) }, side: side)
         }
 
-        /// Full CPU path: read + assign (FACE mode, GPU fallback).
+        /// Full CPU path: read + assign (FACE mode, and the twin when
+        /// the platform exposes no Metal).
         func process(rgb: [(Float, Float, Float)], depths: [Float]) -> [UInt8]? {
             read(rgb: rgb, depths: depths)
             return assign(rgb: rgb, depths: depths)

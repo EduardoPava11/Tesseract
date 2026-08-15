@@ -17,7 +17,7 @@ inside it is catalogued. §7 is the direction that falls out of the map.
 Every stage has two axes:
 
 **MOVEMENT** — *when it runs*, named by the square-word the grid is speaking at
-that moment. The SurfaceMachine's six words are already the user's mental model
+that moment. The EditMachine's words are already the user's mental model
 of the app; the atlas simply admits that they are also the engine's clock.
 Two timeless bands hold what never runs.
 
@@ -72,7 +72,7 @@ of its own.
 | `PLACING` | SURFACE | layout-as-data: 9 scenes of disjoint, in-bounds `GridRegion`s, self-checked at DEBUG launch | `GridLayout.swift:40` |
 | `INKING` | SURFACE | the closed opaque-ink token vocabulary + type registers (micro/label/body/counter/display) | `Ink.swift:8` |
 | `TICKING` | SIGNAL | the one UI clock: CADisplayLink at 20 Hz, 1 tick = 5 cs = one GIF frame | `SurfaceClock.swift:44` |
-| `SURFACING` | SIGNAL | `CameraState`/`FaceCaptureState` → the six words; totality proven both ways | `SurfaceMachine.swift:65` |
+| `SURFACING` | SIGNAL | `CameraState`/`FaceCaptureState` → the state words; totality proven both ways | `EditMachine.swift:300` |
 
 *Face:* `IdleStateView` — wordmark, `4^4 = 256`, a static checker, the word WAKING.
 

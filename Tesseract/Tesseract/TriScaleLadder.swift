@@ -15,9 +15,37 @@
 // realized sRGB8 has a floor of 32, so nothing would ever concentrate,
 // while level mass has true zeros and makes the TL7 meter live.
 //
-// MEASUREMENT ONLY (decree-bound): pools the realized index cube into
-// telemetry after quantization. No GIF byte depends on it, and it
-// trains nothing (★NO-CAPTURE-TRAINING).
+// ★ THIS RUNG READ IS UNFINISHED WORK, AND SAYING SO IS THE POINT
+// (NO-STUBS decree, 2026-08-14). Today this file pools the realized
+// index cube into telemetry AFTER quantization: no GIF byte depends on
+// it, and it trains nothing (★NO-CAPTURE-TRAINING).
+//
+// That is precisely what AD10 forbids. spec/output/AdditiveLadder.hs:
+// "★ NO RUNG IS SILENT ... no rung can be demoted to telemetry."
+// Daniel's ruling the same day: "all rungs require a meaningful
+// additive to the creation of GIFs." AD11 PRICES the gap on a freely
+// assigned cube: conformance is 0.0 at rung 16 and 0.0 at rung 32,
+// because today's pipeline assigns freely at the fine rung and so
+// conforms at the leaf stratum and nowhere else.
+//
+// Computing the whole 16³ and 32³ tower on every capture and then
+// discarding it is a stub with a finished face. It is recorded here,
+// on the file that does it, rather than in a doc nobody opens.
+//
+// THE CLOSE is the S8 port, and its shape is already ruled
+// (docs/ATLAS.md §7, step 2: "promote RUNGING from METER to SIGNAL").
+// The index becomes the SUM of its strata rather than a free choice:
+//
+//   bit 7    ROLE     figure/σ    depth, via the Bayer coverage (AD7)
+//   bit 6    rung 16³ 4-level     4096 voxels write 1 bit
+//   bits 5-3 rung 32³ 32-level    32768 voxels write 3 bits
+//   bits 2-0 rung 64³ 256-level   262144 voxels write 3 bits
+//
+// AdditiveCensus.swift is the instrument that prices it before and
+// after. The gate on doing the work is Daniel's own, recorded in
+// ATLAS §8: nothing in §7 is wired before the shipping path has been
+// seen on hardware. So this is BLOCKED, not forgotten, and the
+// distinction is the whole reason this comment exists.
 
 import Foundation
 

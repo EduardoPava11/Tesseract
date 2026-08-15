@@ -330,7 +330,7 @@ struct ContentView: View {
         }
     }
 
-    /// Defensive fallback for a landed capture without data — speaks
+    /// REFUSAL for a landed capture without data. It speaks
     /// the machine's refusal voice on the region-placed error scene
     /// instead of an off-machine, un-placed word (line pass).
     private var resultPlaceholder: some View {

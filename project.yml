@@ -15,8 +15,16 @@ settings:
     SWIFT_VERSION: "6.0"
     # Lint build phase greps the source tree — sandboxing would block it.
     ENABLE_USER_SCRIPT_SANDBOXING: NO
-    # Refine.metal's bit-exact CPU/GPU parity contract requires IEEE
-    # float ops in program order (no reassociation/fma contraction).
+    # ANELoop.metal's CPU/GPU parity contract requires IEEE float ops
+    # in program order (no reassociation/fma contraction): the SIMT
+    # visit law mirrors ANELoop.sweepBlockCPU statement for statement
+    # (strict decrease only, ties keep the current index), and
+    # reassociation would perturb those acceptance comparisons.
+    # Gated by ANELoopSIMTParityTests (agreement up to score near-ties,
+    # XP2; never bit-exactness across precisions).
+    # (Was justified by Refine.metal until 2026-08-12, when the
+    # per-frame-palette decree deleted that kernel. The contract moved
+    # files; it did not go away. This is NOT a free perf knob.)
     MTL_FAST_MATH: NO
     # No App Intents in this app — skips the appintentsmetadataprocessor
     # pass and its "Metadata extraction skipped" warning on every build.

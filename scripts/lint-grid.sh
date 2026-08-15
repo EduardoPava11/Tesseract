@@ -155,6 +155,34 @@ grep -q "ui/EditMachine.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: EditMa
 [ -f "Tesseract/UI/Widgets/DetentDial.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Widgets/DetentDial.swift missing"
 [ -f "Tesseract/UI/EditMachine.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/EditMachine.swift missing"
 
+# ── LINT-NO-STUB ────────────────────────────────────────────────
+# ★ NO STUBS (Daniel's decree 2026-08-14). A stub is unfinished work
+# wearing a finished face. If a thing is not built, the app SAYS so:
+# Reweave returns a REFUSAL with a reason. A refusal is finished work.
+# Scope is the WHOLE app, not just the governed view dirs, because an
+# engine stub is worse than a view stub, not better.
+while IFS= read -r line; do
+  note "LINT-NO-STUB: stub marker in app source (build it, or refuse with a reason):"
+  echo "      $line"
+done < <(grep -rnE "(TODO|FIXME|XXX|HACK|STUB)[: ]" Tesseract --include="*.swift" --include="*.metal" || true)
+
+# ── LINT-NO-FALLBACK ────────────────────────────────────────────
+# ★ NO FALLBACKS (same decree). The failure is not the second path, it
+# is the SILENCE: a fallback turns a bug into a permanent invisible
+# loss, so nothing fails and nothing gets fixed. Three things are not
+# fallbacks and must be NAMED for what they are:
+#   twin     one law, two engines, PROVEN equal by a parity test
+#   prior    a branch of the law itself (the single-phase BIC verdict)
+#   refusal  terminal, visible, reasoned, with no silent substitute
+# So the WORD is banned in app source. Escape hatch, mirroring
+# LINT-ALLOW-POSITION: `// LINT-ALLOW-FALLBACK: <reason>` on the line,
+# which makes each instance a decision someone signed.
+while IFS= read -r line; do
+  echo "$line" | grep -q "LINT-ALLOW-FALLBACK" && continue
+  note "LINT-NO-FALLBACK: name it (twin / prior / verdict / platform path / refusal):"
+  echo "      $line"
+done < <(grep -rniE "fall[- ]?backs?|falls back" Tesseract --include="*.swift" --include="*.metal" || true)
+
 if [ $FAIL -eq 0 ]; then
   echo "  ✓ grid lint clean ($(echo $GOVERNED | wc -w | tr -d ' ') governed dirs)"
   exit 0

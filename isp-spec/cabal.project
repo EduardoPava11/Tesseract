@@ -1,6 +1,0 @@
-packages: .
-
-tests: True
-
-package tesseract-isp
-  ghc-options: -Wall -Wunused-packages -Wincomplete-uni-patterns -Wredundant-constraints

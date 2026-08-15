@@ -149,7 +149,7 @@ enum DyadPalette {
     // moments now, still zero hyperparameters; spec: PhasePalette.hs
     // § 10, PP8 and GroundHue.hs GH3/GH4). The
     // Wada dictionary constants demote to the PRIOR used on the
-    // single-phase (BIC) fallback path, where the identity cap
+    // single-phase (BIC) PRIOR path, where the identity cap
     // (ground ≤ figure chroma) also lives — the dictionary's ROLE
     // law, not the scene's.
 
@@ -256,7 +256,7 @@ enum DyadPalette {
         var balanced: Bool = false
     }
 
-    /// Single-phase / thin-background fallback: the dictionary prior.
+    /// Single-phase / thin-background VERDICT: the dictionary prior.
     /// The prior is hue-free by construction (Wada constrains the
     /// ROLE, not the interval), so it takes the identity rotation —
     /// the degenerate case keeps being covered by the same law that
@@ -289,7 +289,7 @@ enum DyadPalette {
     /// the loop that was already running; the chroma weighting is
     /// free because it is already in (a, b)).
     /// nil when the weighted mass (or chromatic mass) vanishes —
-    /// callers fall back to the prior (PP8's two-path law).
+    /// callers take the prior branch (PP8's two-path law).
     static func backgroundMoments(
         labs: [OKLabColor], weights: [Double]
     ) -> BackgroundMoments? {
@@ -608,7 +608,7 @@ enum DyadPalette {
         return prims + prims.reversed().map { ground(moments, of: $0) }
     }
 
-    /// Prior-path table (single-phase fallback, fixtures, v1 traces):
+    /// Prior-path table (single-phase verdict, fixtures, v1 traces):
     /// byte-identical to the v5-W law.
     static func table(stats: Stats) -> [(UInt8, UInt8, UInt8)] {
         let prims = primaries(stats: stats)

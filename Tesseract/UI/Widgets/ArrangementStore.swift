@@ -10,7 +10,7 @@
 // format. This file is the ONLY place those integers cross the
 // process boundary.
 //
-// ── THE FALLBACK IS THE WHOLE DESIGN ────────────────────────────
+// ── THE TOTAL LOAD IS THE WHOLE DESIGN ──────────────────────────
 //
 // Persisting a layout the user can rearrange creates exactly one new
 // failure mode: an unusable surface that survives a relaunch. So

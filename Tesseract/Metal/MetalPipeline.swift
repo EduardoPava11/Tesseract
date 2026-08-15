@@ -23,7 +23,8 @@ final class MetalPipeline {
     private let downsampleRGBState: MTLComputePipelineState
     private let downsampleDepthState: MTLComputePipelineState
     /// The 20 Hz preview assignment under the Aerial Mirror Law —
-    /// optional: absent kernel ⇒ CPU fallback (DyadPipeline.Live.assign).
+    /// optional: absent kernel means the CPU TWIN runs instead
+    /// (DyadPipeline.Live.assign). Platform absence, not degradation.
     private let aerialState: MTLComputePipelineState?
 
     // MARK: - Textures (64×64 working buffers)
@@ -96,7 +97,7 @@ final class MetalPipeline {
             }
             self.downsampleDepthState = try device.makeComputePipelineState(function: downsampleDepthFn)
 
-            // Aerial preview kernel (optional — CPU fallback if absent)
+            // Aerial preview kernel (optional: the CPU twin runs if absent)
             if let aerialFn = library.makeFunction(name: "aerialPreview") {
                 self.aerialState = try device.makeComputePipelineState(function: aerialFn)
                 logger.info("MetalPipeline: aerialPreview pipeline created")
@@ -305,7 +306,7 @@ final class MetalPipeline {
     /// working textures (call immediately after downsampleFrame on the
     /// same serial queue — the textures are that frame's). Returns the
     /// 4096 palette indices, or nil (kernel absent / not ready) so the
-    /// caller falls back to the CPU reference. Preview-only: near-tie
+    /// caller runs the CPU twin instead. Preview-only: near-tie
     /// fp32 flips vs the CPU are the only permitted difference.
     func aerialAssign(state: DyadPipeline.MetalState) -> [UInt8]? {
         guard isReady,

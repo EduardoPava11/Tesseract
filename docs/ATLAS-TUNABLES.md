@@ -903,7 +903,7 @@ with its anchor and what a knob there would mean. `—` = deliberately not a kno
 | ghost/secondary ink | `Tesseract/UI/Cells/Ink.swift:12` | (40,40,40) | contrast knob |
 | reject / accept / accent inks | `Tesseract/UI/Cells/Ink.swift:14` | (220,60,60) / (70,200,90) / (96,165,250) | semantic color theme |
 | canvas black, void, pure-white shutter | `Tesseract/UI/Cells/Ink.swift:22` | (0,0,0) / (16,16,16) / (255,255,255) | background tone; pure is deliberately brighter than ink so the shutter is the brightest thing on screen |
-| type registers (glyph heights in 2pt cells) | `Tesseract/UI/Cells/Ink.swift:58` | micro 4 / label 7 / body 9 / counter 11 / display 16 (all upscaled 2026-08-10) | text-size accessibility scale — but SurfaceMachineTests requires words to still fit regions |
+| type registers (glyph heights in 2pt cells) | `Tesseract/UI/Cells/Ink.swift:58` | micro 4 / label 7 / body 9 / counter 11 / display 16 (all upscaled 2026-08-10) | text-size accessibility scale, but EditMachineTests requires words to still fit regions |
 
 ## LATTICE  ·  SURFACE · LAW
 
@@ -963,10 +963,10 @@ with its anchor and what a knob there would mean. `—` = deliberately not a kno
 
 | what | where | current | knob |
 |---|---|---|---|
-| the six state words | `Tesseract/UI/SurfaceMachine.swift:38` | WAKING / WATCHING / WEAVING / SOLVING / SEALED / (CAMERA OFF, NO TRUEDEPTH, NO CENTER STAGE, NO FACE TRACKING, EXPORT FAILED, ERROR) | voice/language pack — SM1 constrains to uppercase letters+spaces and words must raster-fit their regions |
-| un-interruptible state set | `Tesseract/UI/SurfaceMachine.swift:54` | {weaving, solving} return false | pinned by SM3; a 'cancel capture' feature would need a spec amendment |
-| terminal refusals (no RETRY rendered) | `Tesseract/UI/SurfaceMachine.swift:117` | noTrueDepth, noCenterStage, noFaceTracking have no outgoing edges (SM4) | device-gate policy; the Center Stage gate (iPhone-17-line only) lives here as .noCenterStage |
-| message-to-refusal keying | `Tesseract/UI/SurfaceMachine.swift:103` | exact string match on CameraManager.cameraDeniedMessage / noTrueDepthMessage / noCenterStageMessage / FaceCaptureManager.faceTrackingUnsupportedMessage / CameraManager.encodeFailedMessage, else .unknown | new failure classes register here |
+| the state words | `Tesseract/UI/EditMachine.swift:208` | WAKING / WATCHING / WEAVING / SOLVING / SEALED / (CAMERA OFF, NO TRUEDEPTH, NO CENTER STAGE, NO FACE TRACKING, EXPORT FAILED, ERROR) | voice/language pack. EM6 (was SM1) constrains to uppercase letters+spaces and words must raster-fit their regions |
+| un-interruptible state set | `Tesseract/UI/EditMachine.swift:226` | capture-solve returns false; TUNING is interruptible | pinned by EM4/EM5, the split of the old SM3. A 'cancel capture' feature would need a spec amendment |
+| terminal refusals (no RETRY rendered) | `Tesseract/UI/EditMachine.swift:186` | noTrueDepth, noCenterStage, noFaceTracking are terminal, derived via isTerminal (EM7, was SM4) | device-gate policy; the Center Stage gate (iPhone-17-line only) lives here as .noCenterStage |
+| message-to-refusal keying | `Tesseract/UI/EditMachine.swift:352` | exact string match on CameraManager.cameraDeniedMessage / noTrueDepthMessage / noCenterStageMessage / FaceCaptureManager.faceTrackingUnsupportedMessage / CameraManager.encodeFailedMessage, else .unknown | new failure classes register here |
 
 ## SWITCHING  ·  SURFACE · SURFACE
 
@@ -974,7 +974,7 @@ with its anchor and what a knob there would mean. `—` = deliberately not a kno
 |---|---|---|---|
 | launch mode | `Tesseract/App/ContentView.swift:27` | appMode = .live | remember-last-mode (currently NOT persisted — resets to LIVE every launch, unlike BLEED/MIRROR which persist) |
 | the mode set itself | `Tesseract/App/ContentView.swift:22` | exactly {LIVE, FACE} (front-only decree) | new capture modes register here + a settings pill + a manager |
-| interruption gate | `Tesseract/App/ContentView.swift:92` | reads SurfaceMachine.state(...).interruptible per active mode | pinned by SM3 |
+| interruption gate | `Tesseract/App/ContentView.swift:146` | reads EditMachine state .interruptible per active mode | pinned by EM4/EM5 |
 
 ## TICKING  ·  SURFACE · SIGNAL
 

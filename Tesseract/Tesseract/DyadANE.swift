@@ -11,8 +11,24 @@
 // coordinates — centering is argmin-invariant and buys ~10× fp16
 // resolution (measured in the authoring script).
 //
-// Total: any missing model, shape mismatch, or prediction failure
-// returns nil and the caller keeps the exact CPU path.
+// ★ NO-SILENT-SECOND-PATH DECREE (2026-08-14). This is a TWIN:
+// one law, two engines, and DyadANEParityTests is the proof they
+// agree. Returning nil is therefore a DISPATCH decision, and the three
+// reasons it can happen are kept apart on purpose, because lumping
+// them together is how a defect becomes a permanent invisible cost:
+//
+//   PLATFORM   no bundled model on this device. A fact about the
+//              hardware. The twin runs. Nothing is wrong.
+//   SHAPE      the cube is not the 64 × 4096 the graph was COMPILED
+//              for. The live solve reads at rung 16 (256 px/frame),
+//              so this is a legitimate structural case, not a
+//              failure. The twin runs.
+//   DEFECT     the cube is RAGGED: frame counts or per-frame lengths
+//              disagree with each other. No caller can mean this. It
+//              traps in DEBUG so it surfaces on the bench instead of
+//              quietly costing the ANE dispatch forever in the field.
+//
+// A prediction failure is a genuine runtime error and returns nil.
 
 import CoreML
 import Foundation
@@ -45,8 +61,33 @@ enum DyadANE {
         masks: [[Bool]],
         fars: [[Bool]]
     ) -> [[UInt8]]? {
-        guard let model,
-              labs.count == frameCount, primaries.count == frameCount,
+        // DEFECT: a ragged cube. Independent of which rung the caller
+        // read at, the four arrays describe ONE cube, so their frame
+        // counts must agree and every frame must be the same size. No
+        // caller can legitimately mean otherwise, so this traps on the
+        // bench rather than silently costing the dispatch in the field.
+        let frames = labs.count
+        assert(primaries.count == frames && masks.count == frames
+               && fars.count == frames,
+               "ragged cube: frame counts disagree (labs \(labs.count), "
+               + "primaries \(primaries.count), masks \(masks.count), "
+               + "fars \(fars.count))")
+        assert(Set(labs.map { $0.count }).count <= 1
+               && Set(masks.map { $0.count }).count <= 1
+               && Set(fars.map { $0.count }).count <= 1
+               && Set(primaries.map { $0.count }).count <= 1,
+               "ragged cube: per-frame lengths disagree within an array")
+        assert(labs.isEmpty
+               || (labs[0].count == masks[0].count
+                   && labs[0].count == fars[0].count),
+               "ragged cube: labs, masks and fars disagree on pixel count")
+
+        // PLATFORM: no engine on this device. The twin runs.
+        guard let model else { return nil }
+
+        // SHAPE: the graph is compiled for exactly 64 × 4096. The live
+        // solve reads at rung 16, which is lawful and lands on the twin.
+        guard labs.count == frameCount, primaries.count == frameCount,
               masks.count == frameCount, fars.count == frameCount,
               labs.allSatisfy({ $0.count == pixelCount }),
               masks.allSatisfy({ $0.count == pixelCount }),

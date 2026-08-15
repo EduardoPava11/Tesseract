@@ -32,8 +32,8 @@ QUANTIZATION = quantization/TesseractAxes.hs \
                quantization/GroundHue.hs \
                quantization/WhiteBalance.hs
 
-# TesseractSpec.hs excluded from auto-run: needs Data.Array stub after KataGo removal.
-# Run manually once imports are cleaned: make test-one F=quantization/TesseractSpec.hs
+# (TesseractSpec.hs was deleted in the 2026-08-11 unification; the note
+# telling you to run it manually outlived the file by three months.)
 
 TEMPORAL = temporal/ContinuousDepthCadence.hs \
            temporal/DepthSignal.hs \
@@ -71,8 +71,12 @@ NEURAL = neural/BayerResidual.hs \
          neural/JepaH.hs \
          neural/WeaveState.hs
 
+# SurfaceMachine.hs retired to deprecated/ 2026-08-14: EditMachine.hs
+# SUPERSEDES it (the two edge relations disagree in direction on five
+# pairs, and both sets of laws are exact-set laws, so no union can
+# satisfy both). SM1-SM5 are re-proved as EM6/EM3/EM7 plus the EM4/EM5
+# split. Running both was the schism: two green specs contradicting.
 UI = ui/CellMechanics.hs \
-     ui/SurfaceMachine.hs \
      ui/EditMachine.hs \
      ui/WidgetGrid.hs \
      ui/DetentDial.hs
@@ -86,6 +90,7 @@ OUTPUT = output/FrameGeometry.hs \
          output/TriScaleLadder.hs \
          output/RateLadder.hs \
          output/AdditiveLadder.hs \
+         output/CaptureTensor.hs \
          output/FeedCompression.hs
 
 # RealTesseract, GIFAnalysis, TemporalSpatialGIF need source frames or ByteString.
@@ -97,7 +102,9 @@ CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL)
 
 # ── Targets ──────────────────────────────────────────────
 
-.PHONY: test test-algebra test-quantization test-temporal test-spatial test-statistics test-output test-one list
+.PHONY: test test-verbose test-algebra test-quantization test-temporal \
+        test-spatial test-statistics test-output test-one list \
+        icon corpus corpus-descent corpus-jepa fixtures
 
 # TRUTHFUL harness: a file fails on nonzero exit OR any "✗" it prints.
 # (Most spec mains predate exitFailure; grepping their own failure marks
@@ -134,6 +141,11 @@ corpus-descent:
 # Emit the JEPA-H trajectory corpus → nn/jepa/corpus/
 corpus-jepa:
 	@$(RUNGHC) $(FLAGS) output/JepaCorpusEmit.hs
+
+# Emit the golden dyad fixtures the Python solver port is gated against.
+# (A generator, not a spec: it prints JSON, so it is not in CORE.)
+fixtures:
+	@$(RUNGHC) $(FLAGS) quantization/EmitDyadFixtures.hs > ../nn/phase/fixtures.json
 
 test-verbose:
 	@for f in $(CORE); do \

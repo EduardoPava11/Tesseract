@@ -566,7 +566,7 @@ final class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // ── CPU fallback (GPU unavailable) ──
+        // ── CPU path (PLATFORM: this device exposes no Metal) ──
         processFrameCPU(rgbBuffer: rgbBuffer, depthBuffer: depthBuffer, frameIdx: frameIdx, timestamp: now)
     }
 
@@ -768,7 +768,7 @@ final class CameraManager: NSObject, ObservableObject {
                 }
             }
         } else {
-            // Float32 fallback — same box prefilter, same validity rule
+            // The Float32 CASE: same box prefilter, same validity rule
             let ptr = base.assumingMemoryBound(to: Float.self)
             let stride = CVPixelBufferGetBytesPerRow(depthBuffer) / 4
             let sample: (Int, Int) -> Float? = { sx, sy in ptr[sy * stride + sx] }
@@ -928,7 +928,7 @@ final class CameraManager: NSObject, ObservableObject {
     ) -> CGImage? {
         // DYAD is the only look (2026-08-12 decree); the lattice
         // quick-quantize below survives solely as the warm-up
-        // fallback before the first solve exists.
+        // PRIOR: the defined state before the first solve exists.
         live.read(rgb: rgb, depths: depths)
         let dyadIndices: [UInt8]?
         if gpuTexturesReady, let metal, let st = live.metalState,

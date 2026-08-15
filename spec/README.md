@@ -5,7 +5,10 @@ mechanism gets a spec with named axioms BEFORE the port. Run:
 
     cd spec && make test            # the whole CORE suite
     make test-one F=temporal/DepthMixture.hs
-    make corpus                     # emit the SK gene corpus → nn/sk-gene/
+    make corpus                     # emit the SK gene corpus  -> nn/sk-gene/
+    make corpus-descent             # emit the descent corpus  -> nn/descent/
+    make corpus-jepa                # emit the JEPA-H corpus   -> nn/jepa/
+    make fixtures                   # emit the golden dyad fixtures for nn/phase
     make icon                       # render the app icon (~2m)
 
 The Makefile is the registry of record — a file not in its lists is
@@ -14,9 +17,13 @@ or should not exist. Layers (see Makefile for the full lists):
 
 - **algebra/** — the 4⁴ tesseract lattice, direct sums, distances.
 - **quantization/** — palettes and assignment: the DYAD-256 paired
-  palette (DyadPalette, the aerial mirror law DY1–DY15, ★R4 RULED
-  faithful-hue 2026-08-11), phase palette (PP1–PP16), bell/spectral
-  palettes, the perfect quantizer, resolution ladder.
+  palette (DyadPalette, the aerial mirror law DY1-DY16), the pair tree
+  (PairTree PT1-PT9, the analytic dyadic tree), phase palette (PP1-PP16),
+  bell/spectral palettes, the perfect quantizer, resolution ladder.
+  Note on R4: the 2026-08-11 faithful-hue ruling was SUPERSEDED the next
+  day by v7 (DY14). R4 only re-routed the search, so the displayed
+  entries stayed hue-negated and warm subjects still painted the
+  background blue-grey. groundLab now keeps the figure's own hue.
 - **temporal/** — depth signals and cadences: the constant-free role
   law (DepthMixture DM1–DM12) and the mixture local-level law
   (MixtureStability MS1–MS7, ruled 2026-08-11), binomial cadences,
@@ -26,11 +33,17 @@ or should not exist. Layers (see Makefile for the full lists):
   the tiling energy in bits (TilingEntropy TE1–TE10: E = N·log₂K −
   N·H₀, ground = every color exactly 16×), the Sethares dissonance
   kernel, Wasserstein palettes.
-- **neural/** — the weave state a capture-assist model may read
-  (WeaveState WS1–WS10), the ANE loop calculus (AL1–AL9), the SK gene arc
-  (SKGeneCalculus SK1–SK10, SKGeneSemantics AX1–AX8, OctaveCodec
-  CX1–CX7), the Mac-side debayer contract (BayerResidual).
-- **ui/** — cell-grid mechanics (lint-gated via scripts/lint-grid.sh).
+- **neural/** -- the weave state a capture-assist model may read
+  (WeaveState WS1-WS10), the ANE loop calculus (AL1-AL9), the SK gene arc
+  (SKGeneCalculus SK1-SK10, SKGeneSemantics AX1-AX8, OctaveCodec
+  CX1-CX7), the Mac-side debayer contract (BayerResidual), the JEPA-H
+  laws (JepaH JH1-JH6; the head is OFF at capture as of 2026-08-14) and
+  the descent ladder (DescentLadder DL1-DL7; DL6 conditional exactness
+  and DL7 lookahead dominance stay law even though nn/descent is closed
+  as a path).
+- **ui/** -- cell-grid mechanics, the EDIT machine (EditMachine EM1-EM13,
+  the surface state machine now that EDIT is the whole app), the widget
+  grid and the detent dial. Lint-gated via scripts/lint-grid.sh.
 - **harmony/** — set-list dissonance ordering.
 - **output/** — the GIF machine's export contracts, frame geometry,
   tri-scale ladder (TL1–TL12), the ADDITIVE LADDER (AdditiveLadder
@@ -47,3 +60,10 @@ from data or structure — DepthMixture is the pattern); gates print
 KataGo-era specs were removed (git history keeps them); the suite now
 contains only files with living Swift ports, Mac-lab contracts, or
 standing theory referenced by the docs.
+
+2026-08-14: SurfaceMachine.hs retired to deprecated/. EditMachine.hs
+supersedes it, and the two disagree in direction on five edges, so the
+CORE suite had been running two contradicting specs and reporting both
+green. A test runner cannot catch that; only this registry can. The rule
+above is the guard: if a spec has no living port, no Mac-lab contract
+and no standing theory, it does not belong in the lists.

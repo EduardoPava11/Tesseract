@@ -28,8 +28,9 @@ predicate, no naked constants: that camera is the ONLY front-position
 `.builtInUltraWideCamera` ever shipped on iPhone (WWDC26 session 341
 "Support the Center Stage front camera in your iOS app"). Both
 managers gate on it at WAKING; failure = `noCenterStageMessage` →
-SurfaceMachine `.refused(.noCenterStage)` "NO CENTER STAGE", a
-TERMINAL hardware refusal (SM4, spec + Swift + tests all carry it).
+EditMachine `.refused(.noCenterStage)` "NO CENTER STAGE", a
+TERMINAL hardware refusal (EM7, formerly SM4; spec + Swift + tests
+all carry it).
 Capture itself still runs on `.builtInTrueDepthCamera` — the 17
 line's Face ID system keeps delivering synchronized RGB+depth, so
 LIVE and FACE are unchanged on eligible devices.
@@ -57,11 +58,117 @@ Center Stage APIs (dynamicAspectRatio, AVCaptureSmartFramingMonitor,
 sensor mounted PORTRAIT unlike older front cameras) are available
 from iOS 26 if ever wanted.
 
+## ★ S8: THE RUNGS WRITE THE INDEX (Daniel's ruling, 2026-08-14)
+
+"All rungs require a meaningful additive to the creation of GIFs", and
+"read the incoming information in 16x16, 32x32 and 64x64 so that we can
+lift a coarse intuition into the final 64x64x64 voxel creation."
+
+`Tesseract/Tesseract/StrataDescent.swift` is the port of
+spec/output/AdditiveLadder.hs (AD1-AD12). The rungs now READ the
+incoming staged signal and each WRITES its own bits of every index:
+
+  bit 7    ROLE     figure/σ    depth, via the Bayer coverage (AD7)
+  bit 6    rung 16³ 4-level     committed once per 4×4×4 spacetime block
+  bits 5-3 rung 32³ 32-level    committed once per 2×2×2 block
+  bits 2-0 rung 64³ 256-level   the exact leaf, per voxel
+
+Commitments use LOOKAHEAD, not the nearest node mean. That is
+nn/descent's finding spent: greedy measured 0.8601 leaf agreement at 8×
+the excess distortion, lookahead-L2 measured 0.9652 (DL7 dominance),
+and DL6 says the level below a good commitment is exact.
+
+The tree was already this shape, which is why this is a port and not a
+design: PairTree's 7 generations with first generation = MSB, PT5's
+prefix law, DL1's fan-outs [2, 8, 8], and `nodes16` IS the depth-4
+layer. 2 × 8 × 8 = 128.
+
+FASTER, not a cost paid for structure: the fine search is 8 candidates
+instead of 128, so whole-cube distance evaluations drop from about
+33.5M to about 4.5M.
+
+GATE: `StrataDescentTests` measures conformance with AdditiveCensus
+(the spec's own meter) at 1.0 on every stratum, against ~0 at rungs 16
+and 32 for the free search it replaces.
+
+★ OWED, three items, all named in the code that owes them:
+1. **The live surface still runs the old free search**
+   (DyadPipeline.swift, in `Live.assign`). The app therefore holds TWO
+   assignment laws right now, which contradicts EM13. The close fits
+   the existing cadence: commit the half and node at the 5 Hz coarse
+   solve, carry them on FrameSolve, run only stage C per frame at
+   20 Hz. Quantize.metal's aerialPreview needs the same two buffers.
+2. **DyadANE's fused graph implements the superseded free argmin**, so
+   it is no longer this law's twin and the export does not consult it.
+   Rebuilding it for the descent is nn/dyad-assign work.
+3. **Conformance is 1.0 only on ROLE-PURE blocks.** AD3 notes the role
+   bit was "lifted out of its pair", so the additive law wants σ to set
+   bit 7 and SHARE the colour bits, while the shipped involution sets
+   σ = 255 − j and complements all eight (DY2/PT6, locked by
+   DyadGIFContractTests). A mixed block therefore carries bit 6 in both
+   polarities. Reaching exactly 1.0 means relabelling the σ half from
+   T[255−j] to T[128+j]. That is a palette PERMUTATION, free in LZW and
+   visually identical, but it changes a decreed byte contract and needs
+   Daniel's ruling. NOT taken unilaterally.
+
+## ★ NO STUBS, NO FALLBACKS (Daniel's decree, 2026-08-14)
+
+"I HATE stubs and I HATE fallbacks. Stubs are unfinished work and
+fallbacks are technical debt made useful."
+
+This is an identity decree, not a style note. It is the general form of
+a rule this app already lives by in one place: a capture that cannot run
+DYAD **exports nothing**, surfaced as `encodeFailedMessage`, never a
+silent global-table downgrade. Generalize that everywhere.
+
+**A stub is unfinished work wearing a finished face.** No TODO, no
+FIXME, no placeholder return, no function that answers plausibly while
+doing nothing. If a thing is not built, the app SAYS so. `Reweave` is
+the pattern to copy: an unimplemented edit returns a REFUSAL with a
+reason, because a dial that silently does nothing is worse than a dial
+that says "not yet". A refusal is finished work. A stub is not.
+
+**A fallback is two answers to one question, and the app picking one
+behind your back.** The failure is not the second path. The failure is
+the SILENCE: a fallback converts a bug into a permanent, invisible
+performance or quality loss, and nothing ever fails, so nothing ever
+gets fixed. Three things are NOT fallbacks and keep their place:
+
+1. **A twin.** One law, two engines, and a parity test proving they
+   agree. `DyadANE` and the CPU search are twins, gated by
+   `DyadANEParityTests`. Call it a twin. A twin without a live parity
+   gate is just a fallback that has not been caught yet.
+2. **A branch of the law.** When the law itself has cases, both cases
+   are the law. The single-phase BIC path is not a degraded two-phase
+   path, it is what the mixture verdict MEANS (PP8's two-path law).
+   Name it a prior, a case, a verdict. Never a fallback.
+3. **A refusal.** Terminal, visible, with a reason, and no silent
+   substitute behind it.
+
+**Anything else is debt.** In particular: a `guard ... else { return
+nil }` that lumps "this hardware lacks the engine" together with "the
+caller passed me the wrong shape" is a bug-hider. Split it. Platform
+absence is a fact about the device. A malformed argument is a defect,
+and defects must trap in DEBUG rather than route quietly to a slower
+path forever.
+
+**A telemetry-only rung is a stub too.** Computing the 16³ and 32³
+towers on every capture and then throwing them away is unfinished work,
+which is exactly what AD10 says: ★ NO RUNG IS SILENT. That stub is now
+closed on the export path; see ★S8 below.
+
+ENFORCED AT BUILD TIME by `scripts/lint-grid.sh`: LINT-NO-STUB bans the
+stub markers outright, and LINT-NO-FALLBACK bans the WORD in app source.
+If a path is lawful, name it for what it is (twin, prior, verdict,
+platform path, refusal). If you genuinely need the word, the escape
+hatch is an explicit `// LINT-ALLOW-FALLBACK: <reason>` on the line,
+which makes every instance a decision someone signed.
+
 ## Architecture
 
 ★ THE ATLAS (2026-08-13): `docs/ATLAS.md` is the full stage map — all 101
 canonical stages on a MOVEMENT × CATEGORY coordinate (movement = which
-SurfaceMachine word is being spoken when the stage runs; category = SENSE /
+EditMachine word is being spoken when the stage runs; category = SENSE /
 SIGNAL / SOLVE / LEARN / WEAVE / SURFACE / METER / LAW). `docs/ATLAS-TUNABLES.md`
 catalogues all 447 frozen choices with anchors. Read the atlas before adding a
 stage, and give the new stage a name and a coordinate in it. §7 holds the
@@ -161,7 +268,7 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   (Tesseract/ML/DyadAssign.mlpackage, authored in nn/dyad-assign/,
   exact CPU fallback; placement laws XP1/XP2).
 - The 16/32/64 ladder (spec/output/TriScaleLadder.hs →
-  Tesseract/TriScaleLadder.swift, 2026-08-10): SixFour's color-head
+  Tesseract/Tesseract/TriScaleLadder.swift, 2026-08-10): SixFour's color-head
   tri-scale pyramid ported to the export cube. Exact u64 lattice-level
   sums pooled over 2×2×2 spacetime blocks (64³→32³→16³); time law
   side × delay = 320 cs. MEASUREMENT ONLY — published as rungTelemetry
@@ -199,7 +306,10 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
   both managers. ★URGENCY IS A WEIGHT (the color-weight slot, no
   directional sign). Telemetry-only; felt channel decided after the
   device movement pass.
-- `isp-spec/` — DEPRECATED rear-camera cabal ISP spec, read-only reference.
+- `isp-spec/` moved to the `archive/isp-spec` branch (2026-08-14) and is
+  gone from main. It was the deprecated rear-camera cabal ISP spec with no
+  living Swift port here. Rear work now lives entirely on archive branches:
+  `archive/isp-spec`, `archive/rear-rgbt`, `archive/dng-mode-v2`.
 - `nn/` — Mac-side lab: MLX-trained 5,616-param residual debayer
   (`nn/debayer/`, +3.72 dB over bilinear) and its Metal parity harness
   (`nn/metal-harness/run.sh`, verified 3e-7 on M3 Max). Runs on Mac only.
@@ -305,14 +415,28 @@ caught the split-cadence defect (figure half held per slot, churn
 is per-dim + scale-free ⇒ extra dims need no retraining; off-
 diagonals recombine r_ij·√(c_ii·c_jj) (PSD by construction); bg
 gaps carry-fill around the torus; WHOLE tables hold at the 5 Hz
-cadence the preview already fits at. Flag CameraConfig.jepaH
-DEFAULT ON (one-line revert);
+cadence the preview already fits at.
 "DYAD JEPAH v7" trace line = the attribution; trace rebuild stays
 byte-exact (the smoothed numbers ARE the generating state).
-PROMOTION still owed: real-capture RATE LEDGER + HARMONY
-before/after + Daniel's device pass. nn/descent is RETIRED to
-lessons (DL6/DL7 stay law; lookahead-L2 belongs inside DyadAssign
-if ever shipped).
+
+★ FLAG CameraConfig.jepaH IS **OFF** (flipped 2026-08-14, Daniel's
+ruling, twice over. The reasons are written in full at
+CameraManager.swift:145-162, which is the authority):
+(1) "follow the scene, match the true motion". New gate B5 measures
+the head against TRUTH rather than a baseline: churn 7.921 vs a true
+9.592, i.e. it holds the palette 17.4% STEADIER than the scene is,
+and sits 2.67× further from truth than the oracle-EMA it replaced.
+Every previously-shipped gate passed because every one compared the
+model to a BASELINE and none to truth.
+(2) "the model should not dictate HOW we capture". Smoothing the
+ring before the tables solve is the model deciding bytes at capture
+time. That placement is retired; the model's home is the EDIT path
+(docs/model-placement.md). Re-enable only after a truth-referenced
+retrain AND a placement that reads the state without writing it.
+
+nn/descent is RETIRED (lab deleted 2026-08-14; git history keeps it).
+DL6/DL7 stay law in spec/neural/DescentLadder.hs; lookahead-L2 belongs
+inside DyadAssign if it ever ships, never as a separate artifact.
 
 ★DESCENT LADDER (Daniel's alignment rulings 2026-08-12, after the
 adversarial review docs/jepa-h-adversarial-review-2026-08-12.md
@@ -365,24 +489,35 @@ routes assignment. ANE DyadAssign untouched. Device pass owed.
 
 ## UI (SIMPLICITY DECREE, 2026-08-09)
 
-★ THE SURFACE MACHINE (Daniel's ruling, 2026-08-12: "the app should
-be made of a strict grid; squares make words; the grid is a state
-machine that surfaces what the app is doing — including after
-capture"): spec/ui/SurfaceMachine.hs SM1–SM5 green (suite 44) →
-Tesseract/UI/SurfaceMachine.swift. Six states, one square-word each:
-WAKING → WATCHING → WEAVING → SOLVING → SEALED (+ REFUSED with the
-ruled two-register headlines). Laws: SM2 the capture arc admits no
-skips (after the shutter the grid MUST surface the solve — SOLVING
-shows the palette being born); SM3 exactly {WEAVING, SOLVING} refuse
-interruption (ContentView.modeSwitchAllowed now reads the machine);
-SM4 terminals = the hardware refusals only, everything else reaches
-WATCHING; SM5 one scene per state. ContentView error headlines,
-IdleStateView (WAKING), RecordingStateView (WEAVING + time), and
-ProcessingStateView (SOLVING) all speak the machine's words.
-SurfaceMachineTests adds the strict-grid teeth: every spoken word is
-rasterized by CellText at its real register and must FIT its
-GridRegion — exact ink, no estimates. One machine serves LIVE and
-FACE (FaceCaptureState maps case for case).
+★ THE EDIT MACHINE (Daniel's ruling 2026-08-12 "the app should be
+made of a strict grid; squares make words; the grid is a state
+machine that surfaces what the app is doing", SUPERSEDED and widened
+by the 2026-08-13 decree "EDIT is the whole app"):
+spec/ui/EditMachine.hs EM1–EM13 → Tesseract/UI/EditMachine.swift,
+gated by EditMachineTests. Capture is an input step, the shelf is
+home, one moment yields many GIFs, the full 64³ re-solves EVERY TICK.
+One machine serves LIVE and FACE (FaceCaptureState maps case for
+case); ContentView error headlines, IdleStateView (WAKING),
+RecordingStateView (WEAVING + time) and ProcessingStateView (SOLVING)
+speak its words; every spoken word is rasterized by CellText at its
+real register and must FIT its GridRegion: exact ink, no estimates.
+
+★ THE SURFACE MACHINE IS RETIRED (spec + Swift + tests all deleted;
+git history keeps them). This was a REPLACEMENT, not a widening, and
+the reason is forced rather than preferred: the two edge relations
+DISAGREE IN DIRECTION on five pairs (waking→watching, solving→sealed,
+sealed→watching, exportFailed→watching, unknown→waking) and
+EditMachine's laws are EXACT-SET laws, so no union of the two can
+satisfy both specs. One word also collides (Refused Unknown speaks
+"REFUSED" here, spoke "ERROR" there; EM6 requires distinctness).
+SM1 to SM5 are NOT discarded. They are re-proved over the larger
+machine: SM1 = EM6, SM2 = EM3, SM4 = EM7, SM5 = the one-scene-per-
+state switch in ContentView, and SM3 SPLITS into EM4 (a solve that is
+a CAPTURE must complete, the promise that the moment was kept) and
+EM5 (a solve that is a TICK must be ABANDONABLE, the promise that
+the dial answers). The full derivation lives in the headers of
+spec/ui/EditMachine.hs and Tesseract/UI/EditMachine.swift; do not
+reintroduce a second surface machine.
 
 Launch = loading screen until the first preview frame, then ONE
 surface: preview + record + SET. All choices live in the settings

@@ -63,7 +63,8 @@ struct GIFEncoder {
         ])
 
         // ── 3. Global Color Table (256 × 3 = 768 bytes) ──
-        //   Frame 0's DYAD table — the naive-decoder fallback. Every
+        //   Frame 0's DYAD table, which GIF89a REQUIRES as the global
+        //   table for naive decoders (format law, not a second path). Every
         //   frame carries its own LCT below; this is never the only
         //   table in the stream.
         data.append(perFrameTables[0])

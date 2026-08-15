@@ -125,7 +125,7 @@ enum ANELoop {
 
     /// All 4096 blocks in one dispatch. Inputs are block-major
     /// [B, 64, 3] / [B, C, 3] Float32; returns the swept colors, or
-    /// nil (callers fall back to the exact CPU twin).
+    /// nil (callers run the exact CPU twin instead).
     static func sweepANE(
         q0: [Float], y: [Float], cand: [Float], blockCount: Int
     ) -> [Float]? {
@@ -180,7 +180,7 @@ enum ANELoop {
 
     /// The exchange loop on the GPU: candidate INDICES in and out
     /// (no nearest-color recovery step), K picked at call time.
-    /// Returns nil when Metal is unavailable (callers fall back).
+    /// Returns nil when Metal is unavailable (callers run the twin).
     static func sweepSIMT(
         q0: [UInt8], y: [Float], cand: [Float],
         blockCount: Int, sweeps: Int
@@ -228,7 +228,7 @@ enum ANELoop {
     /// - pulls: coverage t per pixel (far ⇔ t ≥ ceil)
     /// - tables: per-frame 768-byte LCTs (colors resolve here)
     /// Face and band pixels are byte-untouched; refined indices stay
-    /// in the σ half. Deterministic; ANE with exact CPU fallback.
+    /// in the σ half. Deterministic; ANE with an exact CPU twin.
     static func refineFarBlocks(
         indexFrames: [[UInt8]],
         labs: [[OKLabColor]],
