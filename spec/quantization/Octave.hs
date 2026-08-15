@@ -50,6 +50,17 @@
 --
 -- ── THE SAFETY PROPERTY (OV5) ───────────────────────────────────
 --
+-- ★ SCOPE, added 2026-08-14 under Daniel's SPLIT ruling. OV5 is
+-- asserted of THE READS (computed here by kappa from live data) and
+-- of the composed codec (OctaveCodec CX1-CX3). It is NOT asserted of
+-- the STORED tensor, whose bytes use one free sign bit per child and
+-- therefore do not retract exactly. Daniel ruled that on measured
+-- evidence: free signs are about a third sharper (4.2 output levels
+-- of error against 6.1). The two are different objects and both
+-- statements are true; spec/output/CaptureTensor.hs CT1 states the
+-- split and CT11 bounds what it costs. Do not read OV5 as a promise
+-- about a cube rebuilt from the retained tensor.
+--
 -- κ conserves the mean exactly (OV4), so ALL THREE READS SHARE THE
 -- SAME MEAN. Therefore any normalised mixture of them has that
 -- mean too — for every setting of the three dials. Exposure, white

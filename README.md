@@ -109,10 +109,13 @@ The ground half is generated as the sigma mirror, keeping the figure's
 own hue (the hue negation was killed in v7: it painted warm subjects
 against a blue-grey background).
 
-Assignment runs on the ANE as a fused exact-arithmetic graph with zero
-learned parameters (`DyadAssign.mlpackage`, authored in
-`nn/dyad-assign/`), with an exact CPU path as both fallback and parity
-reference.
+Assignment is the ADDITIVE LADDER (`StrataDescent.swift`, S8): rung 16
+commits one bit per 4x4x4 spacetime block, rung 32 commits three bits
+per 2x2x2 block, and rung 64 picks the exact leaf among that node's
+eight. The fine search is 8 candidates instead of 128. The ANE's fused
+graph implements the superseded free argmin over all 128 leaves, so it
+is no longer this law's twin and the export does not consult it;
+rebuilding it for the descent is owed Mac-lab work.
 
 ## The ladder
 
@@ -131,15 +134,27 @@ CLAUDE.md              standing decrees; the authority on disagreement
 Tesseract/
   App/                 TesseractApp, ContentView
   Camera/              CameraManager (TrueDepth RGB+D sync), CameraConfig flags,
-                       FaceCaptureManager (ARKit), FaceMeshSignal, DepthSignal
+                       FaceCaptureManager (ARKit), FrameBuffer, CapturedFrame
+  Signal/              the three parallel reads and what feeds them:
+                       OctaveRead, FeedFormat, TriScaleLadder,
+                       DepthSignal, FaceMeshSignal
+  Solve/               palette and assignment: DyadPipeline, DyadPalette,
+                       PairTree, StrataDescent, DyadANE, PerfectQuantizer,
+                       TesseractPalette, BinomialCadence
+  Learn/               the model line: JepaHHead, JepaHWeights,
+                       SKGene, SKGeneWeights, ANELoop
+  Weave/               the artifact: GIFEncoder (raw-index GIF89a + LZW),
+                       GIFSaver, GIFMachine, GIFLibrary
+  Edit/                what re-editing needs: CubeStore (retention),
+                       Reweave, DepthMixture (the role fit, moved here
+                       because the analysis belongs to the edit phase)
+  Meter/               measurement only, no byte depends on these:
+                       AdditiveCensus, PhaseTelemetry, DyadEnergy,
+                       DyadHarmony, Dissonance, BirkhoffMeasure, PhaseTiling
   Model/               TesseractCoord (index <-> (d,a,b,c)), Axes, GoBoard
-  Tesseract/           the engine: DyadPipeline, DyadPalette, DyadANE, PairTree,
-                       GIFMachine, TriScaleLadder, Dissonance, SKGene, ANELoop,
-                       JepaHHead, PhaseTiling, CubeStore, GIFLibrary
   Metal/               Quantize.metal (downsample + aerialPreview),
                        ANELoop.metal (SIMT exchange loop), MetalPipeline
   ML/                  bundled mlpackages (DyadAssign, ANELoop, SKGene)
-  GIF/                 GIFEncoder (raw-index GIF89a + LZW), GIFSaver
   UI/                  Lattice, Cells, Widgets, EditMachine
   Views/               state scenes, LibraryView, GIFPlayerView
 TesseractTests/        357 tests mirroring the Haskell axioms

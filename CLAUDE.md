@@ -58,6 +58,30 @@ Center Stage APIs (dynamicAspectRatio, AVCaptureSmartFramingMonitor,
 sensor mounted PORTRAIT unlike older front cameras) are available
 from iOS 26 if ever wanted.
 
+## ★ DIRECTORY: the engine is organised by what a file DOES (P5, 2026-08-14)
+
+`Tesseract/Tesseract/` held 28 files and 7,700 lines with no organising
+idea. It is gone. The engine now sits in directories named for the ATLAS
+categories, so a file's job is its address:
+
+  Signal/  the three parallel reads and what feeds them (OctaveRead,
+           FeedFormat, TriScaleLadder, DepthSignal, FaceMeshSignal)
+  Solve/   palette and assignment (DyadPipeline, DyadPalette, PairTree,
+           StrataDescent, DyadANE, PerfectQuantizer, TesseractPalette,
+           BinomialCadence)
+  Learn/   the one model line (JepaHHead, SKGene, ANELoop, + weights)
+  Weave/   the artifact (GIFEncoder, GIFSaver, GIFMachine, GIFLibrary)
+  Edit/    what re-editing needs (CubeStore, Reweave, DepthMixture)
+  Meter/   measurement only, no byte depends on these (AdditiveCensus,
+           PhaseTelemetry, DyadEnergy, DyadHarmony, Dissonance,
+           BirkhoffMeasure, PhaseTiling)
+
+App/, UI/ and Views/ did NOT move: scripts/lint-grid.sh names them and
+the grid constitution is stated in terms of those paths. project.yml
+globs the whole tree, so the moves cost no build change. DepthMixture
+sits in Edit/ on purpose, per the ruling that the depth analysis belongs
+to the edit phase and not to capture.
+
 ## ★ THE CAPTURE TENSOR (Daniel's specification, 2026-08-14)
 
 "16x16 is a unit. we take a measurement every 5fps. to make
@@ -65,8 +89,35 @@ from iOS 26 if ever wanted.
 capture should be a proprietary tensor, the shape is the form, the
 function is the app's sole purpose."
 
-Spec `spec/output/CaptureTensor.hs`, CT1 to CT15, in the CORE suite.
-THE RUNGS ARE PARALLEL VIEWS, NOT A NEST (CT9). Daniel rejected the
+Spec `spec/output/CaptureTensor.hs`, CT1 to CT11, in the CORE suite.
+
+★ ITS SCOPE IS NARROW, AND THAT IS THE POINT. The file owns ONLY the
+retained bytes and the arithmetic that decodes them. Three specs already
+own the ladder and it cites them rather than re-deriving them:
+Octave.hs (OV1-OV13) owns THE THREE PARALLEL READS, FeedCompression.hs
+(FC1-FC10) owns THE WIRE FORMAT including the 73/64 pyramid tax, and
+OctaveCodec.hs (CX1-CX7) owns THE CODEC. An earlier draft restated all
+of that as its own axioms, which is the schism this project retires
+specs for.
+
+★ THE SPLIT (Daniel's ruling, 2026-08-14). Free signs contradict OV5,
+CX1, CX2 and CX3, all green. Rather than pick a winner Daniel split the
+objects, because they ARE two objects:
+  the reads and the codec   mean invariance EXACT, for any g. The
+                            octave dials stay provably safe: no setting
+                            moves exposure, white point or cast.
+  the stored tensor         one FREE sign bit per child, ruled on
+                            measured evidence (about a third sharper,
+                            4.2 output levels against 6.1). It never
+                            claims CX1.
+  the declared price        a GIF made live and the same GIF remade
+                            from the tensor differ, bounded by g (CT11).
+Octave.hs carries a scope note at OV5 so the split is visible from
+both sides. The wired codec costs ZERO sign bits (a child derives its
+signs from its position) but expresses only separable variation; the
+stored form pays one bit per child to express what the wiring cannot.
+Neither dominates, which is why this is a ruling and not a dodge.
+THE RUNGS ARE PARALLEL VIEWS, NOT A NEST (Octave.hs OV13). Daniel rejected the
 nested descent explicitly: "16x16 rung check, 32x32 rung check, but
 64x64 is using those two?! NO!"
 
@@ -76,21 +127,21 @@ nested descent explicitly: "16x16 rung check, 32x32 rung check, but
 
 One coarse tick is 256 cells, which IS the palette: 256 centroids.
 Cells stand 1 : 8 : 64, so EQUIVALENT FLOAT RESOLUTION IS FORCED at
-64 : 8 : 1 and every rung carries the same 262144 bits (CT3). Side and
-rate halve together (CT10).
+64 : 8 : 1 and every rung carries the same 262144 bits (CT2). Side and
+rate halve together (FeedCompression.hs FC1, FC2).
 
 THE OCTAVE FORM: fine rungs are ONE SIGN BIT per child,
 child = parent + sign*g. Measured: one bit beat FOUR flat bits (0.01655
 against 0.02043) at a quarter of the cost. Signs are FREE, not balanced,
 ruled on measured evidence (about a third sharper). The price is that
 the detail dial also slides the colour, linearly, up to 3.36 output
-levels at maximum dial. CT6 bounds it exactly rather than leaving it to
+levels at maximum dial. CT5 bounds it exactly rather than leaving it to
 be discovered.
 
 ★ ZEROTREES (ruled 2026-08-14 after the literature pass; EZW 1993 /
 SPIHT 1996 solved this and the app was not using it). A parent emits
 ONE significance bit; quiet parents stop there and their children
-decode as the parent exactly (g = 0, CT13, so no second reconstruction
+decode as the parent exactly (g = 0, CT9, so no second reconstruction
 path). A zerotree ROOT at rung 16 terminates 8 + 64 descendants with
 that single symbol. MEASURED, 95.3% of subtrees are quiet:
 
@@ -98,18 +149,19 @@ that single symbol. MEASURED, 95.3% of subtrees are quiet:
   significance, one level        45064 b   rmse 0.01793   -82.81%
   full zerotree, 16 kills 32+64   30232 b   rmse 0.02409   -89.75%
 
-The significance THRESHOLD IS DERIVED, never chosen (CT11): the
+The significance THRESHOLD IS DERIVED, never chosen (CT7): the
 crossover of a two-phase mixture on the capture's own subtree
 deviations, the same mechanism ruled for the rung-64 override. A
 single-phase capture has no quiet phase and pays flat.
 
-★ g READS THE PARENT AND THE PREVIOUS TICK (CT14). This is DHVC 2.0's
+★ g READS THE PARENT AND THE PREVIOUS TICK (CT10). This is DHVC 2.0's
 conditioning (lower-scale spatial reference plus same-scale temporal
 reference), and the 5/10/20 fps rungs already provide the temporal half.
 g stays a PARAMETER: every law holds for any g, so training cannot
 reopen one. Trained in nn/jepa under a straight-through estimator.
 
-★ THE REDUNDANCY IS KEPT, DECLARED AND BOUGHT (CT15). The stack holds
+★ THE REDUNDANCY IS KEPT, DECLARED AND BOUGHT (FeedCompression.hs FC4,
+which states the pyramid tax as exactly 73/64). The stack holds
 8/7 of the fine rung's cells. A critically sampled wavelet would carry
 the same information with none, and that is exactly why the app cannot
 use one: in this pyramid each level downsamples only the low-pass
@@ -118,7 +170,7 @@ channel, so THE COARSE LEVEL IS A PICTURE. That is the only reason
 and cannot be a palette at all. Daniel: "redundancy is good for
 engineering."
 
-DEPTH IS NEVER QUANTISED (CT7). It decides figure from ground and sets
+DEPTH IS NEVER QUANTISED (CT6). It decides figure from ground and sets
 the cadence. Consequence, stated because it is large: depth at full
 precision on all three rungs is 1168 KiB against colour's 288 KiB, so
 depth is 80% of the tensor and the whole thing is 1456 KiB against
