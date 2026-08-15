@@ -327,6 +327,185 @@ final class TensorShapeHarness: XCTestCase {
         return drift / Double(parents) * 255.0     // in 8-bit levels
     }
 
+    // MARK: - Zerotrees (EZW/SPIHT applied to the octave form)
+
+    /// The per-parent deviation field: how much a subtree actually
+    /// departs from its parent. This is what significance is decided on.
+    private func deviations(fine: [[Double]], fineSide: Int,
+                            coarse: [[Double]], coarseSide: Int) -> [Double] {
+        var out: [Double] = []
+        for ct in 0..<coarse.count {
+            for cy in 0..<coarseSide {
+                for cx in 0..<coarseSide {
+                    let parent = coarse[ct][cy * coarseSide + cx]
+                    var dev = 0.0
+                    for dt in 0..<2 {
+                        for dy in 0..<2 {
+                            for dx in 0..<2 {
+                                let f = ct * 2 + dt
+                                let p = (cy * 2 + dy) * fineSide + cx * 2 + dx
+                                dev += abs(fine[f][p] - parent)
+                            }
+                        }
+                    }
+                    out.append(dev / 8.0)
+                }
+            }
+        }
+        return out
+    }
+
+    /// ONE LEVEL of significance coding: 1 bit per parent saying
+    /// "my children differ from me". Insignificant parents spend
+    /// nothing more and their children decode as the parent exactly.
+    /// The threshold is DERIVED, never chosen: the capture's own
+    /// deviations split into two phases and the crossover is the line,
+    /// the same mechanism already ruled for the rung-64 override.
+    private func significanceCost(fine: [[Double]], fineSide: Int,
+                                  coarse: [[Double]], coarseSide: Int)
+        -> (bits: Int, rmse: Double, quietFraction: Double, cross: Double) {
+        let devs = deviations(fine: fine, fineSide: fineSide,
+                              coarse: coarse, coarseSide: coarseSide)
+        let fit = DepthMixture.fit(devs)
+        let cross = fit.isDegenerate ? -1 : fit.crossover
+        var bits = 0, quiet = 0, parents = 0
+        var se = 0.0, n = 0
+        var k = 0
+        for ct in 0..<coarse.count {
+            for cy in 0..<coarseSide {
+                for cx in 0..<coarseSide {
+                    let parent = coarse[ct][cy * coarseSide + cx]
+                    let loud = cross < 0 ? true : devs[k] > cross
+                    k += 1
+                    parents += 1
+                    bits += 1                       // the significance bit
+                    var kids: [(Int, Int, Double)] = []
+                    for dt in 0..<2 {
+                        for dy in 0..<2 {
+                            for dx in 0..<2 {
+                                let f = ct * 2 + dt
+                                let p = (cy * 2 + dy) * fineSide + cx * 2 + dx
+                                kids.append((f, p, fine[f][p]))
+                            }
+                        }
+                    }
+                    if loud {
+                        bits += 8                   // one sign bit per child
+                        var dev = 0.0
+                        for (_, _, v) in kids { dev += abs(v - parent) }
+                        let g = dev / 8.0
+                        for (_, _, v) in kids {
+                            let rebuilt = parent + (v >= parent ? g : -g)
+                            se += (v - rebuilt) * (v - rebuilt); n += 1
+                        }
+                    } else {
+                        quiet += 1
+                        for (_, _, v) in kids {
+                            se += (v - parent) * (v - parent); n += 1
+                        }
+                    }
+                }
+            }
+        }
+        return (bits, (se / Double(n)).squareRoot(),
+                Double(quiet) / Double(parents), cross)
+    }
+
+    /// THE ZEROTREE PROPER: a quiet parent at the COARSE rung kills
+    /// its whole subtree at every finer rung with a single symbol.
+    /// This is EZW's actual win, and it only exists because the rungs
+    /// are a tree. Returns bits for BOTH levels together.
+    private func zerotreeCost(fine: [[Double]], fineSide: Int,
+                              mid: [[Double]], midSide: Int,
+                              coarse: [[Double]], coarseSide: Int)
+        -> (bits: Int, rmse: Double, rootFraction: Double) {
+        // Significance at the coarse level is decided on the deviation
+        // of the WHOLE subtree beneath it, not just its own children.
+        var subtreeDev: [Double] = []
+        for ct in 0..<coarse.count {
+            for cy in 0..<coarseSide {
+                for cx in 0..<coarseSide {
+                    let parent = coarse[ct][cy * coarseSide + cx]
+                    var dev = 0.0
+                    var count = 0
+                    for dt in 0..<4 {
+                        for dy in 0..<4 {
+                            for dx in 0..<4 {
+                                let f = ct * 4 + dt
+                                let p = (cy * 4 + dy) * fineSide + cx * 4 + dx
+                                dev += abs(fine[f][p] - parent)
+                                count += 1
+                            }
+                        }
+                    }
+                    subtreeDev.append(dev / Double(count))
+                }
+            }
+        }
+        let fit = DepthMixture.fit(subtreeDev)
+        let cross = fit.isDegenerate ? -1 : fit.crossover
+
+        var bits = 0, roots = 0, parents = 0
+        var se = 0.0, n = 0
+        var k = 0
+        for ct in 0..<coarse.count {
+            for cy in 0..<coarseSide {
+                for cx in 0..<coarseSide {
+                    let parent = coarse[ct][cy * coarseSide + cx]
+                    let quiet = cross < 0 ? false : subtreeDev[k] <= cross
+                    k += 1
+                    parents += 1
+                    bits += 1                  // the zerotree-root symbol
+                    if quiet {
+                        roots += 1
+                        // ONE symbol covered 8 mid children + 64 fine.
+                        for dt in 0..<4 {
+                            for dy in 0..<4 {
+                                for dx in 0..<4 {
+                                    let f = ct * 4 + dt
+                                    let p = (cy * 4 + dy) * fineSide + cx * 4 + dx
+                                    let d = fine[f][p] - parent
+                                    se += d * d; n += 1
+                                }
+                            }
+                        }
+                    } else {
+                        // Pay the full ladder beneath this root.
+                        bits += 8 + 64
+                        for dt in 0..<4 {
+                            for dy in 0..<4 {
+                                for dx in 0..<4 {
+                                    let f = ct * 4 + dt
+                                    let p = (cy * 4 + dy) * fineSide + cx * 4 + dx
+                                    let mf = f / 2
+                                    let mp = ((cy * 4 + dy) / 2) * midSide + (cx * 4 + dx) / 2
+                                    let mparent = mid[mf][mp]
+                                    let v = fine[f][p]
+                                    var dev = 0.0
+                                    for qt in 0..<2 {
+                                        for qy in 0..<2 {
+                                            for qx in 0..<2 {
+                                                let ff = (mf * 2) + qt
+                                                let pp = (((mp / midSide) * 2 + qy) * fineSide)
+                                                       + ((mp % midSide) * 2 + qx)
+                                                dev += abs(fine[ff][pp] - mparent)
+                                            }
+                                        }
+                                    }
+                                    let g = dev / 8.0
+                                    let rebuilt = mparent + (v >= mparent ? g : -g)
+                                    se += (v - rebuilt) * (v - rebuilt); n += 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return (bits, (se / Double(n)).squareRoot(),
+                Double(roots) / Double(parents))
+    }
+
     // MARK: - The report
 
     func testMeasureTheTensorShape() {
@@ -455,6 +634,39 @@ final class TensorShapeHarness: XCTestCase {
         print("")
         print("  the palette IS the 16x16 layer, so colour that moves")
         print("  here is the palette no longer describing the picture.")
+        print("")
+
+        // ── Zerotrees: what the flat bit is wasting ─────────────────
+        let sig64 = significanceCost(fine: cap.r, fineSide: fineSide,
+                                     coarse: r32, coarseSide: s32)
+        let sigD = significanceCost(fine: cap.d, fineSide: fineSide,
+                                    coarse: d32, coarseSide: s32)
+        let zt = zerotreeCost(fine: cap.r, fineSide: fineSide,
+                              mid: r32, midSide: s32,
+                              coarse: r16, coarseSide: s16)
+        let flat64 = cells64
+        let flatLadder = cells32 + cells64
+        print("───────────────────────────────────────────────────────────────")
+        print(" ZEROTREES: the flat bit pays full price for empty subtrees")
+        print("───────────────────────────────────────────────────────────────")
+        print(String(format: "  flat, one bit per child      %8d bits   rmse %.5f",
+                     flat64, o64.rmse))
+        print(String(format: "  significance coded (1 level) %8d bits   rmse %.5f   quiet %.1f%%",
+                     sig64.bits, sig64.rmse, sig64.quietFraction * 100))
+        print(String(format: "  saving                       %8.2f%%",
+                     (1 - Double(sig64.bits) / Double(flat64)) * 100))
+        print(String(format: "  derived threshold            %.6f", sig64.cross))
+        print("")
+        print(String(format: "  depth, flat                  %8d bits", flat64))
+        print(String(format: "  depth, significance coded    %8d bits   quiet %.1f%%",
+                     sigD.bits, sigD.quietFraction * 100))
+        print("")
+        print(String(format: "  FULL ZEROTREE (16 kills 32 and 64 together)"))
+        print(String(format: "  flat, both fine rungs        %8d bits", flatLadder))
+        print(String(format: "  zerotree                     %8d bits   rmse %.5f   roots %.1f%%",
+                     zt.bits, zt.rmse, zt.rootFraction * 100))
+        print(String(format: "  saving                       %8.2f%%",
+                     (1 - Double(zt.bits) / Double(flatLadder)) * 100))
         print("")
 
         // ── The whole tensor against what is stored today ───────────

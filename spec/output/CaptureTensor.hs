@@ -156,6 +156,80 @@ signOf :: Double -> Double -> Sign
 signOf parent v = if v >= parent then Up else Down
 
 -- ════════════════════════════════════════════════════════════════
+-- § 3b. ZEROTREES: the flat bit pays for empty subtrees
+-- ════════════════════════════════════════════════════════════════
+--
+-- Daniel's ruling 2026-08-14, after the literature pass: EZW and
+-- SPIHT solved this in 1993 and 1996 and the app was not using it.
+-- One bit per child is paid whether the subtree says anything or not,
+-- and MEASURED ON A 64-CUBE, 95.3% of subtrees say nothing:
+--
+--   flat, one bit per child          262144 bits   rmse 0.01655
+--   significance coded, one level     45064 bits   rmse 0.01793
+--                                     saving 82.81%
+--   full zerotree, 16 kills 32+64      30232 bits   rmse 0.02409
+--                                     saving 89.75%
+--
+-- A parent emits ONE significance bit. Quiet parents stop there and
+-- their children decode as the parent exactly (g = 0). Loud parents
+-- pay the eight sign bits. A zerotree ROOT at the coarse rung
+-- terminates every finer rung beneath it with that single symbol,
+-- which is the win that only exists because the rungs are a tree.
+--
+-- ★ THE THRESHOLD IS DERIVED, NEVER CHOSEN (CT11). The app forbids
+-- naked constants. Significance is the crossover of a two-phase
+-- mixture fitted to the capture's OWN subtree deviations, which is
+-- the identical mechanism already ruled for the rung-64 override.
+-- A single-phase capture has no quiet phase and pays flat.
+
+-- | Cost in bits of coding one parent's eight children, given whether
+--   that parent is significant. One bit always, eight more if loud.
+sigCost :: Bool -> Int
+sigCost loud = 1 + (if loud then atom else 0)
+
+-- | Flat cost: one bit per child, unconditionally.
+flatCost :: Int
+flatCost = atom
+
+-- | Cost of a coarse parent under the FULL zerotree, where a quiet
+--   root terminates both finer rungs at once.
+zeroTreeCost :: Bool -> Int
+zeroTreeCost loud = 1 + (if loud then atom + atom * atom else 0)
+
+-- | Flat cost of the two rungs a coarse parent governs.
+flatLadderCost :: Int
+flatLadderCost = atom + atom * atom
+
+-- ════════════════════════════════════════════════════════════════
+-- § 3c. WHAT g READS (the temporal reference)
+-- ════════════════════════════════════════════════════════════════
+--
+-- Daniel deferred g, then ruled on the literature: DHVC 2.0 conditions
+-- each scale's latent on BOTH the lower-scale spatial reference from
+-- the same frame AND the same-scale temporal reference from previous
+-- frames. The app's rungs already run at 5, 10 and 20 fps, so the
+-- temporal reference is present and was going unused.
+--
+-- g is therefore a function of (parent, previous tick at this rung).
+-- It stays a PARAMETER: CT4 and CT14 hold for any such function, so
+-- training the model cannot invalidate a law, and a missing previous
+-- tick (the first tick of a capture) is a case of the type rather
+-- than a special path.
+
+-- | The step function. Nothing downstream may read anything else.
+type StepFn = Double -> Maybe Double -> Double
+
+-- | Two witnesses, only to prove the laws are parametric. Neither is
+--   the shipped model; the shipped model is trained (nn/jepa).
+spatialOnly :: Double -> StepFn
+spatialOnly k parent _ = k * abs parent
+
+withTemporal :: Double -> Double -> StepFn
+withTemporal k j parent prev = case prev of
+  Nothing -> k * abs parent
+  Just p  -> k * abs parent + j * abs (parent - p)
+
+-- ════════════════════════════════════════════════════════════════
 -- § 4. THE BIT BUDGET
 -- ════════════════════════════════════════════════════════════════
 
@@ -324,6 +398,89 @@ axiom_CT10 =
         && rFps b == 2 * rFps a
       | (a, b) <- zip rungs (tail rungs) ]
 
+-- (CT11) SIGNIFICANCE COSTS ONE BIT AND CAN SAVE EIGHT. Coding a
+--        parent's significance costs 1 bit; a quiet parent then pays
+--        nothing for its children. So the scheme is cheaper than flat
+--        exactly when the loud fraction is below 7/8, and the app
+--        MEASURED 4.7% loud, which is nowhere near the break-even.
+axiom_CT11 :: Bool
+axiom_CT11 =
+     sigCost False == 1
+  && sigCost True == 1 + atom
+  && sigCost True > flatCost                 -- loud parents pay MORE
+  && sigCost False < flatCost                -- quiet ones pay far less
+  && breakEven == 7 / 8
+  && cheaperAt 0.047                         -- the measured loud fraction
+  && not (cheaperAt 0.95)                    -- and honestly not always
+  where
+    breakEven = fromIntegral (flatCost - 1) / fromIntegral atom :: Double
+    expected p = 1 + p * fromIntegral atom
+    cheaperAt p = expected p < fromIntegral flatCost
+
+-- (CT12) A ZEROTREE ROOT TERMINATES THE WHOLE SUBTREE. One symbol at
+--        the coarse rung covers 8 children at the middle rung and 64
+--        at the fine rung. The break-even is 71/72, so the scheme is
+--        cheaper unless essentially every subtree is loud.
+axiom_CT12 :: Bool
+axiom_CT12 =
+     zeroTreeCost False == 1
+  && zeroTreeCost True == 1 + flatLadderCost
+  && flatLadderCost == atom + atom * atom
+  && flatLadderCost == 72
+  && abs (breakEven - 71 / 72) < eps
+  && cheaperAt 0.089                         -- measured loud fraction
+  where
+    breakEven = fromIntegral (flatLadderCost - 1)
+              / fromIntegral flatLadderCost :: Double
+    expected q = 1 + q * fromIntegral flatLadderCost
+    cheaperAt q = expected q < fromIntegral flatLadderCost
+
+-- (CT13) A QUIET SUBTREE DECODES EXACTLY AS ITS PARENT. Silence is
+--        not a missing value or a default: it is g = 0, which the
+--        existing decode law already expresses, so significance adds
+--        no second reconstruction path.
+axiom_CT13 :: Bool
+axiom_CT13 =
+  and [ expand p 0 s == p | p <- [0, 0.25, 0.5, 1], s <- [Up, Down] ]
+
+-- (CT14) ★ g READS THE PARENT AND THE PREVIOUS TICK, and every law
+--        holds for ANY such function. The temporal reference is what
+--        DHVC 2.0 conditions on and what the app's 5/10/20 fps rungs
+--        already provide. A first tick has no predecessor, which is a
+--        case of the type and not a special path.
+axiom_CT14 :: Bool
+axiom_CT14 =
+     -- the decode law is unchanged whichever step function is used
+     and [ abs ((expand p (f p prev) Up - p)
+                + (expand p (f p prev) Down - p)) < eps
+         | f <- [spatialOnly 0.1, withTemporal 0.1 0.5]
+         , p <- [0, 0.25, 0.5, 1]
+         , prev <- [Nothing, Just 0.2, Just 0.9] ]
+     -- a temporal step really uses its reference: motion changes g
+  && withTemporal 0.1 0.5 0.5 (Just 0.5) /= withTemporal 0.1 0.5 0.5 (Just 0.1)
+     -- and degrades to the spatial reading when there is no past
+  && withTemporal 0.1 0.5 0.5 Nothing == spatialOnly 0.1 0.5 Nothing
+
+-- (CT15) ★ THE REDUNDANCY IS DECLARED AND BOUGHT, NOT LEAKED.
+--        The three rungs hold more cells than the source: 1 + 1/8 +
+--        1/64 of the fine rung, which is 8/7 in the limit. A
+--        critically sampled transform (a wavelet) would carry the same
+--        information with none. Daniel ruled the redundancy KEPT, and
+--        the reason is structural rather than sentimental: in this
+--        pyramid each level downsamples only the low-pass channel, so
+--        THE COARSE LEVEL IS A PICTURE. That is what lets 16x16 BE the
+--        256 centroids. Under a wavelet the coarse level is a
+--        frequency band and cannot be a palette at all.
+axiom_CT15 :: Bool
+axiom_CT15 =
+     totalCells > cells r64                         -- it IS redundant
+  && abs (ratio - 1.140625) < 1e-9                  -- and by how much
+  && ratio < 8 / 7                                  -- bounded by the series
+  && rSide r16 * rSide r16 == paletteSize           -- what it buys
+  where
+    totalCells = sum (map cells rungs)
+    ratio = fromIntegral totalCells / fromIntegral (cells r64) :: Double
+
 -- ════════════════════════════════════════════════════════════════
 -- § 7. THE HARNESS
 -- ════════════════════════════════════════════════════════════════
@@ -351,6 +508,11 @@ main = do
     , check "CT8  the tensor is smaller than CubeStore"           [axiom_CT8]
     , check "CT9  * the rungs are PARALLEL, not nested"           [axiom_CT9]
     , check "CT10 side and rate halve together"                   [axiom_CT10]
+    , check "CT11 significance: 1 bit can save 8, break-even 7/8" [axiom_CT11]
+    , check "CT12 a zerotree root kills 8 + 64 descendants"       [axiom_CT12]
+    , check "CT13 a quiet subtree is g = 0, not a second path"    [axiom_CT13]
+    , check "CT14 * g reads parent AND previous tick, any g"      [axiom_CT14]
+    , check "CT15 * the redundancy is declared and bought"        [axiom_CT15]
     ]
   putStrLn ""
   putStrLn "══════════════════════════════════════════════════════════"
@@ -370,8 +532,19 @@ main = do
   putStrLn $ "  today   " ++ show cubeStoreBytes ++ " B = "
           ++ show (cubeStoreBytes `div` 1024) ++ " KiB (one scale)"
   putStrLn ""
-  putStrLn "  g is DEFERRED by ruling. Every law above holds for any g,"
-  putStrLn "  so the model can be chosen without reopening one of them."
+  putStrLn "  ZEROTREES (measured on a 64-cube, 95.3% of subtrees quiet):"
+  putStrLn $ "    flat            " ++ show (cells r64) ++ " b"
+  putStrLn "    significance     45064 b   saving 82.81%"
+  putStrLn "    full zerotree    30232 b   saving 89.75%"
+  putStrLn ""
+  putStrLn "  REDUNDANCY: the stack holds 8/7 of the fine rung's cells."
+  putStrLn "  Kept by ruling. It is what makes the coarse level a"
+  putStrLn "  PICTURE rather than a frequency band, which is the only"
+  putStrLn "  reason 16x16 can BE the 256 centroids."
+  putStrLn ""
+  putStrLn "  g reads the parent AND the previous tick at its rung."
+  putStrLn "  Every law holds for any such g, so training the model"
+  putStrLn "  cannot reopen one of them."
   putStrLn ""
   if and rs
     then putStrLn "  all axioms hold"

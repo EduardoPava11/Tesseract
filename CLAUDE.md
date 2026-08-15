@@ -58,6 +58,76 @@ Center Stage APIs (dynamicAspectRatio, AVCaptureSmartFramingMonitor,
 sensor mounted PORTRAIT unlike older front cameras) are available
 from iOS 26 if ever wanted.
 
+## ★ THE CAPTURE TENSOR (Daniel's specification, 2026-08-14)
+
+"16x16 is a unit. we take a measurement every 5fps. to make
+16x16 == 256 centroids ... 4(64x64)==2(32x32)==1(16x16) ... What we
+capture should be a proprietary tensor, the shape is the form, the
+function is the app's sole purpose."
+
+Spec `spec/output/CaptureTensor.hs`, CT1 to CT15, in the CORE suite.
+THE RUNGS ARE PARALLEL VIEWS, NOT A NEST (CT9). Daniel rejected the
+nested descent explicitly: "16x16 rung check, 32x32 rung check, but
+64x64 is using those two?! NO!"
+
+  rung 16   16 frames of 16x16 =   4096 cells    5 fps
+  rung 32   32 frames of 32x32 =  32768 cells   10 fps
+  rung 64   64 frames of 64x64 = 262144 cells   20 fps
+
+One coarse tick is 256 cells, which IS the palette: 256 centroids.
+Cells stand 1 : 8 : 64, so EQUIVALENT FLOAT RESOLUTION IS FORCED at
+64 : 8 : 1 and every rung carries the same 262144 bits (CT3). Side and
+rate halve together (CT10).
+
+THE OCTAVE FORM: fine rungs are ONE SIGN BIT per child,
+child = parent + sign*g. Measured: one bit beat FOUR flat bits (0.01655
+against 0.02043) at a quarter of the cost. Signs are FREE, not balanced,
+ruled on measured evidence (about a third sharper). The price is that
+the detail dial also slides the colour, linearly, up to 3.36 output
+levels at maximum dial. CT6 bounds it exactly rather than leaving it to
+be discovered.
+
+★ ZEROTREES (ruled 2026-08-14 after the literature pass; EZW 1993 /
+SPIHT 1996 solved this and the app was not using it). A parent emits
+ONE significance bit; quiet parents stop there and their children
+decode as the parent exactly (g = 0, CT13, so no second reconstruction
+path). A zerotree ROOT at rung 16 terminates 8 + 64 descendants with
+that single symbol. MEASURED, 95.3% of subtrees are quiet:
+
+  flat, one bit per child       262144 b   rmse 0.01655
+  significance, one level        45064 b   rmse 0.01793   -82.81%
+  full zerotree, 16 kills 32+64   30232 b   rmse 0.02409   -89.75%
+
+The significance THRESHOLD IS DERIVED, never chosen (CT11): the
+crossover of a two-phase mixture on the capture's own subtree
+deviations, the same mechanism ruled for the rung-64 override. A
+single-phase capture has no quiet phase and pays flat.
+
+★ g READS THE PARENT AND THE PREVIOUS TICK (CT14). This is DHVC 2.0's
+conditioning (lower-scale spatial reference plus same-scale temporal
+reference), and the 5/10/20 fps rungs already provide the temporal half.
+g stays a PARAMETER: every law holds for any g, so training cannot
+reopen one. Trained in nn/jepa under a straight-through estimator.
+
+★ THE REDUNDANCY IS KEPT, DECLARED AND BOUGHT (CT15). The stack holds
+8/7 of the fine rung's cells. A critically sampled wavelet would carry
+the same information with none, and that is exactly why the app cannot
+use one: in this pyramid each level downsamples only the low-pass
+channel, so THE COARSE LEVEL IS A PICTURE. That is the only reason
+16x16 can BE the 256 centroids. Under a wavelet it is a frequency band
+and cannot be a palette at all. Daniel: "redundancy is good for
+engineering."
+
+DEPTH IS NEVER QUANTISED (CT7). It decides figure from ground and sets
+the cadence. Consequence, stated because it is large: depth at full
+precision on all three rungs is 1168 KiB against colour's 288 KiB, so
+depth is 80% of the tensor and the whole thing is 1456 KiB against
+CubeStore's 1792 KiB. NOTE: kappa is exact, so the coarse depth rungs
+are a pure function of the fine one; storing all three is storing the
+same numbers three times, and deriving them is lossless.
+
+The tensor REPLACES CubeStore by ruling. Swift port owed.
+
 ## ★ S8: THE RUNGS WRITE THE INDEX (Daniel's ruling, 2026-08-14)
 
 "All rungs require a meaningful additive to the creation of GIFs", and

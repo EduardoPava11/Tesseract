@@ -45,7 +45,11 @@ or should not exist. Layers (see Makefile for the full lists):
   the surface state machine now that EDIT is the whole app), the widget
   grid and the detent dial. Lint-gated via scripts/lint-grid.sh.
 - **harmony/** — set-list dissonance ordering.
-- **output/** — the GIF machine's export contracts, frame geometry,
+- **output/** -- the CAPTURE TENSOR (CaptureTensor CT1-CT15: three
+  PARALLEL rungs at 5/10/20 fps, 16x16 = 256 centroids = the palette,
+  equivalent float resolution forced at 64:8:1, one sign bit per child,
+  zerotrees with a derived threshold, and the 8/7 redundancy declared
+  and bought), the GIF machine's export contracts, frame geometry,
   tri-scale ladder (TL1–TL12), the ADDITIVE LADDER (AdditiveLadder
   AD1–AD10: every rung writes bits of every index — index =
   role·128 + r16·64 + r32·8 + r64; the 1024 invariant; no rung is
