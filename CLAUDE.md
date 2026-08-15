@@ -58,29 +58,64 @@ Center Stage APIs (dynamicAspectRatio, AVCaptureSmartFramingMonitor,
 sensor mounted PORTRAIT unlike older front cameras) are available
 from iOS 26 if ever wanted.
 
-## ★ DIRECTORY: the engine is organised by what a file DOES (P5, 2026-08-14)
+## ★ DIRECTORY: a file's job is its address (P5 2026-08-14, COMPLETED
+## the same day under Daniel's memory-management ruling)
 
 `Tesseract/Tesseract/` held 28 files and 7,700 lines with no organising
-idea. It is gone. The engine now sits in directories named for the ATLAS
-categories, so a file's job is its address:
+idea. The first pass gave the engine ATLAS-category names. The second
+pass finished the job, because THREE organising ideas were still
+fighting in one tree: ATLAS jobs (Signal/Solve/Learn/Weave/Edit/Meter),
+Apple technologies (Metal/, ML/) and MVC leftovers (Model/, Views/,
+UI/, App/). A file's address named its job in six directories of
+thirteen. It now does in all ten:
 
-  Signal/  the three parallel reads and what feeds them (OctaveRead,
-           FeedFormat, TriScaleLadder, DepthSignal, FaceMeshSignal)
-  Solve/   palette and assignment (DyadPipeline, DyadPalette, PairTree,
-           StrataDescent, DyadANE, PerfectQuantizer, TesseractPalette,
-           BinomialCadence)
-  Learn/   the one model line (JepaHHead, SKGene, ANELoop, + weights)
-  Weave/   the artifact (GIFEncoder, GIFSaver, GIFMachine, GIFLibrary)
-  Edit/    what re-editing needs (CubeStore, Reweave, DepthMixture)
-  Meter/   measurement only, no byte depends on these (AdditiveCensus,
-           PhaseTelemetry, DyadEnergy, DyadHarmony, Dissonance,
-           BirkhoffMeasure, PhaseTiling)
+  Sense/    the sensor and the frame off it (CameraManager,
+            FaceCaptureManager, FrameBuffer, CapturedFrame,
+            QuantizedImage)                          [was Camera/]
+  Signal/   the three parallel reads (OctaveRead, FeedFormat,
+            TriScaleLadder, ResolutionGate, DepthSignal,
+            FaceMeshSignal, MetalPipeline)
+  Solve/    palette and assignment (DyadPipeline, DyadPalette,
+            PairTree, StrataDescent, DyadANE, PerfectQuantizer,
+            TesseractPalette, BinomialCadence, Quantize.metal)
+  Learn/    the one model line + every mlpackage (JepaHHead, SKGene,
+            ANELoop, ANELoop.metal, ML/)
+  Store/    ★ NEW — everything that OUTLIVES the function that made it
+  Edit/     what re-editing does with what Store kept (Reweave,
+            DepthMixture)
+  Weave/    the artifact (GIFEncoder, GIFSaver, GIFMachine)
+  Meter/    measurement only, no byte depends on these (AdditiveCensus,
+            PhaseTelemetry, DyadEnergy, DyadHarmony, Dissonance,
+            BirkhoffMeasure, PhaseTiling, GoBoard)
+  Law/      the coordinate system nothing else may change (Axes,
+            TesseractCoord)                          [was Model/]
+  Surface/  the app's face: App/, Cells/, Lattice/, Scenes/, Widgets/,
+            EditMachine                       [was App/ + UI/ + Views/]
 
-App/, UI/ and Views/ did NOT move: scripts/lint-grid.sh names them and
-the grid constitution is stated in terms of those paths. project.yml
-globs the whole tree, so the moves cost no build change. DepthMixture
-sits in Edit/ on purpose, per the ruling that the depth analysis belongs
-to the edit phase and not to capture.
+★ WHY Store/ EXISTS, AND WHY IT IS THE POINT. Persistence was spread
+across three directories that did not know about each other:
+CubeStore in Edit/, GIFLibrary in Weave/, ArrangementStore in
+UI/Widgets/, plus ExportSettings buried at the top of GIFMachine.swift.
+No reader could see the whole memory bill from any one place, and
+UserDefaults is the ONLY required-reason API this app declares
+(PrivacyInfo, CA92.1) — a declaration that is auditable exactly when
+every writer of it shares an address. Store/ now holds all four, plus
+CaptureTensor and TensorANE.
+
+Metal/ and ML/ were TECHNOLOGIES, not jobs: a .metal file belongs with
+the law it implements, and an mlpackage with the model line that loads
+it. Model/ held two coordinate laws and one meter under an MVC name
+that means nothing here.
+
+scripts/lint-grid.sh moved with the tree, and one invariant got
+STRONGER by the move: the primitive drawing-vocabulary allowlist used
+to be a hand-kept name list that included one file from a different
+directory (Views/GIFPlayerView). It is now `Surface/Cells/` — the
+allowlist IS a directory, so it cannot drift from itself. The set is
+unchanged. project.yml globs the tree, so none of this cost a build
+change. DepthMixture stays in Edit/ per the ruling that the depth
+analysis belongs to the edit phase; its CALL SITE has still not moved
+(P2, still owed).
 
 ## ★ THE CAPTURE TENSOR (Daniel's specification, 2026-08-14)
 
@@ -178,7 +213,82 @@ CubeStore's 1792 KiB. NOTE: kappa is exact, so the coarse depth rungs
 are a pure function of the fine one; storing all three is storing the
 same numbers three times, and deriving them is lossless.
 
-The tensor REPLACES CubeStore by ruling. Swift port owed.
+The tensor REPLACES CubeStore by ruling. ★ THE SWIFT PORT LANDED
+2026-08-14 (Store/CaptureTensor.swift + Store/TensorANE.swift, gated
+by CaptureTensorTests + TensorANEParityTests, 11 tests green). See
+★ THE ANE ENCODES below. The remaining step is the CALL-SITE swap,
+which is staged behind CR3: identity re-weave must reproduce the
+archived GIF byte for byte from the TENSOR before anything stops
+writing the cube.
+
+## ★ THE ANE ENCODES AND COMPRESSES THE SIGNAL (Daniel's ask,
+## 2026-08-14: "I need ANE to be able to encode+compress the signal
+## information")
+
+Spec `spec/neural/TensorEncoder.hs`, TA1-TA9, in the CORE suite. It
+owns ONE question — what may run on the engine without changing a
+stored bit — and cites Octave/FeedCompression/OctaveCodec/CaptureTensor
+for everything else. Lab: `nn/tensor-codec/build_model.py` builds
+`TensorEncode.mlpackage` and gates it against a float64 NumPy
+reference. Ports: Store/CaptureTensor.swift is the CPU law,
+Store/TensorANE.swift is the engine TWIN.
+
+★ TA1 IS WHY THIS FITS THE ENGINE AT ALL. The 2x2x2 spacetime pool
+FACTORS into a temporal pair-average and a spatial 2x2 average, and
+the two COMMUTE. Fold frame pairs into the channel axis and the
+temporal half is a 1x1 CONVOLUTION; the spatial half is a stock
+avg_pool. So the octave transform needs NO 3D operator (the thing the
+engine schedules worst) and is built from the two operators it is best
+at. The whole encode is: pool, pool, upsample, subtract, compare,
+abs, pool. One dispatch, 0.9 ms on M3 Max; the A19 figure is owed.
+
+★ TA3 IS THE LOAD-BEARING LAW, and it is the encoder's XP2. The
+graph's only decision is a sign, and a FLIPPED sign costs exactly
+2*min(|r|, g) of extra reconstruction error — NOT 2g. A flip can only
+happen where |r| is under fp16's resolution, so the penalty is bounded
+by twice that. MEASURED, twice: the authoring gate saw 98.30% of
+786432 signs agree with the worst disagreeing |r| at 4.853e-4 against
+an fp16 ulp of 4.883e-4, and TensorANEParityTests saw 97.14% agree
+with the worst at 4.389e-4. EVERY disagreement is a residual the
+engine could not see.
+
+★ TA5: fp16 IS FREE AT THE RUNG THAT IS THE PALETTE. CT2 forces 64
+bits per rung-16 cell; three fp16 channels spend 48. The engine's
+native precision costs the coarse picture nothing, because it fits
+inside an allocation the counting had already forced.
+
+★ THE FORMAT STORES g RATHER THAN PREDICTING IT (Store/CaptureTensor
+.swift). CT4 leaves g a parameter and CT10 describes a predictor for
+it, trained in nn/jepa. Storing the subtree's OWN measured deviation
+costs 4 B per loud root and buys two things worth more: the decode
+needs no trained weights, so a tensor retained today stays decodable
+after any retrain; and no naked k and j enter the app while the
+predictor does not exist. A trained predictor is format v2, never a
+second runtime path.
+
+MEASURED SIZE (CaptureTensorTests, on the synthetic figure-over-ground
+fixture): 1,099,586 B against CubeStore's 1,835,024 B, rmse 0.0060.
+Colour went from 786432 B of voxel bytes to about 31000-137000
+depending on the mixture's verdict.
+
+★ AND THE FINDING THAT NEEDS A RULING. The zerotree's saving depends
+entirely on the capture having a genuinely QUIET phase, and a sensor
+noise floor destroys that phase. Measured (nn/tensor-codec/
+noise_floor.py) on the same cube:
+
+  noiseless           mixture finds two phases, 24.9% loud, 14.7 : 1
+  noise floor 0.0015  mixture finds ONE phase -> CT7 says pay flat
+
+CT7 is not wrong: it asks "are there two populations of deviation
+magnitude", and under noise there genuinely are not. But the question
+that decides whether a sign is worth a bit is "is this subtree louder
+than noise alone". The candidate is Donoho-Johnstone (1994) MAD
+thresholding, which is derived exactly the way the crossover is
+(sigma = MAD/0.6745 is a Gaussian identity, not a tuning). Measured,
+it kills 27.9% of subtrees for +0.9% rmse. NOT TAKEN — which question
+the significance bit asks is Daniel's ruling, and the 95.3%-quiet
+figure the zerotree was ruled on now looks optimistic for any capture
+with real sensor noise.
 
 ## ★ S8: THE RUNGS WRITE THE INDEX (Daniel's ruling, 2026-08-14)
 
@@ -435,6 +545,52 @@ Haskell is authoritative; Swift/Metal are ports (SixFour discipline).
 - `nn/` — Mac-side lab: MLX-trained 5,616-param residual debayer
   (`nn/debayer/`, +3.72 dB over bilinear) and its Metal parity harness
   (`nn/metal-harness/run.sh`, verified 3e-7 on M3 Max). Runs on Mac only.
+
+## ★ THE COLOUR LATENT: the space the model is a map OF (Daniel's
+## direction, 2026-08-14: "the model we train MUST be wise in the
+## 64x64x64 GIF creation, because 256 colour every 64 frames is
+## something that CAN be explored in latent colour space")
+
+Spec `spec/neural/ColourLatent.hs`, CL1-CL8, in the CORE suite.
+
+★ THE SPACE ALREADY EXISTS AND IS ALREADY EXACT. This is a fact about
+the shipped app, not a proposal. A Tesseract GIF's colour is 64 frames
+x 256 entries x 3 = 49152 bytes, and ALL of it is generated by 13
+numbers per frame (DYAD STATS v3) = 832 numbers, through a decoder
+that already ships and is already gated byte-for-byte
+(GIFMachine.rebuildTables). 59 : 1, exact (CL1).
+
+So the model does NOT need to learn a colour space. Consequences,
+each a green axiom:
+
+  CL2  the decoder is TOTAL — every point in the space decodes to a
+       lawful table, including degenerate ones. The model cannot
+       reach an illegal artifact because there is no illegal point.
+  CL3  the sigma form survives decode entry by entry, so the latent
+       cannot express a table that violates the decreed involution.
+  CL4  the lawful relabelings are the XOR-by-mask permutations, which
+       COMMUTE with sigma(i) = i xor 255 exactly. |G| = 256, not 256!
+       — the decree removes most of WS's freedom. A model that
+       distinguishes these is reading index labels, not colour.
+  CL5  a relabeling moves no colour: E, occupancy and the LZW bill
+       are invariant, checked on the table itself.
+  CL6  ★ THE ONE THING MISSING. Euclidean distance in the 13 numbers
+       is NOT colour distance, and no fixed reweighting fixes it: the
+       ratio between a mean step and a variance step CHANGES with
+       position (1.9 at one covariance, 0.8 at ten times it). A
+       single diagonal metric cannot be right in both places, so the
+       metric must be learned as a FIELD over the space.
+  CL7  the hierarchy's depth is forced at three by AdditiveLadder's
+       strata [4, 32, 256]. Not a hyperparameter.
+  CL8  a sampler that draws in this space and decodes through the
+       shipped law satisfies NO-CAPTURE-TRAINING and the
+       model-placement ruling by CONSTRUCTION, not by discipline.
+
+★ THE CONSEQUENCE FOR TRAINING. The run this architecture needs is a
+METRIC LEARNER, not a generator — the generator already ships. That is
+a far better-posed problem than "train a model on GIFs", and it is
+what docs/model-placement.md § 4.1's open CHOICE (fitted vs learned)
+was really asking. Corpus emission and the run itself are NOT done.
 
 ## Export contract
 

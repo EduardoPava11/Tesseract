@@ -67,6 +67,10 @@ NEURAL = neural/BayerResidual.hs \
          neural/SKGeneCalculus.hs \
          neural/SKGeneSemantics.hs \
          neural/OctaveCodec.hs \
+         neural/TensorEncoder.hs \
+         neural/ColourLatent.hs \
+         neural/MemoryColour.hs \
+         neural/MerkleSearch.hs \
          neural/DescentLadder.hs \
          neural/JepaH.hs \
          neural/WeaveState.hs
