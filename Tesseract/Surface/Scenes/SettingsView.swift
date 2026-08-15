@@ -60,6 +60,12 @@ struct SettingsView: View {
                     actionRow(title: "RESET LAYOUT", region: GridLayout.setResetLayout,
                               enabled: true, action: onResetLayout)
                         .place(GridLayout.setResetLayout)
+
+                    CellText("KEPT FOR RE-EDITING", rows: TypeRows.label,
+                             ink: Color(srgb8: Ink.ledGhost))
+                        .place(GridLayout.setStorageLabel)
+                    storageRow.place(GridLayout.setStorage)
+
                     closeButton.place(GridLayout.setClose)
                 }
                 .gridCentered(in: geo.size)
@@ -69,6 +75,47 @@ struct SettingsView: View {
         .fullScreenCover(isPresented: $showLibrary) {
             LibraryView(clock: clock, onClose: { showLibrary = false })
         }
+    }
+
+    // ── ★ THE MEMORY, ON THE SURFACE (2026-08-14) ────────────────
+    //
+    // FORM FOLLOWS FUNCTION. The app's function grew a third phase
+    // this session: it CAPTURES, it RETAINS, and it EDITS. Capture
+    // and edit both speak on the surface; retention did not, and it
+    // is the one that spends the user's storage — about a megabyte a
+    // capture, forever, so that a moment stays re-editable. A cost
+    // the user pays and cannot see is the same silence the 2026-08-14
+    // decree bans in the engine, one layer up: nothing fails, so
+    // nothing gets decided.
+    //
+    // Three numbers, in the same voice the result scene uses, so the
+    // block reads as part of the app rather than a diagnostic bolted
+    // on: what is held, what one more costs, and how many moments
+    // that is. `CubeStore.totalBytes()` already existed for this and
+    // had no reader.
+    private var storageRow: some View {
+        let held = CubeStore.totalBytes()
+        let per = CubeStore.bytesPerCapture()
+        let moments = per > 0 ? held / per : 0
+        return HStack(spacing: Lattice.gif(6)) {
+            storageMetric(mib(held), "HELD")
+            storageMetric(mib(per), "EACH")
+            storageMetric("\(moments)", "MOMENTS")
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(mib(held)) megabytes kept for re-editing, "
+                            + "\(mib(per)) per capture, \(moments) moments")
+    }
+
+    private func storageMetric(_ value: String, _ label: String) -> some View {
+        VStack(spacing: Lattice.pt(1)) {
+            CellText(value, rows: TypeRows.label)
+            CellText(label, rows: TypeRows.micro, ink: Color(srgb8: Ink.ledGhost))
+        }
+    }
+
+    private func mib(_ bytes: Int) -> String {
+        String(format: "%.1f", Double(bytes) / (1024 * 1024))
     }
 
     private var libraryButton: some View {

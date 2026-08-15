@@ -145,12 +145,22 @@ enum GridLayout {
     /// unreachable, because reset is not IN the arrangement.
     static let setArrange = GridRegion("setArrange", col: 18, row: 129, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
     static let setResetLayout = GridRegion("setResetLayout", col: 18, row: 146, w: 64, h: TesseractLattice.buttonRowCells, interactive: true)
+    /// ★ THE MEMORY IS ON THE SURFACE (2026-08-14, form follows
+    /// function). The app retains a cube per capture so the moment
+    /// stays re-editable; that is roughly a megabyte each, and a cost
+    /// the user pays but could not see. A reporting-only pair — the
+    /// label, then the same metric row the result scene speaks in —
+    /// so "keep everything" is a visible decision instead of a silent
+    /// one. Reporting-only, so no touch floor and no control face.
+    static let setStorageLabel = GridRegion("setStorageLabel", col: 18, row: 166, w: 64, h: 6)
+    static let setStorage = GridRegion("setStorage", col: 18, row: 174, w: 64, h: 10)
     static let setClose = GridRegion("setClose", col: 38, row: 197, w: 24, h: TesseractLattice.buttonRowCells, interactive: true)
 
     static let settingsScene: [GridRegion] = [
         setTitle, setModeLabel, setModeLive, setModeFace,
         toggleBleed, toggleMirror, setLibrary,
-        setArrange, setResetLayout, setClose,
+        setArrange, setResetLayout,
+        setStorageLabel, setStorage, setClose,
     ]
 
     // ── Library scene (fullScreenCover — its own canvas) ──

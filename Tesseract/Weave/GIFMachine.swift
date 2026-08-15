@@ -13,34 +13,10 @@
 
 import Foundation
 
-/// The persisted settings. Missing stored values parse to defaults.
-/// Useful and simple: every entry here has a visible effect on the
-/// GIF. (The old `method` setting is gone — DYAD is the law, not a
-/// choice; a stale "export.method" default is simply ignored.)
-struct ExportSettings: Sendable {
-    /// DYAD background: coverage dither band (true) or hard MAP
-    /// classes only (false — role law v1, a lawful subset).
-    var bleed: Bool
-    /// Mirror the exported GIF horizontally (selfie orientation).
-    /// Index-domain flip — exact.
-    var mirror: Bool
-
-    static let bleedKey = "export.bleed"
-    static let mirrorKey = "export.mirror"
-
-    static func load() -> ExportSettings {
-        let defaults = UserDefaults.standard
-        return ExportSettings(
-            bleed: defaults.object(forKey: bleedKey) as? Bool ?? true,
-            mirror: defaults.object(forKey: mirrorKey) as? Bool ?? false)
-    }
-
-    func save() {
-        let defaults = UserDefaults.standard
-        defaults.set(bleed, forKey: Self.bleedKey)
-        defaults.set(mirror, forKey: Self.mirrorKey)
-    }
-}
+// ExportSettings moved to Store/ExportSettings.swift (2026-08-14): it
+// is one of the app's four persistence sites, and Store/ is where the
+// bytes that outlive a function are declared. GIFMachine reads it; it
+// does not own it.
 
 /// One dispatcher for every capture export.
 enum GIFMachine {

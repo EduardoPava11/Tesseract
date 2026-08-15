@@ -3,10 +3,10 @@
 # Ported from SixFour's lint discipline, trimmed to Tesseract's scope.
 #
 # Governed directories (migrated to the lattice):
-#   Tesseract/App, Tesseract/Views, Tesseract/UI
-# (GIFPlayerView is a primitive; CubeGIFView, FaceCaptureView and
-#  PaletteSwatchView were deleted in past passes — every surviving
-#  view is governed.)
+#   Tesseract/Surface (App/, Cells/, Lattice/, Scenes/, Widgets/)
+# (GIFPlayerView is a primitive and now lives with the other cell
+#  primitives; CubeGIFView, FaceCaptureView and PaletteSwatchView were
+#  deleted in past passes — every surviving view is governed.)
 #
 # Invariants:
 #   LINT-PLACEMENT      .position(/.offset( only with // LINT-ALLOW-POSITION
@@ -19,36 +19,42 @@
 #                       that mints its own rect has hand-positioned
 #                       through the sanctioned door
 #   LINT-GOLDEN-MECHANICS  the control-face algebra exists in BOTH forms
-#                       (spec/ui/CellMechanics.hs + UI/Cells/CellMechanics.swift),
+#                       (spec/ui/CellMechanics.hs + Surface/Cells/CellMechanics.swift),
 #                       and the widget/dial specs exist with their ports
 #
-# Primitive allowlist: the cell-vocabulary files (UI/Cells/Cell*.swift,
-# PixelGrid, SurfaceClock, Ink) plus GIFPlayerView are the ONLY files
-# allowed raw drawing vocabulary — future LINT-DRAW-VOCAB exempts them.
+# ★ THE PRIMITIVE ALLOWLIST IS NOW A DIRECTORY (2026-08-14). It used to
+# be a hand-kept name list — Cell*.swift plus PixelGrid, SurfaceClock,
+# Ink, and Views/GIFPlayerView, which sat in a different directory than
+# every other primitive it was grouped with. Surface/Cells/ IS the
+# closed drawing-vocabulary layer, so membership is the address and the
+# list cannot drift from it. The set is UNCHANGED by the move except
+# that GIFPlayerView now lives with the primitives it always was one of.
+# The invariant that replaces the list: nothing that is not a drawing
+# primitive may be added to Surface/Cells/.
 
 set -u
 cd "$(dirname "$0")/.."
 
-GOVERNED="Tesseract/App Tesseract/Views Tesseract/UI"
+GOVERNED="Tesseract/Surface"
 FAIL=0
 
 # Files converted to the cell vocabulary: raw drawing vocab is banned
 # (opacity, materials, shapes, strokes, shadows, bare Text, spinners).
 # Grows as views convert; primitives (is_primitive) are exempt.
 GOVERNED_VOCAB="
-Tesseract/App/ContentView.swift
-Tesseract/App/TesseractApp.swift
-Tesseract/Views/States/IdleStateView.swift
-Tesseract/Views/States/RecordingStateView.swift
-Tesseract/Views/States/ProcessingStateView.swift
-Tesseract/Views/States/ErrorStateView.swift
-Tesseract/Views/States/ResultStateView.swift
-Tesseract/Views/States/LivePreviewStateView.swift
-Tesseract/Views/States/FacePreviewStateView.swift
-Tesseract/Views/LibraryView.swift
-Tesseract/UI/Widgets/InformationWidgets.swift
-Tesseract/UI/Widgets/DetentDial.swift
-Tesseract/UI/Widgets/WidgetSurfaceView.swift
+Tesseract/Surface/App/ContentView.swift
+Tesseract/Surface/App/TesseractApp.swift
+Tesseract/Surface/Scenes/IdleStateView.swift
+Tesseract/Surface/Scenes/RecordingStateView.swift
+Tesseract/Surface/Scenes/ProcessingStateView.swift
+Tesseract/Surface/Scenes/ErrorStateView.swift
+Tesseract/Surface/Scenes/ResultStateView.swift
+Tesseract/Surface/Scenes/LivePreviewStateView.swift
+Tesseract/Surface/Scenes/FacePreviewStateView.swift
+Tesseract/Surface/Scenes/LibraryView.swift
+Tesseract/Surface/Widgets/InformationWidgets.swift
+Tesseract/Surface/Widgets/DetentDial.swift
+Tesseract/Surface/Widgets/WidgetSurfaceView.swift
 "
 
 note() { echo "  ✗ $1"; FAIL=1; }
@@ -56,7 +62,7 @@ note() { echo "  ✗ $1"; FAIL=1; }
 # The closed drawing-vocabulary layer.
 is_primitive() {
   case "$1" in
-    */UI/Cells/Cell*.swift|*/UI/Cells/PixelGrid.swift|*/UI/Cells/SurfaceClock.swift|*/UI/Cells/Ink.swift|*/Views/GIFPlayerView.swift)
+    */Surface/Cells/*.swift)
       return 0 ;;
     *) return 1 ;;
   esac
@@ -72,7 +78,7 @@ done < <(grep -rn "\.position(\|\.offset(" $GOVERNED --include="*.swift" || true
 # ── LINT-SINGLE-LATTICE ─────────────────────────────────────────
 while IFS= read -r line; do
   case "$line" in
-    */UI/Lattice/TesseractLattice.swift:*|*/UI/Lattice/Lattice.swift:*) continue ;;
+    */Surface/Lattice/TesseractLattice.swift:*|*/Surface/Lattice/Lattice.swift:*) continue ;;
   esac
   note "LINT-SINGLE-LATTICE: lattice constant declared outside the lattice:"
   echo "      $line"
@@ -118,10 +124,10 @@ done
 # would silently stop covering the app's three most-touched controls —
 # a weakening by omission. WidgetSpec deliberately mirrors GridRegion's
 # labeled shape so ONE regex reads both files.
-LINT_FACE_SOURCES="Tesseract/UI/Lattice/GridLayout.swift Tesseract/UI/Widgets/Arrangement.swift"
+LINT_FACE_SOURCES="Tesseract/Surface/Lattice/GridLayout.swift Tesseract/Surface/Widgets/Arrangement.swift"
 while IFS= read -r name; do
   [ -z "$name" ] && continue
-  grep -q "\"$name\": \"" Tesseract/UI/Cells/CellMechanics.swift \
+  grep -q "\"$name\": \"" Tesseract/Surface/Cells/CellMechanics.swift \
     || note "LINT-CONTROL-FACE: interactive region '$name' has no entry in CellMechanics.controlFaces"
 done < <(grep -h "interactive: true" $LINT_FACE_SOURCES \
          | sed -n 's/.*\(GridRegion\|WidgetSpec\)("\([^"]*\)".*/\2/p' | sort -u)
@@ -133,7 +139,7 @@ done < <(grep -h "interactive: true" $LINT_FACE_SOURCES \
 # whose output is machine-checked disjoint (GridLayout.isLawful).
 while IFS= read -r line; do
   case "$line" in
-    Tesseract/UI/Lattice/GridLayout.swift:*|Tesseract/UI/Widgets/Arrangement.swift:*) continue ;;
+    Tesseract/Surface/Lattice/GridLayout.swift:*|Tesseract/Surface/Widgets/Arrangement.swift:*) continue ;;
   esac
   code=$(echo "${line#*:}" | sed 's|//.*||')
   echo "$code" | grep -q "GridRegion(" || continue
@@ -143,7 +149,7 @@ done < <(grep -rn "GridRegion(" $GOVERNED --include="*.swift" || true)
 
 # ── LINT-GOLDEN-MECHANICS ───────────────────────────────────────
 [ -f "spec/ui/CellMechanics.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/CellMechanics.hs missing"
-[ -f "Tesseract/UI/Cells/CellMechanics.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Cells/CellMechanics.swift missing"
+[ -f "Tesseract/Surface/Cells/CellMechanics.swift" ] || note "LINT-GOLDEN-MECHANICS: Surface/Cells/CellMechanics.swift missing"
 grep -q "ui/CellMechanics.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: spec not registered in spec/Makefile"
 [ -f "spec/ui/WidgetGrid.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/WidgetGrid.hs missing"
 [ -f "spec/ui/DetentDial.hs" ] || note "LINT-GOLDEN-MECHANICS: spec/ui/DetentDial.hs missing"
@@ -151,9 +157,9 @@ grep -q "ui/CellMechanics.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: spec
 grep -q "ui/WidgetGrid.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: WidgetGrid spec not registered in spec/Makefile"
 grep -q "ui/DetentDial.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: DetentDial spec not registered in spec/Makefile"
 grep -q "ui/EditMachine.hs" spec/Makefile || note "LINT-GOLDEN-MECHANICS: EditMachine spec not registered in spec/Makefile"
-[ -f "Tesseract/UI/Widgets/Arrangement.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Widgets/Arrangement.swift missing"
-[ -f "Tesseract/UI/Widgets/DetentDial.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/Widgets/DetentDial.swift missing"
-[ -f "Tesseract/UI/EditMachine.swift" ] || note "LINT-GOLDEN-MECHANICS: UI/EditMachine.swift missing"
+[ -f "Tesseract/Surface/Widgets/Arrangement.swift" ] || note "LINT-GOLDEN-MECHANICS: Surface/Widgets/Arrangement.swift missing"
+[ -f "Tesseract/Surface/Widgets/DetentDial.swift" ] || note "LINT-GOLDEN-MECHANICS: Surface/Widgets/DetentDial.swift missing"
+[ -f "Tesseract/Surface/EditMachine.swift" ] || note "LINT-GOLDEN-MECHANICS: Surface/EditMachine.swift missing"
 
 # ── LINT-NO-STUB ────────────────────────────────────────────────
 # ★ NO STUBS (Daniel's decree 2026-08-14). A stub is unfinished work
