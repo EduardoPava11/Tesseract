@@ -3,13 +3,42 @@
 -- ════════════════════════════════════════════════════════════════
 -- ResolutionLadder: Depth-Gated Resolution 16² → 32² → 64²
 --
--- Each cell of the frame carries a subject signal s ∈ [0,1]
--- (1 = subject, 0 = background). The signal GATES the cell's
--- resolution rung:
+-- ★ THE GATE WAS AMENDED 2026-08-14 (P1). Daniel's ruling:
+--   "we would need to use the 16x16, 32x32, 64x64 stack IN relation
+--    to depth, in order to pick resolution size. NOT color."
 --
---   s ∈ [0, 1/3)   → 16²   1 px/color   the bijection rung (BP4)
---   s ∈ [1/3, 2/3) → 32²   4 px/color
---   s ∈ [2/3, 1]   → 64²  16 px/color   the B(4096, 1/256) rung
+-- The old gate read the subject signal's MAGNITUDE (s < 1/3 → 16,
+-- s < 2/3 → 32, else 64), which spent the fine rung on the subject's
+-- INTERIOR. The depth measurement says that is the wrong place, and
+-- says so twice over (TesseractTests/DepthQualityHarness):
+--
+--   the two phases separate at 9 SIGMA OR MORE at every rung, even
+--   under harsh sensor noise with 60% silhouette dropout, and the
+--   posterior commits (decisiveness 0.99) everywhere. So CONFIDENCE
+--   is not the criterion; there is nothing to be confident about in
+--   a solid region, at any rung.
+--
+--   what changes across rungs is GEOMETRY. Edge error is exactly the
+--   block size: 1.00, 2.00 and 4.00 fine cells at rungs 64, 32, 16.
+--   Depth cannot place the boundary more precisely than the cell it
+--   was measured in.
+--
+-- So resolution is gated by DISTANCE TO THE BOUNDARY, not by which
+-- side of it a cell sits on. A solid figure and a solid ground are
+-- the same case: no edge, floor rung, nothing lost.
+--
+-- The coverage t of DepthMixture is the signal, and the thresholds
+-- are the BAYER MATRIX'S OWN LEVELS, so no constant is chosen here
+-- (the no-naked-constants decree). The 4×4 matrix takes values
+-- (2k+1)/32, so its extrema are 1/32 and 31/32 (already the app's
+-- solid/band boundaries, DepthMixture) and one step inside them are
+-- 3/32 and 29/32:
+--
+--   t < 1/32  or  t > 31/32   → 16²   solid: no edge lives here
+--   within one Bayer step     → 32²   the band's outer shell
+--   otherwise (band core)     → 64²   where the edge actually sits
+--
+-- Every rung is given work, which AD10 requires (no rung is silent).
 --
 -- Occupancy is r²/256 ∈ {1,4,16}: the base rung realizes the
 -- palette as a permutation (the palette IS the image — BellPalette
@@ -33,12 +62,25 @@ import Data.List (sort, nub)
 rungs :: [Int]
 rungs = [16, 32, 64]
 
--- | The gate: subject signal → resolution rung. Thresholds 1/3, 2/3.
+-- | The Bayer 4×4 matrix's own levels: (2k+1)/32 for k in 0..15.
+--   Nothing below is chosen; it is read off this list.
+bayerLevels :: [Double]
+bayerLevels = [ (2 * fromIntegral k + 1) / 32 | k <- [0 .. 15 :: Int] ]
+
+bayerMin, bayerMax, bayerIn1, bayerIn2 :: Double
+bayerMin = minimum bayerLevels                    -- 1/32
+bayerMax = maximum bayerLevels                    -- 31/32
+bayerIn1 = bayerLevels !! 1                       -- 3/32, one step in
+bayerIn2 = bayerLevels !! 14                      -- 29/32, one step in
+
+-- | The gate: depth coverage t → resolution rung, by DISTANCE TO THE
+--   BOUNDARY. Solid on either side is the floor rung; the band core,
+--   where the edge actually sits, is the fine rung.
 rungOf :: Double -> Int
-rungOf s
-  | s < 1/3   = 16
-  | s < 2/3   = 32
-  | otherwise = 64
+rungOf t
+  | t < bayerMin || t > bayerMax   = 16    -- solid: no edge here
+  | t < bayerIn1 || t > bayerIn2   = 32    -- the band's outer shell
+  | otherwise                      = 64    -- the band core
 
 -- | Occupancy at rung r: expected pixels per palette color.
 occupancy :: Int -> Int
@@ -164,15 +206,23 @@ frameSeeds = [1 .. 10]
 --       sweep, and the thresholds 1/3, 2/3 land exactly.
 axiom_RL1 :: Bool
 axiom_RL1 =
-  let ss = [fromIntegral i / 400 | i <- [0 .. 400 :: Int]]
-      rs = map rungOf ss
-  in and (zipWith (<=) rs (tail rs))
-  && rungOf 0        == 16
-  && rungOf 0.3333   == 16   -- just below 1/3
-  && rungOf (1/3)    == 32   -- threshold belongs to the upper rung
-  && rungOf 0.6666   == 32   -- just below 2/3
-  && rungOf (2/3)    == 64
-  && rungOf 1        == 64
+     -- ★ SYMMETRIC about the band, NOT monotone in t. This is the
+     -- amendment: solid figure and solid ground are the SAME case.
+     and [ rungOf t == rungOf (1 - t) | t <- sweep ]
+     -- both solid ends sit on the floor rung
+  && rungOf 0 == 16 && rungOf 1 == 16
+     -- the band core takes the fine rung
+  && rungOf 0.5 == 64
+     -- the thresholds are the Bayer levels, exactly
+  && rungOf (bayerMin - 1/1024) == 16 && rungOf bayerMin == 32
+  && rungOf (bayerMax + 1/1024) == 16 && rungOf bayerMax == 32
+  && rungOf (bayerIn1 - 1/1024) == 32 && rungOf bayerIn1 == 64
+     -- and the rung rises then falls: it is a ridge, not a ramp
+  && rs == reverse rs
+  && maximum rs == 64 && head rs == 16 && last rs == 16
+  where
+    sweep = [fromIntegral i / 512 | i <- [0 .. 512 :: Int]]
+    rs = map rungOf sweep
 
 -- (RL2) Background floor: s = 0 ⇒ rung 16; SOLID fills are one
 --       constant index (anchors or a single centroid), NOISE fills
@@ -305,7 +355,7 @@ main = do
   putStrLn " AXIOMS"
   putStrLn "══════════════════════════════════════════════════════════"
   putStrLn ""
-  check "RL1 monotone gate: rung non-decreasing in s; thresholds exact" [axiom_RL1]
+  check "RL1 * RIDGE gate: symmetric about the band, Bayer levels" [axiom_RL1]
   check "RL2 background floor: s=0 ⇒ 16²; solid & noise both lawful"    [axiom_RL2]
   check "RL3 occupancy r²/256 ∈ {1,4,16}; bijection base; B-null top"   [axiom_RL3]
   check "RL4 conservation: Σ pixels = Σ rung²; no double cover"         [axiom_RL4]
@@ -317,14 +367,18 @@ main = do
   putStrLn ""
   putStrLn "  signal → rung → area → occupancy"
   putStrLn ""
-  putStrLn "  Resolution is SPENT where the subject is. Background"
-  putStrLn "  rests on the bijection rung — one pixel per palette"
-  putStrLn "  entry, the palette IS the image (BellPalette BP4)."
-  putStrLn "  The subject climbs to 64², where color counts follow"
-  putStrLn "  the binomial null model B(4096, 1/256), mean 16."
+  putStrLn "  Resolution is SPENT AT THE BOUNDARY. Solid figure and"
+  putStrLn "  solid ground are the SAME case and rest on the"
+  putStrLn "  bijection rung: one pixel per palette entry, the"
+  putStrLn "  palette IS the image (BellPalette BP4). Only the band,"
+  putStrLn "  where the edge actually sits, climbs to 64."
   putStrLn ""
-  putStrLn "  The gate is monotone: more subject never means less"
-  putStrLn "  resolution. The frame conserves: every cell emits its"
+  putStrLn "  The gate is a RIDGE, not a ramp. A cell far inside the"
+  putStrLn "  subject has no more edge to resolve than one far"
+  putStrLn "  outside it. Depth separates at 9 sigma at EVERY rung,"
+  putStrLn "  so confidence is not the criterion; edge error is"
+  putStrLn "  exactly the block size (1, 2, 4 fine cells), so"
+  putStrLn "  geometry is. The frame conserves: every cell emits its"
   putStrLn "  rung's area exactly once, nothing dropped, nothing"
   putStrLn "  double-covered."
   putStrLn "══════════════════════════════════════════════════════════"
