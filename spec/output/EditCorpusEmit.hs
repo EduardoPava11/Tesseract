@@ -115,13 +115,24 @@ rateBitsD pFig a =
 halfLog4 :: Double -> Int
 halfLog4 r = floor (logBase 4 r + 0.5 :: Double)
 
+-- | ★ COPIED VERBATIM, after the first draft PARAPHRASED it and was
+--   wrong on all 262144 rows. That version invented a `base = 4`
+--   appearing nowhere in the law and put the gap on dFig; the law
+--   pins dFig at the full depth ALWAYS and moves dGnd. The self-gate
+--   missed it because it checked `nodesAt` against the Rational law
+--   and not this function: the arithmetic that was ported carefully
+--   got gated, the one retyped from memory did not. Now gated.
 derivedAlloc :: Double -> Double -> Alloc
-derivedAlloc lamF lamB =
-  let gap = halfLog4 (lamF / lamB)
-      f = min treeDepth (max 0 (base + gap))
-      b = min treeDepth (max 0 base)
-      base = 4
-  in Alloc { dFig = f, dGnd = b }
+derivedAlloc lamF lamB = Alloc { dFig = treeDepth, dGnd = clampD gap }
+  where
+    gap = treeDepth - halfLog4 (lamF / lamB)
+    clampD x = max 0 (min treeDepth x)
+
+derivedAllocQ :: Q -> Q -> Alloc
+derivedAllocQ lamF lamB = Alloc { dFig = treeDepth, dGnd = clampD gap }
+  where
+    gap = treeDepth - halfLog4 (fromRational (lamF / lamB))
+    clampD x = max 0 (min treeDepth x)
 
 -- | Tree truncation at depth d: 2^d nodes, each the mean of its
 --   chunk of leaves. The Double twin of RoleAllocation.nodesAt.
@@ -163,29 +174,48 @@ data Scene = Scene
   { sName :: String
   , sLeaves :: [Double]
   , sPFig :: Double
+  , sTargetGnd :: Int          -- the derived dGnd this scene realises
   }
 
+-- ★ WHERE THE SCENE COUNT COMES FROM, and the first draft could not
+--   answer this. It used EIGHT scenes with invented names, invented
+--   spreads and invented seeds, chosen so that 8 x 32768 = 262144 =
+--   64^3: the row count was reverse-engineered from a sentence
+--   somebody wanted to write. Twenty-four naked constants, against a
+--   standing decree that forbids them.
+--
+--   The law answers it instead. `derivedAlloc` reads exactly ONE
+--   thing about a scene, the ratio lamF / lamB, through
+--       dGnd = clamp (treeDepth - halfLog4 (lamF / lamB))
+--   with dFig at treeDepth always. So the derived allocation takes
+--   EXACTLY widgetCells distinct values, one per dGnd in 0..7, and
+--   the complete scene axis IS that enumeration. Eight is DERIVED,
+--   and 262144 = 64^3 falls out instead of being aimed at.
+--
+--   Each scene is built as the ratio that lands on its own dGnd, by
+--   inverting halfLog4: lamF / lamB = 4^(treeDepth - dGnd).
 scenes :: [Scene]
-scenes =
-  [ mk "flat-ground"    0.05 0.25 11
-  , mk "warm-face"      0.35 0.55 23
-  , mk "high-contrast"  0.80 0.50 37
-  , mk "near-monochrome" 0.02 0.40 41
-  , mk "chroma-heavy"   0.60 0.70 53
-  , mk "dim-room"       0.15 0.30 67
-  , mk "backlit"        0.95 0.20 71
-  , mk "even-light"     0.45 0.60 89
-  ]
-  where
-    mk nm spread pf seed =
-      Scene { sName = nm
-            , sLeaves = sortOn id (take leafCount
-                          (map (\u -> 0.5 + spread * (u - 0.5)) (uniforms seed)))
-            , sPFig = pf }
+scenes = [ sceneFor g | g <- [0 .. treeDepth] ]
 
--- | Role-weighted generalised variances. lamF is the figure half's
---   spread, lamB the ground half's, both measured on the scene's own
---   leaves rather than chosen.
+sceneFor :: Int -> Scene
+sceneFor g = Scene
+  { sName = "dGnd-" ++ show g
+  , sLeaves = leaves
+  , sPFig = 0.5
+  , sTargetGnd = g }
+  where
+    ratio = 4 ** fromIntegral (treeDepth - g) :: Double
+    sdB = 0.02
+    sdF = sdB * sqrt ratio
+    halfOf sd base =
+      [ base + sd * cos (pi * fromIntegral i / fromIntegral hn)
+      | i <- [0 .. hn - 1] ]
+    hn = leafCount `div` 2
+    leaves = halfOf sdB 0.35 ++ halfOf sdF 0.65
+
+-- | Role-weighted generalised variances, measured on the scene's own
+--   leaves. lamF is the figure half (the upper half of the sorted
+--   tree), lamB the ground half. Nothing here is a free parameter.
 lambdas :: Scene -> (Double, Double)
 lambdas sc =
   let xs = sLeaves sc
@@ -275,6 +305,17 @@ gates =
      all agreesWithRational scenes)
   , ("every scene's derived point IS in the space exactly once",
      all (\sc -> length (filter rDerived (rowsFor sc)) == derivedCount) scenes)
+  , ("* derivedAlloc agrees with the Rational law on every scene",
+     all (\sc -> let (f, b) = lambdas sc
+                 in derivedAlloc f b
+                    == derivedAllocQ (toRational f) (toRational b)) scenes)
+  , ("* dFig is treeDepth on every derived point (law, not a choice)",
+     all (\sc -> dFig (uncurry derivedAlloc (lambdas sc)) == treeDepth) scenes)
+  , ("* each scene realises the dGnd it was BUILT for",
+     all (\sc -> dGnd (uncurry derivedAlloc (lambdas sc)) == sTargetGnd sc) scenes)
+  , ("* the scene axis is COMPLETE: every derived allocation, once",
+     let ds = [ dGnd (uncurry derivedAlloc (lambdas sc)) | sc <- scenes ]
+     in ds == [0 .. treeDepth] && length ds == widgetCells)
   ]
   where
     nubOrd = foldr (\x acc -> if x `elem` acc then acc else x : acc) []

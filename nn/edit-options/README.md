@@ -18,36 +18,77 @@ The chosen edit is always re-rendered exactly.
 
 ## Why it has a job at all, measured rather than assumed
 
-The app ships ONE point of a 32768-point space and that point is a
-corner. `RoleAllocation.identityEdit` takes the RL4-derived depth split
-and the FINE READ ALONE, because the app only uses the 64-cubed stream:
+The app ships ONE point of a 32768-point space.
+`RoleAllocation.identityEdit` takes the RL4-derived depth split and the
+FINE READ ALONE, because the app only uses the 64-cubed stream:
 `eCoarse = eMid = 0`.
 
-★ AND THE DERIVED POINT IS DERIVED FOR THE WRONG THING. RL4 is reverse
-water-filling, `b_i - b_j = half log2 (lam_i / lam_j)`. That minimises
-RATE. It has never claimed to make the best picture.
+RL4 is reverse water-filling, `b_i - b_j = half log2 (lam_i / lam_j)`,
+which minimises RATE. It has never claimed to make the best picture.
 
-Measured on the corpus, edits strictly better than the shipped point on
-truncation error, out of 32768 per scene:
+★ MEASURED, AND THE RESULT IS SHARPER THAN "SOME ROWS ARE BETTER".
+For every scene whose derived `dGnd` is 5 or below, EXACTLY ONE
+allocation strictly dominates the derived point, and it is always the
+same move:
 
-    flat-ground        5632        chroma-heavy       7680
-    warm-face          7680        dim-room           7680
-    high-contrast      7680        backlit            9728
-    near-monochrome    7680        even-light         7680
+    derived            dominated by
+    (dFig 7, dGnd 0)   (6, 1)
+    (dFig 7, dGnd 3)   (6, 4)
+    (dFig 7, dGnd 5)   (6, 6)
 
-So roughly 7700 lawful options per capture beat the one on screen for
-detail, and today you cannot see any of them. That is the gap this
-model exists to close.
+That is `(dFig - 1, dGnd + 1)`: move one bit from the figure to the
+ground. At an even figure share the two have IDENTICAL rate, 4.5 bits
+against 4.5, so this is not a cheaper option, it is the same price for
+strictly less truncation error.
+
+It falls out of the law's shape: `derivedAlloc` pins `dFig = treeDepth`
+ALWAYS and spends the whole water-filling gap on `dGnd`, so one side of
+the trade sits clamped at the ceiling and the exchange is never
+considered.
+
+★ AND THE HONEST CAVEAT. This is measured on the synthetic scenes
+below, at an even figure share, with cosine-shaped leaves. It is a
+property of the law AND of the fixture, and it stays a finding about
+this corpus until a real capture says the same thing. It is written
+here rather than in a commit message because someone will want to
+check it.
+
+Counts of rows beating the derived point on detail, of 32768:
+
+    dGnd-0  7168     dGnd-3  4096     dGnd-6  0
+    dGnd-1  6144     dGnd-4  3072     dGnd-7  0
+    dGnd-2  5120     dGnd-5  2048
+
+At dGnd 6 and 7 the derived point is already optimal, which is the
+law working exactly as intended at the top of its range.
 
 ## The corpus
 
     make corpus-edit          # from spec/, about 2.5 minutes
 
-    8 synthetic scenes  x  32768 edits  =  262144 rows  =  64^3
+    8 scenes  x  32768 edits  =  262144 rows  =  64^3
 
-The 32768 is NOT a sample. `editSpace` is the complete enumeration of
-five 8-state dials (RoleAllocation, and Octave OV11 "so the edit space
-stays 8^5"), so every permutation appears exactly once per scene.
+★ WHERE THE EIGHT COMES FROM, because the first draft could not
+answer it. That version used eight scenes with invented names,
+invented spreads and invented seeds, picked so that
+8 x 32768 = 262144 = 64^3. The row count was reverse-engineered from a
+sentence somebody wanted to write, and it carried twenty-four naked
+constants against a standing decree that forbids them.
+
+The law answers it. `derivedAlloc` reads exactly ONE thing about a
+scene, the ratio `lamF / lamB`, through
+`dGnd = clamp (treeDepth - halfLog4 (lamF / lamB))`, with `dFig` at
+`treeDepth` always. So the derived allocation takes EXACTLY
+`widgetCells` distinct values, one per `dGnd` in 0..7, and the complete
+scene axis is that enumeration. Each scene is built by inverting
+`halfLog4`: a variance ratio of `4^(treeDepth - dGnd)`.
+
+Eight is DERIVED, and 64^3 falls out instead of being aimed at.
+
+The 32768 is NOT a sample either. `editSpace` is the complete
+enumeration of five 8-state dials (RoleAllocation, and Octave OV11
+"so the edit space stays 8^5"), so every permutation appears exactly
+once per scene.
 
 Emitted to `corpus/edits.jsonl`, one row per line:
 
@@ -64,7 +105,17 @@ every other emitted corpus in this repo.
 
 ## Self-gating
 
-`spec/output/EditCorpusEmit.hs` verifies NINE properties before it
+★ AND ONE GATE EXISTS BECAUSE IT WAS MISSING. The first draft
+PARAPHRASED `derivedAlloc` instead of copying it, inventing a
+`base = 4` that appears nowhere in the law and putting the water-filling
+gap on `dFig` instead of `dGnd`. Every `derived` flag in that corpus was
+wrong, on all 262144 rows. The self-gate did not catch it because it
+checked `nodesAt` against the Rational law and not this function: the
+arithmetic that was ported carefully got gated, the one retyped from
+memory did not. Four gates now cover it, including that `dFig` is
+`treeDepth` on every derived point and that the scene axis is complete.
+
+`spec/output/EditCorpusEmit.hs` verifies THIRTEEN properties before it
 writes a byte, and aborts on any failure, following the SKCorpusEmit
 contract. Among them: the space really is 8^5 with no repeats, the
 corpus really is 64^3 rows, truncation at full depth is lossless,
