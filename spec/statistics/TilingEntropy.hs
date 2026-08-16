@@ -185,6 +185,112 @@ wallEnergy :: [Int] -> Double
 wallEnergy f = fromIntegral bonds * (1 - hBin w (bonds - w))
   where w = wallCount f
 
+-- | The same count without list indexing, so a 64-frame cube is
+--   affordable. TE11 gates it against `wallCount` on every probe, so
+--   the slow one stays authoritative and the fast one stays honest.
+chunk :: Int -> [a] -> [[a]]
+chunk _ [] = []
+chunk n xs = take n xs : chunk n (drop n xs)
+
+disagreements :: [Int] -> [Int] -> Int
+disagreements a b = length (filter id (zipWith (\p q -> spin p /= spin q) a b))
+
+wallCountFast :: [Int] -> Int
+wallCountFast f = horiz + vert
+  where
+    rows  = chunk side f
+    horiz = sum [ disagreements r (tail r) | r <- rows ]
+    vert  = sum [ disagreements r1 r2 | (r1, r2) <- zip rows (tail rows) ]
+
+-- ════════════════════════════════════════════════════════════════
+-- § 4b. THE TEMPORAL STRATUM (the loop, not just the plane)
+-- ════════════════════════════════════════════════════════════════
+--
+-- ★ DANIEL'S RULING, 2026-08-15, two rulings that turn out to be one
+-- object seen twice:
+--
+--   "the value head gets a temporal bond, on the CLOSED loop"
+--   "a rotation of Z/64 IS an equivalence on the artifact"
+--
+-- The second is not an extra assumption here. It is a THEOREM about
+-- the first: a cyclic bond set is carried to itself by a rotation, so
+-- w_t cannot move, so the energy cannot move (TE12). Ruling 7 stops
+-- being a matter of taste the moment the bond set closes.
+--
+-- ── WHY THIS STRATUM AND NOT SOME OTHER DELTA ───────────────────
+--
+-- Daniel: "we need it to be able to categorize the 256 colors times
+-- 64 frames in terms of deltas, GIF loops and dithering. ENERGY!"
+--
+-- The temptation is to invent a new observable for time. There is no
+-- need: § 4's law already reads a BOND FIELD over a set of adjacent
+-- pairs, and "adjacent" is the only thing that has to change. Swap the
+-- open 64x64 lattice for the cyclic pairs (p, t) ~ (p, t+1 mod nf) and
+-- every property of § 4 comes with it, in the same currency, with no
+-- new constant. The plane's law and the loop's law are ONE law over
+-- two disjoint bond sets.
+--
+-- ★ AND IT IS EXACTLY THE MISSING HALF OF DEPTH. Depth is 57% of the
+-- retained capture and reaches the artifact as ONE BIT PER VOXEL (the
+-- role bit, index >= 128, AdditiveLadder AD7). The spatial bond field
+-- reads where that bit changes ACROSS the plane; nothing read where it
+-- changes ALONG the loop, which is precisely depth's motion. So this
+-- stratum is not a new quantity bolted on: it is the second half of a
+-- measurement that had only ever been taken in one direction.
+--
+-- ── WHAT IT SEPARATES, AND WHAT IT STILL CANNOT ─────────────────
+--
+-- Order and anti-order cost the same here too (TE14), exactly as TE8:
+-- a cube that never moves (w_t = 0) and one whose roles invert every
+-- tick (w_t = 1) both sit at the ceiling. Only temporal NOISE is
+-- cheap. So the stratum measures coherence, not motion, which is the
+-- same thing § 4 does in space and is why it composes.
+--
+-- ★ THE POINT OF THE WHOLE EXERCISE (TE13): E and E_wall are both
+-- invariant under PERMUTING the 64 frames -- a pooled histogram and a
+-- sum over disjoint per-frame bond sets cannot see order. So before
+-- this stratum the app's only closed-form quality measure scored a GIF
+-- and its shuffle identically. E_time is not invariant under a
+-- shuffle, and IS invariant under a rotation. The value now
+-- distinguishes exactly the pairs the artifact distinguishes.
+
+-- | The closed loop's bond count: one bond per voxel per tick, and the
+--   last tick's bond is the 63 -> 0 one. nf * cells, not (nf-1) * cells.
+timeBonds :: Int -> Int
+timeBonds nf = nf * cells
+
+rotateBy :: Int -> [a] -> [a]
+rotateBy n xs = drop k xs ++ take k xs
+  where k = if null xs then 0 else n `mod` length xs
+
+-- | Voxels whose ROLE differs from its own value one tick later,
+--   around the loop.
+wallCountTime :: [[Int]] -> Int
+wallCountTime fs = sum [ disagreements a b | (a, b) <- zip fs (rotateBy 1 fs) ]
+
+-- | B_t(1 - h(w_t)). Same law as `wallEnergy`, different bond set.
+timeEnergy :: [[Int]] -> Double
+timeEnergy fs = fromIntegral b * (1 - hBin w (b - w))
+  where
+    b = timeBonds (length fs)
+    w = wallCountTime fs
+
+-- | The cube's three strata, in bits. The order the search reads them
+--   in is (E low, E_wall high, E_time high).
+data CubeValue = CubeValue
+  { cE     :: Double   -- index stratum, pooled histogram
+  , cWall  :: Double   -- spatial stratum, summed over frames
+  , cTime  :: Double   -- temporal stratum, on the closed loop
+  } deriving (Eq, Show)
+
+cubeValue :: [[Int]] -> CubeValue
+cubeValue fs = CubeValue
+  { cE    = energy (foldr1 (zipWith (+)) (map histogram fs))
+  , cWall = sum (map (\f -> fromIntegral bonds * (1 - hBin (wallCountFast f)
+                                                     (bonds - wallCountFast f))) fs)
+  , cTime = timeEnergy fs
+  }
+
 -- ════════════════════════════════════════════════════════════════
 -- § 5. PROBE FRAMES (deterministic — house lcg)
 -- ════════════════════════════════════════════════════════════════
@@ -217,6 +323,62 @@ probeHists :: [[Int]]
 probeHists = map histogram
   [ solidFrame, neelFrame, balancedFrame, faceFrame 7
   , randomFrame 3, randomFrame 11, threeRegion 5 ]
+
+-- ── PROBE CUBES (§ 4b) ──────────────────────────────────────────
+-- Eight ticks rather than sixty-four: every law below is about the
+-- bond set's SHAPE, and eight closes the loop exactly as well while
+-- staying cheap under runghc. The 64-tick ceilings are arithmetic and
+-- TE15 pins them directly.
+--
+-- ★ WHY EIGHT AND NOT SIXTEEN, recorded because it is a real trade.
+-- TE12 sweeps every rotation of every probe cube, so its cost is
+-- quadratic in the tick count: sixteen ticks put this file at 3m29s
+-- against a 63s baseline, which is a tax on `make test` that would be
+-- paid by everyone forever to re-check a cyclic argument. Eight keeps
+-- the sweep exhaustive (all eight offsets, all four cubes) and the
+-- loop closed, and it must stay EVEN so `strobeCube`'s last bond
+-- still flips. Nothing in TE11-TE15 depends on the number itself.
+
+probeTicks :: Int
+probeTicks = 8
+
+zeroFrame :: [Int]
+zeroFrame = replicate cells 0
+
+-- | Never moves: w_t = 0, the ORDERED end of the temporal stratum.
+stillCube :: [[Int]]
+stillCube = replicate probeTicks (faceFrame 7)
+
+-- | Every role inverts every tick: w_t = 1, the ANTI-ordered end.
+--   Even tick count, so the 15 -> 0 bond flips too and the loop is
+--   consistent with itself.
+strobeCube :: [[Int]]
+strobeCube = take probeTicks (cycle [solidFrame, zeroFrame])
+
+-- | Roles independent tick to tick: w_t near 1/2, the CHEAP end.
+noiseCube :: [[Int]]
+noiseCube = [ randomFrame (7 * i + 1) | i <- [1 .. probeTicks] ]
+
+-- | A half-plane rolling around the plane at a rate that closes
+--   exactly after probeTicks. Genuine motion: strictly between the
+--   two ceilings, which is the case the pair exists to see.
+driftCube :: [[Int]]
+driftCube =
+  [ [ if ((p + i * step) `mod` cells) < cells `div` 2 then 255 else 0
+    | p <- [0 .. cells - 1] ]
+  | i <- [0 .. probeTicks - 1] ]
+  where step = cells `div` probeTicks
+
+probeCubes :: [(String, [[Int]])]
+probeCubes = [ ("still", stillCube), ("strobe", strobeCube)
+             , ("drift", driftCube), ("noise", noiseCube) ]
+
+-- | The permutation TE13 uses: evens then odds. Any permutation
+--   leaves cE and cWall fixed (both are symmetric in the frames); this
+--   one demonstrably moves cTime.
+deal :: [a] -> [a]
+deal xs = [ x | (i, x) <- zip [0 :: Int ..] xs, even i ]
+       ++ [ x | (i, x) <- zip [0 :: Int ..] xs, odd i ]
 
 -- Solid rows / Néel band / random face — PhaseEnergy's probe.
 threeRegion :: Int -> [Int]
@@ -367,6 +529,148 @@ axiom_TE10 = all ledgerIdentity probeHists
       in abs (energy h - (n * 8 - n * h0 h)) < 1e-6
 
 -- ════════════════════════════════════════════════════════════════
+-- § 6b. THE TEMPORAL AXIOMS (Daniel's rulings, 2026-08-15)
+-- ════════════════════════════════════════════════════════════════
+
+-- (TE11) THE LOOP IS CLOSED, AND THE FAST COUNT IS THE SLOW ONE.
+--        B_t = nf*cells, NOT (nf-1)*cells: the last tick's bond is the
+--        63 -> 0 one and it is a bond like any other. The indexing-free
+--        wall count agrees with § 4's authoritative one on every probe,
+--        which is what makes a 64-tick cube affordable to measure.
+axiom_TE11 :: Bool
+axiom_TE11 =
+     timeBonds 64 == 262144
+  && timeBonds probeTicks == probeTicks * cells
+  && all (\f -> wallCountFast f == wallCount f)
+         [ solidFrame, neelFrame, balancedFrame, faceFrame 7
+         , randomFrame 3, threeRegion 5 ]
+  && wallCountTime stillCube == 0
+  && wallCountTime strobeCube == timeBonds probeTicks
+
+-- (TE12) ★ ROTATION IS AN EQUIVALENCE, AND IT IS A THEOREM ABOUT THE
+--        BOND SETS. Daniel's Ruling 7, answered 2026-08-15: no tick is
+--        privileged. This file does not have to ASSUME that. A cyclic
+--        bond set is carried to itself by a rotation, so w_t is fixed;
+--        the pooled histogram is fixed because pooling is symmetric;
+--        the per-plane wall counts are fixed as a MULTISET because
+--        rotation permutes the planes.
+--
+--        ★ THE STATEMENT HAD TO BE MADE MORE PRECISE THAN ITS FIRST
+--        DRAFT, and the correction is worth keeping. Written as exact
+--        equality of the three ENERGIES this axiom FAILS, and not
+--        because the ruling is wrong: cWall sums 16 Doubles, rotation
+--        REASSOCIATES that sum, and floating-point addition is not
+--        associative. So the invariance is EXACT on every integer
+--        observable (histogram, wall multiset, w_t) and holds to
+--        reassociation noise on the float that summarises them. The
+--        theorem lives in the combinatorics; the last ulp is an
+--        artifact of adding in an order. Both halves are checked
+--        below, the first with (==) and the second with a tolerance
+--        tight enough to be a claim (1e-9 relative).
+--
+--        ★ The consequence, stated because it is large: the shipped
+--        encoder is NOT rotation equivariant, and now that is a
+--        measurable defect rather than an unexamined habit. The stats
+--        EMA seeds at tick 0 (DyadPipeline.swift:413-431), so tick 0
+--        takes raw statistics while tick 63 is fully smoothed;
+--        StrataDescent partitions time linearly with no `mod`; S4's
+--        chaos groups have "lawful degenerate" tails, and a tail
+--        cannot exist on a torus. The meter obeys the ruling today.
+--        The encoder owes it.
+axiom_TE12 :: Bool
+axiom_TE12 = all rotationFixed probeCubes
+  where
+    rotationFixed (_, c) =
+      all (\r -> agree (probe (rotateBy r c)) base) [0 .. probeTicks - 1]
+      where base = probe c
+    -- ★ ONE PASS. The first draft called `counts` and then `cubeValue`
+    -- on every rotation, traversing each cube TWICE for a check that
+    -- needs the same intermediates both times. That doubled the cost
+    -- of the slowest axiom in the file for nothing.
+    probe fs =
+      let hs     = map histogram fs
+          ws     = map wallCountFast fs
+          pooled = foldr1 (zipWith (+)) hs
+          wt     = wallCountTime fs
+          b      = timeBonds (length fs)
+      in ( -- the INTEGER observables, exactly fixed. Wall counts as a
+           -- sorted multiset, because rotation permutes the planes
+           -- rather than fixing them.
+           (pooled, sort ws, wt)
+         , CubeValue
+             { cE    = energy pooled
+             , cWall = sum [ fromIntegral bonds * (1 - hBin w (bonds - w)) | w <- ws ]
+             , cTime = fromIntegral b * (1 - hBin wt (b - wt)) } )
+    agree (i, v) (j, w) = i == j && close v w
+    close a b = rel (cE a) (cE b) && rel (cWall a) (cWall b)
+             && rel (cTime a) (cTime b)
+    rel x y = abs (x - y) <= 1e-9 * max 1 (abs x)
+
+-- (TE13) ★ BUT A SHUFFLE IS NOT, AND THAT IS THE WHOLE POINT.
+--        E and E_wall are symmetric in the frames -- a pooled
+--        histogram and a sum over disjoint per-frame bond sets cannot
+--        see order at all -- so before this stratum the app's only
+--        closed-form quality measure scored a GIF and its shuffle
+--        identically. Here the first two components are shown fixed
+--        under a permutation (EXACTLY, since they are symmetric) while
+--        the third moves. The value now separates exactly the pairs
+--        the artifact separates: rotations are one artifact, shuffles
+--        are two.
+axiom_TE13 :: Bool
+axiom_TE13 =
+     cE    (cubeValue (deal driftCube)) == cE    (cubeValue driftCube)
+  && cWall (cubeValue (deal driftCube)) == cWall (cubeValue driftCube)
+  && cTime (cubeValue (deal driftCube)) /= cTime (cubeValue driftCube)
+  && cE    (cubeValue (deal noiseCube)) == cE    (cubeValue noiseCube)
+  && cWall (cubeValue (deal noiseCube)) == cWall (cubeValue noiseCube)
+
+-- (TE14) ORDER AND ANTI-ORDER COST THE SAME IN TIME TOO, exactly as
+--        TE8 in space. A cube that never moves and a cube whose roles
+--        invert every tick BOTH sit at the ceiling; only temporal
+--        NOISE is cheap. So the stratum measures COHERENCE, not
+--        motion, which is why it composes with § 4 instead of
+--        competing with it -- and why "reward less change" is not what
+--        it says.
+axiom_TE14 :: Bool
+axiom_TE14 =
+     abs (timeEnergy stillCube  - fromIntegral (timeBonds probeTicks)) < 1e-9
+  && abs (timeEnergy strobeCube - fromIntegral (timeBonds probeTicks)) < 1e-9
+  && timeEnergy noiseCube < fromIntegral (timeBonds probeTicks) / 1000
+  && timeEnergy driftCube > timeEnergy noiseCube
+  && timeEnergy driftCube < fromIntegral (timeBonds probeTicks)
+  && all (\(_, c) -> timeEnergy c >= -1e-9
+               && timeEnergy c <= fromIntegral (timeBonds probeTicks) + 1e-9)
+         probeCubes
+
+-- (TE15) THE THREE STRATA ARE DISJOINT AND IN ONE CURRENCY. The index
+--        bins, the 64 planes' bonds and the loop's bonds share no
+--        member, and all three are bits, so § 7's principle says they
+--        MAY be summed. The 64-tick ceilings:
+--
+--          index    64*4096*8   = 2,097,152 b   (the 256 KiB of wire)
+--          spatial  64*8064     =   516,096 b
+--          temporal 64*4096     =   262,144 b
+--
+--        ★ THE APP KEEPS THEM SEPARATE ANYWAY, and the reason is the
+--        ruling itself: Daniel asked for the artifact to be
+--        categorized BY deltas, and a sum discards exactly the
+--        distinction he asked to keep. Summing is lawful. Collapsing
+--        is lossy. Those are different statements and both are true.
+axiom_TE15 :: Bool
+axiom_TE15 =
+     64 * cells * 8 == 2097152
+  && 64 * bonds == 516096
+  && timeBonds 64 == 262144
+  && all disjointAndBounded probeCubes
+  where
+    disjointAndBounded (_, c) =
+      let v = cubeValue c
+          n = probeTicks
+      in cE v >= -1e-6 && cE v <= fromIntegral (n * cells * 8) + 1e-6
+      && cWall v >= -1e-6 && cWall v <= fromIntegral (n * bonds) + 1e-6
+      && cTime v >= -1e-6 && cTime v <= fromIntegral (timeBonds n) + 1e-6
+
+-- ════════════════════════════════════════════════════════════════
 -- § 7. MAIN
 -- ════════════════════════════════════════════════════════════════
 
@@ -388,6 +692,17 @@ main = do
   check "TE8  spatial stratum B(1−h(w)): order ≡ anti-order"       [axiom_TE8]
   check "TE9  cube telescoping: 2,097,152 b = 256 KiB of wire"     [axiom_TE9]
   check "TE10 calibration: E = the bits H₀ already reports"        [axiom_TE10]
+  check "TE11 the loop CLOSES: B_t = nf·N, the 63→0 bond exists"   [axiom_TE11]
+  check "TE12 ★ rotation of ℤ/64 is an equivalence — a THEOREM"    [axiom_TE12]
+  check "TE13 ★ a shuffle is NOT: E_time sees what E cannot"       [axiom_TE13]
+  check "TE14 time: order ≡ anti-order, only noise is cheap"       [axiom_TE14]
+  check "TE15 three disjoint strata, one currency, may be summed"  [axiom_TE15]
+  putStrLn ""
+  putStrLn "── THE LOOP ──────────────────────────────────────────────"
+  putStrLn $ "  ticks " ++ show probeTicks ++ ", B_t = "
+               ++ show (timeBonds probeTicks) ++ " bonds"
+  putStrLn "  cube        E (bits)     E_wall       E_time"
+  mapM_ cubeRow probeCubes
   putStrLn ""
   putStrLn "── THE NUMBERS ───────────────────────────────────────────"
   putStrLn $ "  |Ω| = 256^4096          : " ++ show omegaBits ++ " bits"
@@ -417,6 +732,15 @@ main = do
   putStrLn "  end. Strata add in bits (index rungs by the pair tree,"
   putStrLn "  bonds by the plane); currencies that are not bits do not."
   putStrLn "══════════════════════════════════════════════════════════"
+
+cubeRow :: (String, [[Int]]) -> IO ()
+cubeRow (name, c) = putStrLn $
+  "  " ++ pad 12 name ++ pad 13 (fmt (cE v)) ++ pad 13 (fmt (cWall v))
+       ++ fmt (cTime v)
+  where
+    v = cubeValue c
+    fmt x = show (fromIntegral (round (x * 100) :: Integer) / 100 :: Double)
+    pad n s = s ++ replicate (max 1 (n - length s)) ' '
 
 row :: (String, [Int]) -> IO ()
 row (name, f) = putStrLn $

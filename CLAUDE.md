@@ -592,6 +592,227 @@ a far better-posed problem than "train a model on GIFs", and it is
 what docs/model-placement.md § 4.1's open CHOICE (fitted vs learned)
 was really asking. Corpus emission and the run itself are NOT done.
 
+## ★ THE LOOP HAS AN ENERGY (Daniel's four rulings, 2026-08-15)
+
+Daniel: "because the model can only understand GIF's, in terms of
+color space we need it to be able to categorize the 256 colors times
+64 frames in terms of deltas, GIF loops and dithering. ENERGY! H-JEPA
+with synthetic data... When we capture the ANE is used to funnel the
+scales and create the 'view', it is OK if the preview and capture
+deviate since the capture data is more! it is more information than
+one single GIF, hence why we edit"
+
+Four rulings followed a full-tree read. Two are EXECUTED, two are OPEN.
+
+★ R-A. THE VALUE HEAD GETS A TEMPORAL BOND, ON THE CLOSED LOOP.
+EXECUTED. spec/statistics/TilingEntropy.hs gains TE11 to TE15 and
+Tesseract/Meter/TilingEnergy.swift is the port, gated by
+TilingEnergyTests (20 tests). E_time = B_t(1 - h(w_t)) over the cyclic
+bonds (p,t) ~ (p,t+1 mod nf); B_t = nf*4096 = 262144 at 64 ticks, and
+the last bond IS the 63 to 0 one. It is the SAME law as E_wall over a
+different set of adjacent pairs, so no new constant enters.
+
+  WHY IT WAS NEEDED. E pools the histogram over all frames and E_wall
+  sums disjoint per-frame bond sets, so BOTH are symmetric in the 64
+  frames: the app's only closed-form quality measure scored a GIF and
+  its SHUFFLE identically (TE13 now states this as the thing that
+  changed). It could not see a delta or a loop at all.
+
+  AND IT IS THE MISSING HALF OF DEPTH. Depth is 57% of the retained
+  capture and reaches the artifact as ONE BIT per voxel, the role bit
+  (AD7). E_wall reads where that bit changes across the plane; nothing
+  read where it changes along the loop, which is depth's motion.
+
+  Ceilings, 64 ticks: index 2097152 b, spatial 516096 b, temporal
+  262144 b. TE15: the three strata are disjoint and all in bits, so
+  summing is LAWFUL; the app keeps them separate anyway because the
+  ruling asked for the artifact to be categorized BY deltas and a sum
+  discards exactly that. `CubeValue.bondEnergy` offers the one sum the
+  law licenses (the two bond strata) and no other.
+
+★ R-B. RULING 7 ANSWERED: A ROTATION OF Z/64 IS AN EQUIVALENCE.
+EXECUTED as a THEOREM, not an assumption (TE12): a cyclic bond set is
+carried to itself by a rotation, so w_t cannot move. Open since
+2026-08-14 in docs/workflow-2026-08-14-sk-energy-registry.md section 7.
+
+  ★ THE STATEMENT NEEDED PRECISION AND THE FIRST DRAFT FAILED. As
+  exact equality of the three ENERGIES the axiom is FALSE: cWall sums
+  16 Doubles and a rotation REASSOCIATES that sum. The invariance is
+  EXACT on every integer observable (pooled histogram, wall multiset,
+  w_t) and holds to reassociation noise on the floats. The theorem
+  lives in the combinatorics; the last ulp is an artifact of adding in
+  an order. Both halves are gated, in Haskell and in Swift.
+
+  ★ OWED, AND IT IS BYTE-CHANGING: the shipped encoder is NOT rotation
+  equivariant, which is now a measurable defect rather than a habit.
+  The stats EMA seeds at tick 0 (DyadPipeline.swift:413-431), so tick
+  0 takes raw statistics while tick 63 is fully smoothed; StrataDescent
+  partitions time linearly with no `mod`; S4's chaos groups have
+  "lawful degenerate" tails, and a tail cannot exist on a torus. The
+  meter obeys the ruling today. The encoder owes it, and closing it
+  changes exported bytes, so it needs its own pass.
+
+★ R-C. CR3 IS SCOPED TO THE PICTURE. EXECUTED (comments and one test
+name; the assertions never changed because they were already right).
+`reweave(cube, .identity)` must reproduce INDEX FRAMES AND PALETTE
+TABLES exactly. Frame-derived provenance may differ.
+
+  The old "byte for byte" wording was false on the day it was written:
+  the capture path calls `makeGIF(frames:)` and emits PHASE F and
+  SK GENES; the re-weave path reaches `finish(..., frames: [])`, so
+  those sections are STRUCTURALLY ABSENT. Reconstructing them needs
+  the tensor to decode to rawRGB exactly, which CT11 declares it does
+  not, so the strict reading permanently blocked the tensor from
+  replacing the cube. ★ THIS UNBLOCKS THE CaptureTensor CALL-SITE
+  SWAP, which was staged behind CR3 and nothing else.
+
+★ R-D. THE MODEL IS HIERARCHICAL: 64 IN, 16 AND 4 INSIDE. OPEN, not
+started. Input = what the GIF actually carries, 64 slots x 14 numbers
++ 2 bits (DYAD STATS v3 + GROUNDHUE v2, which `rebuildTables` already
+decodes losslessly). Internal ladder 64 -> 16 -> 4, which is CL7's
+strata [256, 32, 4] and the 64/32/16 rung ladder, both forced. Costs a
+retrain and re-derives JH1's "ring = 16" as the MIDDLE level rather
+than the input. Note before starting: the deployed head builds 11 dims
+(DyadPipeline.swift:752-768) while nn/jepa/train.py:37 says
+`RING, DIM = 16, 6`, so it ships running dims it never trained on,
+gated by nothing.
+
+★ THE DEVIATION RULING COSTS NOTHING, MEASURED. EM13 is a TAUTOLOGY:
+spec/ui/EditMachine.hs:217 defines `encode c r = (c, r)`, the
+identity, so `watchPath` and `weavePath` are literally the same
+expression and the axiom is true by construction. It gates an
+ARCHITECTURAL claim (one encoder, differing only in retention); it
+never gated the byte identity its prose asserts. Applying "the preview
+and the capture may deviate" changes ZERO green axioms and ZERO tests.
+
+★ THE SURPLUS, MEASURED, because the ruling stands on it. Retained
+1835024 B against a 262144 B index plane, 7:1 per voxel. Colour is
+786432 -> 278528 (1.5:1, the quantization gap). ★ DEPTH IS 1048576 ->
+32768, EXACTLY 32:1: it reaches the artifact as one bit per voxel plus
+seven scalars for the whole capture in the DYAD MIXTURE line. Depth's
+shape, its motion and its per-frame histogram are 100% surplus, and
+depth is 57% of what is kept. Separately: the export TRANSIENTLY holds
+about 17 MB of staged OKLab (`stagedLabsAll` + `unstagedLabsAll`,
+6291456 B each) that dies when the closure returns, nine times the
+retained cube.
+
+★ AND THE FINDING THAT RESHAPES "THE MODEL CAN ONLY UNDERSTAND GIFS":
+there is NO LZW DECODER anywhere in the repo. Every LZW in
+Tesseract/, spec/ and nn/ is an encoder or a bit-counter, so an
+archived GIF's index plane is unreadable by any code that exists. But
+the GIF carries its own generator exactly, and `rebuildTables`
+(GIFMachine.swift:207) decodes it. A GIF-native model reads the
+GENERATOR, not the pixels, and that channel is already in every file
+ever exported.
+
+## ★ THE FUNNEL, MEASURED (Daniel's ask, 2026-08-15)
+
+"a series of serious tests. so I know how the information from the
+signal gets funneled. For example a raw reading of a series of related
+numbers can be summarized into one bigger number. categorize
+compression into its components. the function map our axioms and
+theorems to test the swift and metal."
+
+`Meter/FunnelLedger.swift` + `FunnelLedgerTests` (11 tests). Full
+write-up and every number: `docs/session-2026-08-15-funnel.md`.
+
+RateLadder has said since 2026-08-12 that the content-dependent strata
+"declare 1 here, their factors are MEASURED per capture by the RATE
+LEDGER". The shipped RATE LEDGER traces five end-to-end numbers and
+decomposes NOTHING. The promised factors had never been measured.
+
+★ THE FUNNEL IS A DAG, NOT A CHAIN. The latent forks off the same 64²
+colour and rejoins at assignment as the thing indices point INTO.
+Three paths, each telescoping exactly (RL2), each with a CONNECTIVITY
+check beside it so a product cannot telescope vacuously:
+
+  pixel     144 (discard) x 3 (VQ) x 5.39 (LZW)  = 2328 : 1
+  codebook  109.47 (summarize) x 1:6.84 (expand) =   16 : 1
+  depth     16 (discard) x 32 (to the role bit)  =  512 : 1
+
+★ FOUR KINDS, BECAUSE A RATIO CANNOT TELL THEM APART. DISCARD (the
+output is a MEMBER of the input), SUMMARIZE (a FUNCTION of all of it,
+the one Daniel named), RECODE (every sample kept, fewer bits each),
+EXPAND (more bits out than in, deterministically).
+
+★ THE APP DISCARDS MORE THAN IT SUMMARIZES. The test was written
+asserting the latent was the steepest stratum and FAILED: S2
+summarizes at 109.47:1, S0 discards at 144:1. Quantize.metal's
+downsampleRGB does ONE texture.read per output pixel, so 143 of 144
+samples never reach the answer, with no prefilter. Measured on
+Nyquist-pitch stripes the point sample and the box mean it is not
+diverge by 127.5 levels of 255 (zero on a constant field, so the
+divergence is a property of the SIGNAL). The discarded part is the
+part NO EDIT CAN EVER RECOVER.
+
+★ THE CODEBOOK PATH'S NET RATIO IS EXACTLY 16, and it is pinned by a
+test: 4096 pixels described by 256 entries is N/K, and N/K = 16 is
+TE2's BALANCED OCCUPANCY, the ground state of E. The palette costs one
+sixteenth of the pixels it describes because that is what "256 colours
+on a 64x64" means read as a rate.
+
+★ THE CODER DECOMPOSES BY IDENTITY, NOT BY FITTING (TE10): plane - E =
+the order-0 bill, and what LZW spends below that is what RUNS bought.
+On the moving-disc fixture: plane 524288 b, occupancy 211676 b, order-0
+bill 312612 b, LZW 97272 b, runs 68.9%. The fixture is smooth and
+unusually run-friendly; a real capture moves that number.
+
+## ★ ONE LAW, THREE PORTS: the funnel's entrance (2026-08-15)
+
+`spec/output/FrameGeometry.hs` G11-G13 (NEW) +
+`Signal/FrameGeometry.swift` (NEW; the spec had NO Swift port) +
+`MetalGeometryParityTests` (NEW; nothing in the suite had ever touched
+Metal's downsample path).
+
+★ THE KERNEL'S OWN VERIFICATION CLAIM WAS VACUOUS, and the shape of
+the mistake is the lesson. Quantize.metal:188-192 says "Port of
+FrameGeometry.hs ... Verified by Haskell axioms G5-G10 for all 4096
+output pixels." G5 is bounds, G6 alignment, G7 spacing, and every one
+is INVARIANT UNDER A RELABELLING of the output grid. The kernel applies
+a 90 degree rotation that the spec's `rgbSource` does not, and those
+axioms pass either way. They could not have caught it being wrong. The
+rotation lived in the kernel, in a comment, and in no axiom.
+
+  G11  the rotation is a BIJECTION of the output grid, so it moves no
+       information whatever else it is
+  G12  it has order exactly four
+  G13  ★ RGB and depth take the SAME turn. A quarter turn on one
+       stream only would read every pixel's depth from the wrong place,
+       SILENTLY. This is the axiom G5-G10 could not have provided.
+
+★ HOW THE METAL IS GATED: the test paints each source texel with its
+OWN coordinates in rgba32Float, so whatever the kernel writes to output
+(i,j) IS the address it read. Exact, all 4096 pixels, no tolerance. A
+colour check would have passed for any read inside a smooth region,
+which is what the old comment rested on.
+
+★ WHAT IT CANNOT SETTLE, and the test says so: whether the turn should
+be counter-clockwise is a fact about pixel memory on a physical iPhone
+17. No axiom and no simulator can answer it. The shipped direction is
+recorded AS DATA so a device pass has something to contradict, and one
+edit now answers it in all three ports.
+
+## ★ NEXT: the categories must fit the 64³ BIN tensor (Daniel, 2026-08-15)
+
+"We have found that there is a relationship between the funnel of
+signal to edit. These categories MUST fit the 64x64x64 BIN tensor idea.
+so that we can function map to an energy knowledge of a 64x64x64 voxel
+mass satisfying the GIF89a format."
+
+NOT STARTED. The pieces all landed today: the CATEGORIES
+(`FunnelLedger.Kind`), the ENERGY (`TilingEnergy.CubeValue`, three
+disjoint strata in bits), the TENSOR (`Store/CaptureTensor.swift`, call
+site unblocked by R-C), the FORMAT (per-frame LCTs, byte-gated).
+
+Four questions the next session must answer, in
+docs/session-2026-08-15-funnel.md §5: is a BIN a voxel or a bin OF
+voxels; which category does each VOXEL carry (today a category belongs
+to a STRATUM, an arrow, not to a voxel, so this wants a per-voxel
+provenance field that nothing computes); does the energy become a FIELD
+(CL6 concluded the metric must be a field from the other side, and
+these may be the same requirement arriving twice); and what GIF89a
+actually permits such a field to ride in.
+
 ## Export contract
 
 ★ PER-FRAME PALETTES ONLY (Daniel's decree, 2026-08-12, NON-
@@ -712,7 +933,12 @@ time. That placement is retired; the model's home is the EDIT path
 (docs/model-placement.md). Re-enable only after a truth-referenced
 retrain AND a placement that reads the state without writing it.
 
-nn/descent is RETIRED (lab deleted 2026-08-14; git history keeps it).
+nn/descent is RETIRED as a MODEL PATH, but the lab is still on disk
+(corrected 2026-08-15: this line said "lab deleted 2026-08-14" and the
+directory is present, with README.md retitled "STUDIED AND
+INTEGRATED"; nothing was deleted, and DescentAssign.mlpackage is still
+in it). Retired means: do not build on it, do not ship a second
+assignment artifact.
 DL6/DL7 stay law in spec/neural/DescentLadder.hs; lookahead-L2 belongs
 inside DyadAssign if it ever ships, never as a separate artifact.
 

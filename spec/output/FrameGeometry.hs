@@ -14,6 +14,8 @@
 
 module FrameGeometry where
 
+import Data.List (sort)
+
 -- ════════════════════════════════════════════════════════════════
 -- § 1. UNIVERSAL CROP (from Block.hs)
 -- ════════════════════════════════════════════════════════════════
@@ -146,6 +148,108 @@ axiom_G7 = all (\sz ->
   ) allSizes
 
 -- ════════════════════════════════════════════════════════════════
+-- § 5b. ★ THE ROTATION, WHICH WAS SHIPPED AND NEVER SPECIFIED
+-- ════════════════════════════════════════════════════════════════
+--
+-- Added 2026-08-15. Solve/Quantize.metal has read the sensor ROTATED
+-- since it was written:
+--
+--   srcX = cropX + gid.y * step + halfStep
+--   srcY = cropY + (outputSize - 1 - gid.x) * step + halfStep
+--
+-- and its comment says "Port of FrameGeometry.hs rgbSource/depthSource
+-- ... Verified by Haskell axioms G5-G10 for all 4096 output pixels."
+--
+-- ★ THAT VERIFICATION WAS VACUOUS, and it is worth saying why rather
+-- than just fixing it. G5 is about BOUNDS, G6 about ALIGNMENT, G7
+-- about SPACING, and all three are invariant under any relabelling of
+-- the output grid. They pass for the rotated read and for the
+-- unrotated one equally, so they could never have caught a rotation
+-- that was right or wrong. The kernel was gated by axioms that do not
+-- discriminate the thing it was doing.
+--
+-- The reason the rotation exists is real (videoRotationAngle = 90
+-- reports portrait dimensions while pixel memory may still be
+-- landscape), so the fix is to STATE it, not to remove it. Once it is
+-- a function here, one law has three ports: this file, the Swift, and
+-- the Metal, and a parity test can compare all three at every one of
+-- the 4096 output pixels.
+
+-- | The 90 degree counter-clockwise relabelling of the output grid:
+--   output (x, y) reads the source block that the unrotated law would
+--   have given to (y, n-1-x). An involution only at n = 1; applied
+--   four times it is the identity (G12).
+rotateCCW :: Int -> (Int, Int) -> (Int, Int)
+rotateCCW n (x, y) = (y, n - 1 - x)
+
+-- | What the shipped kernel actually computes.
+rgbSourceRotated :: OutputSize -> Int -> Int -> (Int, Int) -> (Int, Int)
+rgbSourceRotated sz x y crop = uncurry (rgbSource sz) (rotateCCW (outSide sz) (x, y)) crop
+
+depthSourceRotated :: OutputSize -> Int -> Int -> (Int, Int) -> (Int, Int)
+depthSourceRotated sz x y crop =
+  uncurry (depthSource sz) (rotateCCW (outSide sz) (x, y)) crop
+
+-- (G11) ★ THE ROTATION IS A BIJECTION OF THE OUTPUT GRID, so it moves
+--        no information: the rotated read visits exactly the same
+--        multiset of source blocks as the unrotated one, and visits
+--        each exactly once. Whatever else the rotation is, it cannot
+--        be a place where signal is lost.
+axiom_G11 :: Bool
+axiom_G11 = all bijective allSizes
+  where
+    bijective sz =
+      let n = outSide sz
+          grid = [(x, y) | x <- [0 .. n-1], y <- [0 .. n-1]]
+          img  = map (rotateCCW n) grid
+      in sort img == sort grid            -- a permutation of the grid
+      && all (\(a, b) -> a >= 0 && a < n && b >= 0 && b < n) img
+      && sort (map (\(x, y) -> rgbSourceRotated sz x y (0, 0)) grid)
+         == sort (map (\(x, y) -> rgbSource sz x y (0, 0)) grid)
+
+-- (G12) FOUR ROTATIONS ARE THE IDENTITY. The relabelling has order 4
+--        exactly, which is what makes "90 degrees" a claim rather
+--        than a description.
+axiom_G12 :: Bool
+axiom_G12 = all order4 allSizes
+  where
+    order4 sz =
+      let n = outSide sz
+          r = rotateCCW n
+          grid = [(x, y) | x <- [0 .. n-1], y <- [0 .. n-1]]
+      in all (\p -> r (r (r (r p))) == p) grid
+      && any (\p -> r p /= p) grid
+      && all (\p -> r (r p) == (\(x, y) -> (n-1-x, n-1-y)) p) grid
+
+-- (G13) ★ THE ROTATION IS APPLIED TO RGB AND DEPTH ALIKE, which is
+--        why G6's alignment survives it. If only one stream were
+--        rotated the two would disagree by a quarter turn and the
+--        role law would read depth from the wrong place, silently.
+--        This is the axiom G5-G10 could not have provided.
+axiom_G13 :: Int -> Int -> Int -> Int -> Bool
+axiom_G13 rgbW rgbH dW dH = all sameQuarterTurn allSizes
+  where
+    sameQuarterTurn sz =
+      let n = outSide sz
+          (rcx, rcy) = rgbCropOffset rgbW rgbH
+          (dcx, dcy) = depthCropOffset dW dH
+      in all (\(x, y) ->
+                let (rx, ry) = rgbSourceRotated sz x y (rcx, rcy)
+                    (dx, dy) = depthSourceRotated sz x y (dcx, dcy)
+                in abs ((rx - rcx) - (dx - dcx) * scaleFactor) <= scaleFactor
+                && abs ((ry - rcy) - (dy - dcy) * scaleFactor) <= scaleFactor)
+             [(x, y) | x <- [0 .. n-1], y <- [0 .. n-1]]
+
+-- ★ AND THE ONE THIS FILE STILL DOES NOT SETTLE (stated, not hidden):
+-- whether the quarter turn is the RIGHT one, or whether it should be
+-- clockwise, is a fact about the sensor's memory layout on a physical
+-- iPhone 17. No axiom can decide it and no simulator can either. It is
+-- the device pass's question. What these three axioms buy is that the
+-- three ports now agree with EACH OTHER, so when the device answers,
+-- one edit answers it everywhere.
+
+
+-- ════════════════════════════════════════════════════════════════
 -- § 6. MAIN
 -- ════════════════════════════════════════════════════════════════
 
@@ -201,6 +305,12 @@ main = do
   check "G6  alignment (1080, 360)"
     [axiom_G6 sz 1080 1920 360 640 | sz <- allSizes]
   check "G7  block spacing = step"         [axiom_G7]
+  check "G11 ★ the shipped ROTATION is a bijection: no signal lost"
+        [axiom_G11]
+  check "G12 four quarter turns are the identity, and none is"
+        [axiom_G12]
+  check "G13 ★ RGB and depth take the SAME quarter turn"
+        [axiom_G13 1080 1920 360 640, axiom_G13 1608 1206 536 402]
   putStrLn ""
 
 padL :: Int -> String -> String

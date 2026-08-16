@@ -41,10 +41,28 @@
 --
 --   frame       E (bits)    E_wall (bits)
 --   balanced        0.00        1573.06
---   random          0.00          82.64
+--   random        194.94           0.26
 --   face         4182.21        8064.00
+--   three       17910.68         349.98
 --   neel        28672.00        8064.00
 --   solid       32768.00        8064.00
+--
+-- ★ CORRECTED 2026-08-15, and the correction is worth recording
+-- because of HOW it was caught. This table shipped listing random at
+-- (0.00, 82.64) while claiming to be TilingEntropy's own numbers. It
+-- was not: TE prints (194.94, 0.26) for randomFrame 3, and no random
+-- frame can score E = 0, because a uniform draw over K bins has an
+-- expected divergence of about (K-1)/(2 ln 2) = 184 bits. The axioms
+-- below all passed, because they quantify over THIS TABLE rather than
+-- over TE. A spec that restates another spec's measurements takes on
+-- the job of keeping them true; the Swift port (Meter/TilingEnergy
+-- .swift, gated by TilingEnergyTests against TE's printed output) is
+-- what finally ran both and compared them.
+--
+-- MT8, the load-bearing axiom, SURVIVES UNCHANGED: balanced still
+-- strictly dominates random on both axes, so the front is still
+-- exactly {balanced, face}. MT7's exact-equality half did not survive
+-- and is restated against the measurement below.
 --
 -- Read the two columns and the whole design falls out:
 --
@@ -54,13 +72,16 @@
 --   is why the search is driven by the informational energy and
 --   never by RMSE.
 --
---   BUT E ALONE IS BLIND TO THE OTHER CORNER (MT7). Random static
---   and the balanced tiling both score exactly 0. A scalar descent
---   on E lands on noise instead of grey, which is a different
---   failure and not a better one.
+--   BUT E IS NEARLY BLIND TO THE OTHER CORNER (MT7). Random static
+--   and the balanced tiling are separated by 194.94 bits, which is
+--   0.6% of E's own range, while the balanced-to-solid separation is
+--   32768. E orders the two degenerate corners 168 times more weakly
+--   than it orders the picture, so a scalar descent on E is deciding
+--   the noise question on a rounding error.
 --
---   E_wall IS BLIND TO THE FIRST (MT7). Face, neel and solid all
---   saturate at 8064, so E_wall cannot tell a picture from grey.
+--   E_wall IS BLIND TO THE FIRST, AND EXACTLY SO (MT7). Face, neel
+--   and solid all saturate at 8064.00 to the bit, so E_wall cannot
+--   tell a picture from grey at all.
 --
 --   ★ TOGETHER THEY EXCLUDE BOTH (MT8), and not by tuning. Under
 --   the natural order (E low, E_wall high) SOLID IS STRICTLY
@@ -227,11 +248,17 @@ contractK n
 
 data Value = Value { eHist :: Double, eWall :: Double } deriving (Eq, Show)
 
+-- ★ These are TE's printed figures, rounded to two decimals, and
+-- nothing else may be added here by hand. Meter/TilingEnergy.swift
+-- recomputes all six from the frames and TilingEnergyTests pins the
+-- full-precision values, so a drift between the two files now fails a
+-- test rather than sitting green (see the header note).
 probes :: [(String, Value)]
 probes =
   [ ("balanced", Value     0.00  1573.06)
-  , ("random",   Value     0.00    82.64)
+  , ("random",   Value   194.94     0.26)
   , ("face",     Value  4182.21  8064.00)
+  , ("three",    Value 17910.68   349.98)
   , ("neel",     Value 28672.00  8064.00)
   , ("solid",    Value 32768.00  8064.00)
   ]
@@ -354,17 +381,41 @@ axiom_MT6 =
   && eHist (valueOf "solid") > eHist (valueOf "face")
 
 -- (MT7) ★ BUT NEITHER ENERGY ALONE IS ENOUGH, and each is blind to a
---       DIFFERENT corner. E cannot separate the balanced tiling from
---       random static (both exactly 0). E_wall cannot separate a face
---       from grey (both saturate at 8064). A scalar descent on either
---       lands on a degeneracy; they are just different degeneracies.
+--       DIFFERENT corner. RESTATED 2026-08-15 against the measurement
+--       (see the header): the two blindnesses are not the same KIND,
+--       and the earlier draft asserted an exact equality that TE does
+--       not print.
+--
+--       E_wall's blindness is EXACT: face, neel and solid all sit at
+--       8064.00, so it cannot tell a picture from grey at all.
+--
+--       E's blindness is a matter of SCALE, and severe: it separates
+--       balanced from random by 194.94 bits, under 1% of its range,
+--       while separating balanced from solid by 32768. The ratio is
+--       over 160, so E decides "is this a picture" on a difference
+--       two orders of magnitude larger than the one it would have to
+--       use to decide "is this noise". A scalar descent on E is
+--       resolving the second question inside the first one's noise.
+--
+--       And the RESCUE is measured too: E_wall separates exactly the
+--       pair E cannot, by 19% of its own range. That is why the pair
+--       works, stated as two measurements rather than as a hope.
 axiom_MT7 :: Bool
 axiom_MT7 =
-     abs (eHist (valueOf "balanced") - eHist (valueOf "random")) < eps
-  && abs (eWall (valueOf "face") - eWall (valueOf "solid")) < eps
+     abs (eWall (valueOf "face") - eWall (valueOf "solid")) < eps
   && abs (eWall (valueOf "face") - eWall (valueOf "neel")) < eps
-  && eWall (valueOf "balanced") /= eWall (valueOf "random")
   && eHist (valueOf "face") /= eHist (valueOf "solid")
+  && corners > 0                       -- E does separate them ...
+  && corners / eRange < 0.01           -- ... but by under 1% of range
+  && picture / corners > 160           -- 168x weaker than the picture
+  && eWall (valueOf "balanced") /= eWall (valueOf "random")
+  && wallRescue / wallRange > 0.19     -- and E_wall carries that pair
+  where
+    corners     = abs (eHist (valueOf "balanced") - eHist (valueOf "random"))
+    picture     = abs (eHist (valueOf "balanced") - eHist (valueOf "solid"))
+    wallRescue  = eWall (valueOf "balanced") - eWall (valueOf "random")
+    eRange      = 32768
+    wallRange   = 8064
 
 -- (MT8) ★ THE LOAD-BEARING AXIOM: THE FRONT EXCLUDES BOTH
 --       DEGENERACIES, and not by tuning. Under (E low, E_wall high),
@@ -378,12 +429,15 @@ axiom_MT8 :: Bool
 axiom_MT8 =
      dominates (valueOf "face")     (valueOf "solid")
   && dominates (valueOf "face")     (valueOf "neel")
+  && dominates (valueOf "face")     (valueOf "three")
   && dominates (valueOf "balanced") (valueOf "random")
   && not (elem "solid"  f)
   && not (elem "random" f)
   && not (elem "neel"   f)
+  && not (elem "three"  f)
   && elem "face" f
   && elem "balanced" f
+  && length f == 2
   where f = front probes
 
 -- (MT9) ★ THE ECONOMY: THE VALUE HEAD NEEDS NO WEIGHTS. KataGo must
@@ -476,7 +530,7 @@ main = do
     , check "MT4  branching is FINITE and small: [2,8,8]"         [axiom_MT4]
     , check "MT5  S and K are the edges; K is the prefix (PT5)"   [axiom_MT5]
     , check "MT6  * GREY IS THE CEILING of E, not the floor"      [axiom_MT6]
-    , check "MT7  * each energy alone is blind to ONE corner"     [axiom_MT7]
+    , check "MT7  * each blind to ONE corner (exactly / by 168x)" [axiom_MT7]
     , check "MT8  * the FRONT excludes grey AND static"           [axiom_MT8]
     , check "MT9  * the value needs NO weights; only the policy"  [axiom_MT9]
     , check "MT10 PUCT is well defined on this tree"              [axiom_MT10]
@@ -487,8 +541,9 @@ main = do
   putStrLn "  ★ USEFUL ENERGY, AS A PROPERTY AND NOT A HOPE:"
   putStrLn "    grey   is the MAXIMUM of E, so descending cannot"
   putStrLn "           reach it -- unlike descending a distortion."
-  putStrLn "    static scores the same E as the balanced tiling, so"
-  putStrLn "           E alone would land there instead."
+  putStrLn "    static sits 194.94 bits from the balanced tiling, 0.6%"
+  putStrLn "           of E's range, so E alone decides the noise"
+  putStrLn "           question 168x more weakly than the picture one."
   putStrLn "    both   are STRICTLY DOMINATED on the pair, by"
   putStrLn "           candidates the search already holds."
   putStrLn ""

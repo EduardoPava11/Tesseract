@@ -14,10 +14,26 @@
 // is the same pipeline applied to a retained cube instead of a live
 // one (EM12/EM13: weave = watch + keep, differing only in retention).
 //
-// CR3 IS THE GATE. `reweave(cube, .identity)` must reproduce the
-// archived GIF byte for byte, or retention is not evidence that the
-// cube is the data the artifact came from. CubeStoreTests holds that
-// gate; it passes today.
+// CR3 IS THE GATE, AND IT IS SCOPED TO THE PICTURE (Daniel's ruling,
+// 2026-08-15). `reweave(cube, .identity)` must reproduce the archived
+// GIF's INDEX FRAMES AND PALETTE TABLES exactly, or retention is not
+// evidence that the cube is the data the artifact came from.
+// CubeStoreTests holds that gate; it passes today, and it is what that
+// file has always actually asserted.
+//
+// ★ WHY "BYTE FOR BYTE" WAS THE WRONG GATE, stated because the old
+// wording is quoted in several places: the capture path calls
+// `GIFMachine.makeGIF(frames:)` and emits the PHASE F and SK GENES
+// provenance sections; this path reaches `finish(..., frames: [])`, so
+// those sections cannot be written at all. Byte equality was already
+// false, by construction, on the day it was claimed. Reconstructing
+// them would require the tensor to decode to rawRGB exactly, which
+// CT11 declares it does not — so the strict reading would have
+// permanently blocked the tensor from replacing the cube.
+//
+// Under the ruling the frame-derived provenance may differ and the
+// picture may not. That is what unblocks the CaptureTensor call-site
+// swap, which was staged behind CR3 and nothing else.
 //
 // ★ SCOPE, STATED HONESTLY. The Edit's five axes are the spec's, and
 // all five are REPRESENTABLE here. Only the identity point is

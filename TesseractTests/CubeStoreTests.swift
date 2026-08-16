@@ -6,12 +6,28 @@
 // CR1 retains the cube so the capture can be re-woven. CR3 is what
 // makes retention EVIDENCE rather than a second copy of an unknown:
 //
-//     reweave(cube, identityEdit) must reproduce the archived GIF
-//     BYTE FOR BYTE
+//     reweave(cube, identityEdit) must reproduce the archived GIF's
+//     INDEX FRAMES AND PALETTE TABLES, exactly
 //
 // A store that round-trips its own bytes proves only that it can
 // write and read. CR3 proves the retained cube is the data the
 // artifact actually came from — which is the whole claim.
+//
+// ★ SCOPED 2026-08-15 (Daniel's ruling), from "byte for byte" to
+// "the picture". The old wording was never what this file checked,
+// and it could not have been: the capture path calls
+// `GIFMachine.makeGIF(frames:)`, which emits the PHASE F and SK GENES
+// provenance sections guarded on having the frames; the re-weave path
+// calls `finish(..., frames: [])`, so those sections are STRUCTURALLY
+// ABSENT from a re-woven file. A re-woven identity has differed from
+// its archived twin in comment bytes since the day reweave landed.
+//
+// The ruling makes CR3 a statement about the PICTURE rather than
+// about the file, which is what the assertions below have always
+// said. Frame-derived provenance may differ. Indices and tables may
+// not. That is the honest gate, and it is the one that unblocks the
+// CaptureTensor call-site swap, which was staged behind CR3 and
+// nothing else.
 
 import XCTest
 @testable import Tesseract
@@ -111,7 +127,7 @@ final class CubeStoreTests: XCTestCase {
 
     // MARK: - ★ CR3 — the soundness gate
 
-    func testIdentityReweaveReproducesTheArtifactByteForByte() throws {
+    func testIdentityReweaveReproducesTheIndicesAndTables() throws {
         let c = syntheticCube(seed: 7)
 
         // The artifact, as the capture would have made it.
