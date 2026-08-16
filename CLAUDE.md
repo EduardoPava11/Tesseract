@@ -276,8 +276,34 @@ entirely on the capture having a genuinely QUIET phase, and a sensor
 noise floor destroys that phase. Measured (nn/tensor-codec/
 noise_floor.py) on the same cube:
 
-  noiseless           mixture finds two phases, 24.9% loud, 14.7 : 1
+  noiseless           mixture finds two phases, 15.6% loud, 15.42 : 1
   noise floor 0.0015  mixture finds ONE phase -> CT7 says pay flat
+
+★ THESE NUMBERS WERE CORRECTED 2026-08-15 and the row above used to
+read "24.9% loud, 14.7 : 1". TWO INDEPENDENT DEFECTS were feeding it,
+and they partly cancelled, which is why the headline barely moved:
+
+  1. build_model.py:212 wrote the crossover as log((1-w)/w) where
+     DepthMixture.hs:182 and the Swift port both write
+     log(piB/(1-piB)). The reciprocal returns the REFLECTION of the
+     crossover about the midpoint. Corrected, the loud fraction falls
+     from 24.86% to 15.576%, which is 1914 of 12288 roots and
+     reproduces the Swift port EXACTLY.
+  2. Both Python scripts priced a loud root at 72 bits, omitting the
+     4 bytes of g the shipped format writes (perLoud = 13 B, not 9).
+     Corrected, colour costs 50994 B.
+
+The ratio is now 786432 / 50994 = 15.42 : 1, agreed to the byte by
+three implementations (spec/neural/TensorEncoder.hs, the Swift port,
+and noise_floor.py). TA10 pins the first two together so this class of
+drift fails a gate instead of surviving in a comment.
+
+★ AND THE 95.3%-QUIET FIGURE ABOVE IS NOW INCONSISTENT WITH THIS ONE.
+15.6% loud is 84.4% quiet. The zerotree table's 4.7% loud, TA9's old
+hardcoded 0.047 and this line's mixture verdict are three different
+loud fractions in one document, and only the 15.576% has been
+reproduced across implementations. NOT RECONCILED, and it is a
+measurement question rather than a ruling.
 
 CT7 is not wrong: it asks "are there two populations of deviation
 magnitude", and under noise there genuinely are not. But the question
@@ -285,10 +311,12 @@ that decides whether a sign is worth a bit is "is this subtree louder
 than noise alone". The candidate is Donoho-Johnstone (1994) MAD
 thresholding, which is derived exactly the way the crossover is
 (sigma = MAD/0.6745 is a Gaussian identity, not a tuning). Measured,
-it kills 27.9% of subtrees for +0.9% rmse. NOT TAKEN — which question
-the significance bit asks is Daniel's ruling, and the 95.3%-quiet
-figure the zerotree was ruled on now looks optimistic for any capture
-with real sensor noise.
+it kills 27.4% of subtrees for +0.9% rmse (27.9% before noise_floor.py
+was reading `reference(cube)[3]`, which is g32 ALONE, where CT7's
+statistic is dev16_of(g32, g64) over all 72 descendants; corrected
+2026-08-15). NOT TAKEN: which question the significance bit asks is
+Daniel's ruling, and the quiet figure the zerotree was ruled on still
+looks optimistic for any capture with real sensor noise.
 
 ## ★ S8: THE RUNGS WRITE THE INDEX (Daniel's ruling, 2026-08-14)
 
