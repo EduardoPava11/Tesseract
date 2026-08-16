@@ -189,6 +189,88 @@ while IFS= read -r line; do
   echo "      $line"
 done < <(grep -rniE "fall[- ]?backs?|falls back" Tesseract --include="*.swift" --include="*.metal" || true)
 
+# ── LINT-NO-TAUTOLOGY ───────────────────────────────────────────
+# ★ AN AXIOM THAT CANNOT FAIL IS WORSE THAN NO AXIOM, because it
+# reports green (Daniel, 2026-08-15: "all you have said is 'its green'
+# yeah it is all related and made to hit green your job is to break
+# things and prove things about the app we are building").
+#
+# This repo diagnosed the disease TWICE and never encoded a check:
+#   FrameGeometry  Quantize.metal claimed "verified by G5-G10", and
+#                  every one of those axioms is invariant under a
+#                  relabelling of the output grid, so a 90 degree
+#                  rotation lived in the kernel undetected.
+#   MerkleSearch   restated another spec's measurement table in its own
+#                  comment, got it wrong, and every axiom passed
+#                  because they quantified over THAT TABLE.
+# An adversarial run then found two more of the mechanical shape, both
+# fixed in cacb55d. Those two shapes are greppable, so they are checked
+# here. The relabelling-invariance shape is NOT mechanical and this
+# lint does not pretend to catch it.
+#
+# Scope is spec/, which is the first time this script leaves the view
+# tree. That is deliberate: the spec layer is the thing every other
+# layer is checked against, so a blind axiom there is the most
+# expensive kind.
+#
+# Escape hatch, mirroring the others:
+#   -- LINT-ALLOW-TAUTOLOGY: <reason>
+# on the line, which makes each instance a decision someone signed.
+
+# T1: a list zipped with ITSELF. `zip rs rs` pairs each element with
+# itself, so `f a == f b` over it is `f a == f a`. This was TA6.
+while IFS= read -r line; do
+  echo "$line" | grep -q "LINT-ALLOW-TAUTOLOGY" && continue
+  # COMMENTS ARE EXEMPT, and they must be: a fix is worth explaining,
+  # and TensorEncoder's TA6 now quotes the exact defect it replaced.
+  # A lint that forbids naming the bug it prevents forces the next
+  # reader to rediscover it.
+  echo "$line" | sed -E 's/^[^:]*:[0-9]+://' | grep -qE "^[[:space:]]*--" && continue
+  note "LINT-NO-TAUTOLOGY: a list zipped with itself compares elements to themselves:"
+  echo "      $line"
+done < <(grep -rnE "\bzip(With +[A-Za-z_][A-Za-z0-9_']*)? +([A-Za-z_][A-Za-z0-9_']*) +\2\b" \
+           spec --include="*.hs" || true)
+
+# ★ A GENERAL `x == x` CHECK WAS WRITTEN AND THEN DELETED, and the
+# reason belongs here so nobody adds it back. It fired on six axioms
+# and every one was a real law: `blend (0,0,1) feed == feed` is an
+# identity, `loopK 0 palette8 targets q0 == q0` is a fixed point,
+# `applyPerm p t == t` counts a symmetry group's order. `f x == x` is
+# the canonical way to STATE an identity law, and a lint that flags
+# those is worse than no lint, because it gets switched off and takes
+# the true positives with it. The vacuous shape is not "both sides
+# mention the same name", it is "both sides are the same LITERAL",
+# which is what T3 tests.
+
+# T3: THE CL7 SHAPE, and the one worth the effort. A binding whose
+# ALL-LITERAL value is then compared against that same binding:
+#     axiom = levels == [4, 32, 256]  where levels = [4, 32, 256]
+# Both sides are the same constant, so it certifies any value.
+#
+# ★ THE LITERAL RESTRICTION IS LOAD-BEARING, not caution. DetentDial's
+# DD1 has this exact SHAPE, `detents Allocation == [length pairLadder]`
+# against a definition that reads the same, and it is a GOOD axiom: the
+# right side is a DERIVATION, so literalising the definition to [8]
+# breaks it. Restating a derivation pins a definition to its source.
+# Restating a constant pins nothing. Only the second is the defect, so
+# the value must be digits and separators alone.
+for f in $(grep -rl "" spec --include="*.hs" 2>/dev/null || true); do
+  while IFS= read -r bind; do
+    name=$(echo "$bind" | sed -E 's/^.*[^A-Za-z0-9_'"'"']([A-Za-z_][A-Za-z0-9_'"'"']*) *= *\[.*$/\1/')
+    lit=$(echo "$bind" | sed -E 's/^[^=]*= *(\[[^]]*\]).*$/\1/')
+    [ -z "$name" ] && continue
+    [ -z "$lit" ] && continue
+    # literals ONLY: digits and separators. A derivation restated is a
+    # pin, not a tautology. See the note above.
+    echo "$lit" | grep -qE "^\[[0-9,.eE+ -]*\]$" || continue
+    hit=$(grep -nF "$name == $lit" "$f" 2>/dev/null | grep -v "LINT-ALLOW-TAUTOLOGY" || true)
+    [ -z "$hit" ] && continue
+    note "LINT-NO-TAUTOLOGY: a binding compared against its own literal (derive it, do not restate it):"
+    echo "      $f: $name = $lit"
+    echo "      $hit"
+  done < <(grep -E "^[^-]*\b[A-Za-z_][A-Za-z0-9_']* *= *\[[^]]*\]" "$f" 2>/dev/null || true)
+done
+
 if [ $FAIL -eq 0 ]; then
   echo "  ✓ grid lint clean ($(echo $GOVERNED | wc -w | tr -d ' ') governed dirs)"
   exit 0
