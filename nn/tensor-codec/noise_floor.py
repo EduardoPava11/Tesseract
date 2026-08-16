@@ -32,7 +32,7 @@ RUN:  python3 noise_floor.py
 import numpy as np
 
 from build_model import (F64, S64, CH, N32, N64, NSUB,
-                         ref_pool, ref_parent, reference,
+                         ref_pool, ref_parent, reference, dev16_of,
                          synthetic_cube, derived_threshold)
 
 F32, S32, F16, S16 = 32, 32, 16, 16
@@ -72,7 +72,9 @@ def donoho(dev16, r64):
 
 
 def bits(loud):
-    return int(np.ceil(loud * 4096 * CH * 72 / 8)) + 4096 * CH // 8 + 4096 * CH * 2
+    # 104 = 72 sign bits + the 4 bytes of g the shipped format writes.
+    # Was 72 until 2026-08-15; see build_model.report_bytes for why.
+    return int(np.ceil(loud * 4096 * CH * 104 / 8)) + 4096 * CH // 8 + 4096 * CH * 2
 
 
 def row(name, cube, keep16, loud):
@@ -87,7 +89,11 @@ def main():
     for label, noise in [("noiseless", 0.0), ("sensor noise 0.0015", 0.0015)]:
         cube = synthetic_cube(noise=noise).astype(np.float64)
         _, _, r32, r64 = residuals(cube)
-        dev16 = reference(cube)[3]
+        # CT7's statistic is the mean deviation over ALL 72 descendants,
+        # which is dev16_of(g32, g64). This read reference(cube)[3]
+        # until 2026-08-15, i.e. g32 ALONE, so every row below was
+        # thresholding the rung-32 band and calling it the subtree.
+        dev16 = dev16_of(*reference(cube)[3:5])
         print(f"\n  === {label} ===")
 
         ones = np.ones_like(dev16)

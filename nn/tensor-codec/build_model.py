@@ -206,8 +206,25 @@ def derived_threshold(dev16):
     ll1 = (-0.5 * ((z - z.mean()) ** 2 / v1 + np.log(2 * np.pi * v1))).sum()
     if 2 * (ll2 - ll1) < 3 * np.log(len(z)) or abs(mu[1] - mu[0]) < 1e-9:
         return None, "single phase: no quiet population, flat is the law"
-    # Tied variance ⇒ the crossover is the log-odds-weighted midpoint.
-    cross = 0.5 * (mu[0] + mu[1]) + var * np.log((1 - w) / w) / (mu[1] - mu[0])
+    # Tied variance means the crossover is the log-odds-weighted midpoint.
+    #
+    # THE SIGN WAS INVERTED HERE UNTIL 2026-08-15, and it moved every
+    # number this script prints. The law is spec/temporal/DepthMixture.hs
+    # crossover:
+    #     (muF + muB) / 2 + tau * log(piB / (1 - piB)),  tau = var / (muF - muB)
+    # and the Swift port writes the same. This line wrote log((1-w)/w),
+    # the reciprocal, so it returned the REFLECTION of the crossover
+    # about the midpoint rather than the crossover.
+    #
+    # Which side was wrong was decided by measurement, not by deferring
+    # to Haskell: at the corrected point the two weighted component
+    # densities are equal (ratio 1.0000); at the old point the quiet
+    # component was 29.4x the loud one, and the reported loud fraction
+    # (24.9%) EXCEEDED the loud component's own fitted weight (15.6%),
+    # which is internally incoherent. With piB = 0.844 the equal
+    # posterior boundary must also shift TOWARD the minority loud
+    # component, which the corrected value does and the old one did not.
+    cross = 0.5 * (mu[0] + mu[1]) + var * np.log(w / (1 - w)) / (mu[1] - mu[0])
     return float(np.exp(cross)), "two phases"
 
 
@@ -219,7 +236,13 @@ def report_bytes(label, dev16, thr, verdict):
         loud = float(np.mean(dev16 >= thr))
     coarse = 4096 * CH * 2                   # rung 16, fp16 (TA5)
     sig = roots // 8                         # one significance bit each
-    signs = int(np.ceil(loud * roots * 72 / 8))
+    # 72 sign bits PLUS the 4 bytes of g the shipped format writes.
+    # This said 72 alone until 2026-08-15, which prices a predicted-g
+    # format the encoder does not write: Store/CaptureTensor.swift
+    # charges perLoud = 4 + 72/8 = 13 B and writeSubtree emits two fp16
+    # g values that decode reads back. spec/neural/TensorEncoder.hs
+    # bitsPerLoudRoot is the same 104, pinned to the port by TA10.
+    signs = int(np.ceil(loud * roots * 104 / 8))
     total = coarse + sig + signs
     flat = F64 * S64 * S64 * CH              # 8-bit voxel colour today
     print(f"  {label}")
