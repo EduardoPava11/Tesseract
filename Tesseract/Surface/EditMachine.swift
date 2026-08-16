@@ -352,7 +352,29 @@ enum EditMachine {
         case CameraManager.noCenterStageMessage:                return .noCenterStage
         case FaceCaptureManager.faceTrackingUnsupportedMessage: return .noFaceTracking
         case CameraManager.encodeFailedMessage:                 return .exportFailed
-        default:                                                return .unknown(message)
+        // ★ SB4 (2026-08-16). `.interrupted(_)` has had a headline, an
+        // explainer and a `.wait` recovery since the port, and nothing
+        // ever produced one. These four are the ordinary ways iOS takes
+        // the camera away, and every one clears by itself.
+        case CameraManager.interruptedInUseMessage:      return .interrupted(.cameraInUse)
+        case CameraManager.interruptedBackgroundMessage: return .interrupted(.backgrounded)
+        case CameraManager.interruptedMultiAppMessage:   return .interrupted(.multipleApps)
+        case CameraManager.interruptedThermalMessage:    return .interrupted(.overheated)
+        default:
+            // ★ SB5: the counts ride in the message because the channel
+            // between the managers and this machine is a String. Parsed
+            // here rather than at the call site so the machine stays the
+            // one place that turns a message into a refusal.
+            if message.hasPrefix(CameraManager.captureIncompletePrefix) {
+                let counts = message
+                    .dropFirst(CameraManager.captureIncompletePrefix.count)
+                    .split(separator: "/")
+                if counts.count == 2,
+                   let kept = Int(counts[0]), let wanted = Int(counts[1]) {
+                    return .captureIncomplete(kept: kept, wanted: wanted)
+                }
+            }
+            return .unknown(message)
         }
     }
 

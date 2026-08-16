@@ -757,9 +757,15 @@ and the capture may deviate" changes ZERO green axioms and ZERO tests.
 seven scalars for the whole capture in the DYAD MIXTURE line. Depth's
 shape, its motion and its per-frame histogram are 100% surplus, and
 depth is 57% of what is kept. Separately: the export TRANSIENTLY holds
-about 17 MB of staged OKLab (`stagedLabsAll` + `unstagedLabsAll`,
-6291456 B each) that dies when the closure returns, nine times the
-retained cube.
+staged OKLab that dies when the closure returns. ★ THIS FIGURE WAS
+STALE AND IS CORRECTED (2026-08-16). It read "about 17 MB
+(`stagedLabsAll` + `unstagedLabsAll`, 6291456 B each) ... nine times
+the retained cube", and `unstagedLabsAll` was DELETED in be4dbbf: it
+was retained for one reader that is skipped entirely on single-phase
+captures, and the labs derive from `rgb`, which is in scope anyway. One
+6291456 B array remains, and a measured export peaks about 35 to 40 MB
+above baseline. The stale line is recorded rather than quietly swapped
+because the commit that made it wrong was one of ours.
 
 ★ AND THE FINDING THAT RESHAPES "THE MODEL CAN ONLY UNDERSTAND GIFS":
 there is NO LZW DECODER anywhere in the repo. Every LZW in

@@ -49,10 +49,57 @@ enum CubeStore {
     static var directory: URL {
         let docs = FileManager.default.urls(for: .documentDirectory,
                                             in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Cubes", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir,
-                                                 withIntermediateDirectories: true)
+        var dir = docs.appendingPathComponent("Cubes", isDirectory: true)
+        let fm = FileManager.default
+        let existed = fm.fileExists(atPath: dir.path)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        // ★ NOT BACKED UP (2026-08-16). A cube is 1.75 MiB and one is
+        // written per capture into Documents/, which iCloud backs up by
+        // default. It is DERIVED data: it exists only so the editor can
+        // re-weave, and losing it costs a re-edit, never a photograph.
+        // Backing it up would put tens of megabytes of regenerable
+        // intermediate into a user's iCloud quota for nothing.
+        // Applied once, on creation, so an existing install is not
+        // rewritten on every access.
+        if !existed {
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? dir.setResourceValues(values)
+        }
         return dir
+    }
+
+    /// ★ THE RETENTION CAP (2026-08-16), and it is the only defect in
+    /// this file that COMPOUNDS WITH USE. Every capture wrote a cube and
+    /// nothing ever removed one, so a user who shoots daily accumulates
+    /// megabytes a week of data that, today, NOTHING READS: Reweave has
+    /// no caller on any user path. The cap is the honest interim state.
+    ///
+    /// The number is DERIVED, not chosen (the no-naked-constants
+    /// decree): the shelf shows a 3x3 grid, so nine captures are exactly
+    /// what a user can reach and re-edit. Keeping cubes for GIFs that
+    /// cannot be selected retains data no interface can spend. When the
+    /// shelf pages past nine this constant follows it rather than being
+    /// re-tuned.
+    static let retainedCubes = 9
+
+    /// Delete the oldest cubes beyond the cap, newest first by file
+    /// creation date. Called after each save.
+    static func trim(to limit: Int = retainedCubes) {
+        let fm = FileManager.default
+        guard let urls = try? fm.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.creationDateKey],
+            options: [.skipsHiddenFiles]) else { return }
+        let dated = urls.compactMap { u -> (URL, Date)? in
+            guard let d = (try? u.resourceValues(forKeys: [.creationDateKey]))?
+                .creationDate else { return nil }
+            return (u, d)
+        }.sorted { $0.1 > $1.1 }
+        guard dated.count > limit else { return }
+        for (url, _) in dated.dropFirst(limit) {
+            try? fm.removeItem(at: url)
+        }
     }
 
     /// The retained capture: what the editor re-weaves from.
@@ -115,6 +162,7 @@ enum CubeStore {
         guard let data = encode(rgb: rgb, depths: depths, side: side) else { return nil }
         do {
             try data.write(to: url)
+            trim()
             return url
         } catch {
             return nil

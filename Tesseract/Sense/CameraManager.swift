@@ -189,6 +189,10 @@ final class CameraManager: NSObject, ObservableObject {
     /// frame's 768-byte DYAD table, published as each is solved.
     @Published var liveTable: Data?
 
+    /// The SB5 capture watchdog. Cancelled whenever recording ends by
+    /// any route, so a completed capture never trips it.
+    private var watchdog: Task<Void, Never>?
+
     // ── THE LIVE INSTRUMENTS (spec/ui/WidgetGrid.hs WG12) ────────
     // The surface's movable widgets read these. All three are
     // functions of the SOLVE, so all three republish on the ladder's
@@ -262,6 +266,27 @@ final class CameraManager: NSObject, ObservableObject {
     nonisolated static let noTrueDepthMessage = "no truedepth camera"
     nonisolated static let noCenterStageMessage = "no center stage camera"
 
+    // ★ SB4 / SB5, added 2026-08-16. EditMachine has carried
+    // `.interrupted(_)` and `.captureIncomplete(kept:wanted:)` since the
+    // 2026-08-13 port, with headlines, explainers and recovery kinds
+    // that already render. NOTHING CONSTRUCTED EITHER. So the two ways
+    // a session actually stops in a reviewer's hands, a phone call and
+    // a stalled capture, both landed on a screen that never changed.
+    //
+    // These are the ordinary interruptions and every one is recoverable
+    // by waiting, which is why their recovery kind is `.wait` and not
+    // `.retry`: re-opening the session while another app holds the
+    // camera would fail again and teach the user the button is a lie.
+    nonisolated static let interruptedInUseMessage      = "camera in use"
+    nonisolated static let interruptedBackgroundMessage = "camera unavailable in background"
+    nonisolated static let interruptedMultiAppMessage   = "camera unavailable with multiple apps"
+    nonisolated static let interruptedThermalMessage    = "camera paused, device is hot"
+    /// Carries the counts, parsed back by EditMachine.refusal(for:).
+    nonisolated static let captureIncompletePrefix      = "capture incomplete "
+    nonisolated static func captureIncompleteMessage(kept: Int, wanted: Int) -> String {
+        captureIncompletePrefix + "\(kept)/\(wanted)"
+    }
+
     /// GIFMachine.makeGIF returned nil — surfaced honestly instead of a
     /// "done" state with nothing to show. Shared by LIVE and FACE.
     nonisolated static let encodeFailedMessage = "gif export failed"
@@ -304,9 +329,89 @@ final class CameraManager: NSObject, ObservableObject {
         liveTable = nil
         frameBuffer.startRecording()
         state = .recording(0)
+        armCaptureWatchdog()
+    }
+
+    /// ★ SB5, the other half: frames can simply stop arriving. Without
+    /// this the app sits in `.recording(n)` forever, which is a hang
+    /// with a progress number on it, and the most likely thing a
+    /// reviewer reports as "the app froze".
+    ///
+    /// THE DEADLINE IS DERIVED, not chosen (the no-naked-constants
+    /// decree): the capture is `totalFrames` at `targetFPS`, so its
+    /// nominal wall clock is totalFrames / targetFPS seconds. The
+    /// watchdog allows FOUR of those, which is the same slack the
+    /// pipeline already tolerates between the 5 Hz solve and the 20 Hz
+    /// assignment (TL8's clock ratio, 20/5 = 4).
+    private func armCaptureWatchdog() {
+        let nominal = Double(CameraConfig.totalFrames) / Double(CameraConfig.targetFPS)
+        let slack = Double(CameraConfig.targetFPS / 5)      // TL8: 20/5 = 4
+        let deadline = nominal * slack
+        watchdog?.cancel()
+        watchdog = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+            guard let self, !Task.isCancelled else { return }
+            guard case .recording(let kept) = self.state else { return }
+            logger.error("Camera: capture stalled at \(kept)/\(CameraConfig.totalFrames)")
+            // FrameBuffer has no stop: `exportCapturedFrames` drains it,
+            // and the refusal below is what ends the recording state.
+            self.state = .error(Self.captureIncompleteMessage(
+                kept: kept, wanted: CameraConfig.totalFrames))
+        }
+    }
+
+    /// ★ SB4: the session stopped and something else took the camera.
+    /// AVFoundation reports this and the app previously ignored it, so a
+    /// phone call left a frozen preview with no explanation and no way
+    /// back. Both notifications are observed: the interruption sets the
+    /// refusal, the end of it returns to previewing, so the screen
+    /// recovers by itself exactly as the `.wait` recovery promises.
+    nonisolated private func observeInterruptions() {
+        let c = NotificationCenter.default
+        c.addObserver(forName: .AVCaptureSessionWasInterrupted,
+                      object: session, queue: nil) { [weak self] note in
+            guard let self else { return }
+            let raw = (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? Int)
+                .flatMap(AVCaptureSession.InterruptionReason.init(rawValue:))
+            let message: String
+            switch raw {
+            case .videoDeviceNotAvailableInBackground:
+                message = Self.interruptedBackgroundMessage
+            case .videoDeviceInUseByAnotherClient:
+                message = Self.interruptedInUseMessage
+            case .videoDeviceNotAvailableWithMultipleForegroundApps:
+                message = Self.interruptedMultiAppMessage
+            case .videoDeviceNotAvailableDueToSystemPressure:
+                message = Self.interruptedThermalMessage
+            default:
+                // A reason this OS version added. Report the FACT rather
+                // than guessing which of the four it resembles.
+                message = Self.interruptedInUseMessage
+            }
+            logger.info("Camera: session interrupted (\(message))")
+            Task { @MainActor in self.state = .error(message) }
+        }
+        c.addObserver(forName: .AVCaptureSessionInterruptionEnded,
+                      object: session, queue: nil) { [weak self] _ in
+            guard let self else { return }
+            logger.info("Camera: interruption ended")
+            Task { @MainActor in
+                // Only the interruption refusals clear by themselves. A
+                // hardware refusal must survive: it is terminal.
+                if case .error(let m) = self.state, Self.isInterruption(m) {
+                    self.state = .previewing
+                }
+            }
+        }
+    }
+
+    nonisolated static func isInterruption(_ m: String) -> Bool {
+        m == interruptedInUseMessage || m == interruptedBackgroundMessage
+            || m == interruptedMultiAppMessage || m == interruptedThermalMessage
     }
 
     func stop() {
+        watchdog?.cancel()
         // Synchronous: the TrueDepth hardware admits one owner, and ARKit
         // (FACE mode) may start the instant this returns. sessionQueue is
         // serial and never blocks on the main actor, so sync is deadlock-free.
@@ -322,6 +427,7 @@ final class CameraManager: NSObject, ObservableObject {
             Task { @MainActor in self.state = .error(failure) }
             return
         }
+        observeInterruptions()
         session.startRunning()
         Task { @MainActor in
             self.hasConfigured = true
@@ -556,7 +662,9 @@ final class CameraManager: NSObject, ObservableObject {
                         Task { @MainActor in
                             self.state = .recording(count)
                             if count >= CameraConfig.totalFrames {
-                                self.state = .processing
+                                self.watchdog?.cancel()   // SB5: the capture completed
+                                self.watchdog?.cancel()   // SB5: the capture completed
+                        self.state = .processing
                                 self.encodeGIF()
                             }
                         }
@@ -790,6 +898,21 @@ final class CameraManager: NSObject, ObservableObject {
     private func encodeGIF() {
         let capturedFrames = frameBuffer.exportCapturedFrames()
         let totalFrames = capturedFrames.count
+
+        // ★ SB5 (2026-08-16). The weave used to accept whatever the
+        // buffer held. A capture that lost frames therefore produced a
+        // SHORTER loop with no one told, or failed opaquely downstream.
+        // EditMachine has carried `.captureIncomplete(kept:wanted:)`
+        // since the port, with a headline, an explainer and a `.reshoot`
+        // recovery that already renders, and nothing ever constructed
+        // one. A refusal that names both counts is finished work; a
+        // silently short GIF is not.
+        guard totalFrames == CameraConfig.totalFrames else {
+            logger.error("Camera: capture incomplete, \(totalFrames)/\(CameraConfig.totalFrames)")
+            state = .error(Self.captureIncompleteMessage(
+                kept: totalFrames, wanted: CameraConfig.totalFrames))
+            return
+        }
 
         Task.detached(priority: .userInitiated) {
             // ════════════════════════════════════════════
