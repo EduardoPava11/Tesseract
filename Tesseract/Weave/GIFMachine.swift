@@ -289,12 +289,14 @@ enum GIFMachine {
         rgb: [[(Float, Float, Float)]],
         depths: [[Float]],
         settings: ExportSettings = ExportSettings.load(),
+        figureDepth: Int = PairTree.fullDepth,
         onFrameTable: ((Int, Data) -> Void)? = nil
     ) -> (data: Data, measure: BirkhoffMeasure)? {
         guard !rgb.isEmpty, rgb.count == depths.count,
               let dyad = DyadPipeline.process(rgb: rgb, depths: depths,
                                               bleed: settings.bleed,
                                               chaosLoop: CameraConfig.phaseChaosLoop,
+                                              figureDepth: figureDepth,
                                               onFrameTable: onFrameTable)
         else { return nil }
         return finish(dyad, settings: settings, frames: [])

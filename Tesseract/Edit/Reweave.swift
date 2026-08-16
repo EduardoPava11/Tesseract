@@ -36,19 +36,22 @@
 // swap, which was staged behind CR3 and nothing else.
 //
 // ★ SCOPE, STATED HONESTLY. The Edit's five axes are the spec's, and
-// all five are REPRESENTABLE here. Only the identity point is
-// EXECUTABLE today, and `reweave` refuses the others rather than
-// approximating them:
+// all five are REPRESENTABLE here. TWO of the eight positions on the
+// first axis were executable in the sense that only the identity was;
+// as of 2026-08-16 the whole eFig axis is:
 //
-//   eFig / eGnd  truncation depths. Applying them means re-emitting
-//                the table at a coarser tree depth (PT5's prefix law:
-//                truncate index ≡ coarsen palette). The shipped
-//                solver exposes depth-4 nodes only (PairTree
-//                `nodes16`), so general depths need the descent to
-//                record every level — a spec change first.
-//                Additionally eGnd is exactly the σ-address question
-//                the architecture routes to a MEASUREMENT (λ_F/λ_B,
-//                step S5), not to a default.
+//   eFig         ★ EXECUTABLE. All eight depths. Applying one
+//                re-emits the table at a coarser tree depth, which is
+//                PT5's prefix law (truncate index = coarsen palette)
+//                turned into a lookup: PairTree.Figures records every
+//                level now, and `truncated(toFigureDepth:)` maps leaf
+//                j to `levels[d][j >> (7 - d)]`. The blocker this
+//                header used to name, "the shipped solver exposes
+//                depth-4 nodes only", is closed.
+//   eGnd         truncation on the sigma half. Still refused: it is
+//                exactly the sigma-address question the architecture
+//                routes to a MEASUREMENT (lambda_F / lambda_B,
+//                step S5), not to a dial default.
 //   eCoarse/eMid/eFine  the octave weights are a SIMPLEX over three
 //                parallel reads (Octave OV6/OV8), and the app runs
 //                only the fine read today. A weight on a read that
@@ -108,7 +111,8 @@ enum Reweave {
         if let why = unsupported(edit) { return .failure(.notYetLawful(why)) }
 
         guard let export = GIFMachine.makeGIF(rgb: cube.rgb, depths: cube.depths,
-                                              settings: settings)
+                                              settings: settings,
+                                              figureDepth: edit.fig)
         else { return .failure(.encodeFailed) }
         return .success(export)
     }
@@ -127,13 +131,29 @@ enum Reweave {
     /// instead of graying a control with no reason.
     static func unsupported(_ e: Edit) -> String? {
         if e.isIdentity { return nil }
-        if e.fig != Edit.identity.fig || e.gnd != Edit.identity.gnd {
-            return "truncation depths need the tree to record every level "
-                 + "(PT5 prefix law; shipped solver exposes depth 4 only), "
-                 + "and eGnd awaits the λF/λB measurement (step S5)"
+        // ★ eFig IS EXECUTABLE as of 2026-08-16. The blocker this
+        // header named, "the shipped solver exposes depth-4 nodes
+        // only", is gone: PairTree.Figures now records every level and
+        // `truncated(toFigureDepth:)` applies PT5's prefix law as a
+        // lookup. The dial re-emits the table at a coarser tree depth,
+        // which is exactly what the spec says it means.
+        if e.gnd != Edit.identity.gnd {
+            return "eGnd is the sigma-address question the architecture "
+                 + "routes to the lambdaF/lambdaB MEASUREMENT (step S5), "
+                 + "not to a dial default"
         }
-        return "octave weights need the coarse and mid reads to exist "
-             + "(Octave OV6/OV8 simplex; the app runs the fine read only)"
+        // ★ THIS RETURN USED TO BE UNCONDITIONAL, which was harmless
+        // while ONLY the identity executed and became a bug the moment
+        // eFig did: any non-identity edit fell through to the octave
+        // refusal even with all three octave dials at identity. The
+        // guard now names the axis it is actually about.
+        if e.coarse != Edit.identity.coarse
+            || e.mid != Edit.identity.mid
+            || e.fine != Edit.identity.fine {
+            return "octave weights need the coarse and mid reads to exist "
+                 + "(Octave OV6/OV8 simplex; the app runs the fine read only)"
+        }
+        return nil
     }
 
     /// The axes that would move bytes today if they were executable —

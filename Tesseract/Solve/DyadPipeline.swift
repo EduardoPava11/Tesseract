@@ -331,6 +331,7 @@ enum DyadPipeline {
                         withinVariance: Double? = nil,
                         bleed: Bool = true, chaosLoop: Bool = false,
                         keeping disposition: Disposition = .artifact,
+                        figureDepth: Int = PairTree.fullDepth,
                         onFrameTable: ((Int, Data) -> Void)? = nil) -> Output? {
         guard !rgb.isEmpty, rgb.count == depths.count else { return nil }
         let frameCount = rgb.count
@@ -516,7 +517,8 @@ enum DyadPipeline {
 
             let solve = solveFrame(warm: warm, background: bgForFrame,
                                    centroid: centroids[f], mixture: msFits[f],
-                                   twoPhase: twoPhase, bleed: bleed)
+                                   twoPhase: twoPhase, bleed: bleed,
+                                   figureDepth: figureDepth)
             tables.append(DyadPalette.gifColorTable(solve.table))
             onFrameTable?(f, tables[f])
             frameStats.append(warm)
@@ -669,9 +671,17 @@ enum DyadPipeline {
         centroid cF: OKLabColor,
         mixture: DepthMixture.Fit,
         twoPhase: Bool,
-        bleed: Bool
+        bleed: Bool,
+        figureDepth: Int = PairTree.fullDepth
     ) -> FrameSolve {
-        let tree = CameraConfig.pairTree ? PairTree.solveFigures(stats: warm) : nil
+        // ★ THE eFig DIAL, EXECUTABLE (2026-08-16). PT5's prefix law
+        // says a truncated index names the coarser level's node, and
+        // the tree now records every level, so the dial is a lookup
+        // rather than a re-solve. `PairTree.fullDepth` is the identity
+        // and the default, so every existing caller is byte-identical.
+        let tree = CameraConfig.pairTree
+            ? PairTree.solveFigures(stats: warm).truncated(toFigureDepth: figureDepth)
+            : nil
         let prims8 = tree?.figures8 ?? DyadPalette.primaries(stats: warm)
         let prims = tree?.figures ?? prims8.map { DyadPalette.oklab(fromSRGB8: $0) }
         let cL = tree != nil ? warm.centroid.l : DyadPalette.centroidL(prims8)
