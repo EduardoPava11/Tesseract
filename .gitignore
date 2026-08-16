@@ -50,4 +50,7 @@ nn/sk-gene/corpus/
 nn/descent/corpus/
 nn/descent/DescentAssign.mlpackage/
 nn/jepa/corpus/
+# Edit-space corpus: emitted by spec/output/EditCorpusEmit.hs
+# (make corpus-edit). 262144 rows = 64^3, about 35 MB.
+nn/edit-options/corpus/
 nn/jepa/JepaH.mlpackage/

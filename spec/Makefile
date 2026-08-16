@@ -108,7 +108,7 @@ CORE = $(ALGEBRA) $(QUANTIZATION) $(TEMPORAL) $(SPATIAL) $(STATISTICS) $(NEURAL)
 
 .PHONY: test test-verbose test-algebra test-quantization test-temporal \
         test-spatial test-statistics test-output test-one list \
-        icon corpus corpus-descent corpus-jepa fixtures
+        icon corpus corpus-descent corpus-jepa corpus-edit fixtures
 
 # TRUTHFUL harness: a file fails on nonzero exit OR any "✗" it prints.
 # (Most spec mains predate exitFailure; grepping their own failure marks
@@ -141,6 +141,10 @@ corpus:
 # Emit the descent-ladder training corpus → nn/descent/corpus/
 corpus-descent:
 	@$(RUNGHC) $(FLAGS) output/DescentCorpusEmit.hs
+
+# Emit the complete edit-space corpus → nn/edit-options/corpus/
+corpus-edit:
+	@runghc -W -package-env=- output/EditCorpusEmit.hs
 
 # Emit the JEPA-H trajectory corpus → nn/jepa/corpus/
 corpus-jepa:
