@@ -18,13 +18,25 @@
 //       4096 pixels routed to the sigma side. FIXED in the kernel the
 //       same day; this file is the gate that keeps it fixed.
 //
-//   P2  the staged-value convention. NOT FIXED, because it needs
-//       Daniel's ruling: the authoritative Haskell searches on the
-//       CONTINUOUS staged value, the Swift round-trips it to 8-bit
-//       first, and the kernel round-trips its INPUT only. So the
-//       KERNEL matches the spec and the SWIFT does not. That test is
-//       marked as an expected failure rather than given a tolerance,
-//       for the reason in its own doc comment.
+//   P2  the staged-value convention. FIXED 2026-08-16, and it needed
+//       no new ruling: CLAUDE.md already decrees "Haskell is
+//       authoritative; Swift/Metal are ports", so a Swift that
+//       searches a value the spec never searches is simply wrong.
+//       aerialPrimary searches the CONTINUOUS staged value; the
+//       kernel already matched it; DyadPipeline round-tripped to
+//       8-bit first. DY17 now pins the law and
+//       DyadPipeline.stagedFieldLab is the port. The gate is STRICT:
+//       4096 of 4096, exact.
+//
+// ★ AND THIS FILE'S FIRST MEASUREMENT WAS ITS OWN BUG, recorded
+// because the mistake is instructive. It reported 65.80% divergence
+// by feeding METRES to both sides. MetalPipeline.readbackDepth says
+// plainly: "Texture holds raw TrueDepth METERS; every CPU consumer
+// speaks the [0,1] 1=near signal contract." The kernel converts
+// in-kernel from the DepthSignal anchors; Live.assign is handed the
+// signal already converted. Comparing them on the same units was
+// comparing the kernel against a CPU run on out-of-range input. The
+// number was wrong; the defect it was pointing at was real.
 //
 // The harness dispatches the kernel DIRECTLY rather than through
 // MetalPipeline, copying MetalGeometryParityTests: the working
@@ -175,7 +187,9 @@ final class AerialParityTests: XCTestCase {
     private func solvedLive() throws -> (DyadPipeline.Live, DyadPipeline.MetalState) {
         let f = fixture()
         let live = DyadPipeline.Live()
-        for _ in 0..<64 { live.read(rgb: f.rgb, depths: f.depth) }
+        // signal, not metres: see the note in the parity test below
+        let signal = f.depth.map { DepthSignal.signal(meters: $0) }
+        for _ in 0..<64 { live.read(rgb: f.rgb, depths: signal) }
         guard let state = live.metalState, state.primaries.count == 128 else {
             throw XCTSkip("the live ring produced no metalState from 64 reads")
         }
@@ -296,7 +310,18 @@ final class AerialParityTests: XCTestCase {
         let r = try rig()
         let f = fixture()
         let (live, state) = try solvedLive()
-        guard let cpu = live.assign(rgb: f.rgb, depths: f.depth) else {
+        // ★ THE UNITS DIFFER BY DESIGN AND THE FIRST VERSION OF THIS
+        // TEST GOT IT WRONG, reporting 65.80% divergence that was
+        // mostly its own bug. MetalPipeline.readbackDepth says it
+        // outright: "Texture holds raw TrueDepth METERS; every CPU
+        // consumer speaks the [0,1] 1=near signal contract." So the
+        // KERNEL is handed metres and converts in-kernel from the
+        // DepthSignal anchors, while Live.assign is handed the signal
+        // already converted. Feeding metres to both compares the
+        // kernel against a CPU run on out-of-range input.
+        guard let cpu = live.assign(rgb: f.rgb,
+                                    depths: f.depth.map { DepthSignal.signal(meters: $0) })
+        else {
             throw XCTSkip("the CPU twin declined to assign this frame")
         }
         let rgbTex = try texture(r.device) { x, y in f.rgb[y * self.side + x] }
@@ -307,12 +332,13 @@ final class AerialParityTests: XCTestCase {
         let disagree = zip(cpu, gpu).filter { $0 != $1 }.count
         let pct = 100.0 * Double(disagree) / Double(max(cpu.count, 1))
 
-        XCTExpectFailure("""
-            P2, the staged-value convention, is UNRULED. The kernel matches \
-            DyadPalette.hs and the Swift does not. Delete this wrapper when \
-            the convention is picked and DY17 pins which staged value the \
-            argmin reads.
-            """)
+        // ★ THE WRAPPER IS GONE, which is what it asked for. It read:
+        // "Delete this wrapper when the convention is picked and DY17
+        // pins which staged value the argmin reads." DY17 now pins it
+        // (spec/quantization/DyadPalette.hs) and DyadPipeline searches
+        // the CONTINUOUS staged value through stagedFieldLab, so this
+        // is a STRICT gate with no tolerance: every one of 4096 pixels,
+        // exact. It was red the day it was written and it is green now.
         XCTAssertEqual(disagree, 0,
             "kernel and CPU disagree on \(disagree) of \(cpu.count) pixels "
             + String(format: "(%.2f%%)", pct))

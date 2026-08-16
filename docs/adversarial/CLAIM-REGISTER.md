@@ -22,10 +22,10 @@ Tally: PROVEN 28, UNGATED 9, DIVERGENT 7, VACUOUS 4, UNKNOWN 3.
 
 | CLAIM | WHERE STATED | WHAT GATES IT | GATE IS SUFFICIENT? | STATUS |
 |:--|:--|:--|:--|:--|
-| aerialPreview is "the 20 Hz GPU twin of DyadPipeline.Live.assign" | Quantize.metal:6 | DyadPipelineTests.swift:413, five struct field copies, no dispatch | NO, it never compares an index | UNGATED |
-| "Haskell is authoritative; Swift/Metal are ports" for the argmin target | CLAUDE.md:410 | DY10, DY11, DY12 | NO, no axiom names which y-hat the argmin reads | DIVERGENT |
-| stagedField is "the DY12 construction, export and preview call this, there is no second staging" | DyadPipeline.swift:196-199 | nothing | NO | DIVERGENT, 3.83% to 11.65% of pixels |
-| The kernel applies "the DY12 byte round-trip the CPU reference applies" | Quantize.metal:83-84 | nothing | NO, it round trips the input only, not y-hat | DIVERGENT |
+| aerialPreview is "the 20 Hz GPU twin of DyadPipeline.Live.assign" | Quantize.metal:6 | ★ AerialParityTests (NEW): a real dispatch against Live.assign, 4096 of 4096 exact, plus a degeneracy gate and its anti-vacuity companion | YES | PROVEN, was UNGATED |
+| "Haskell is authoritative; Swift/Metal are ports" for the argmin target | CLAUDE.md:410 | ★ DY17 (NEW 2026-08-16) pins the argmin to the CONTINUOUS staged value, and its second conjunct proves the round-tripped search is a genuinely different function | YES, now. The gap was that DY10/DY11/DY12 never said WHICH staged value the argmin reads, so a port could pick either and pass | PROVEN, was DIVERGENT |
+| stagedField is "the DY12 construction, export and preview call this, there is no second staging" | DyadPipeline.swift:196-199 | DY12 governs TABLE CONSTRUCTION and does round-trip; DY17 governs ASSIGNMENT and does not. Both call sites now use stagedFieldLab for the argmin | YES. There really are two staged values, by design, and the defect was using one for both | PROVEN, was DIVERGENT |
+| The kernel applies "the DY12 byte round-trip the CPU reference applies" | Quantize.metal:83-84 | AerialParityTests, strict, 4096 of 4096 with no tolerance | YES. The kernel round-trips the INPUT and stages in float, which is exactly aerialPrimary. It was RIGHT all along and the Swift was wrong | PROVEN, was DIVERGENT |
 | sigma routing polarity, Metal complement of pairDitherFrame complement of assignRoles | Quantize.metal:112-113, DyadPipeline.swift:650, 842 | inspection only, three inversions compose to identity | NO dispatch test exists | UNGATED, correct by inspection |
 | The solid face mask needs no Metal representation | Quantize.metal, coverageFloor = 1/32 | inspection only, smallest Bayer threshold is exactly 1/32 so th < t is unsatisfiable | NO dispatch test exists | UNGATED, correct by construction |
 | BLEED reaches the GPU as a hard MAP collapse | AerialParamsSwift.flags.w | testBleedAndPhaseReachTheMetalState | PARTIAL, pins the non-degenerate case only | UNGATED for the degenerate case |

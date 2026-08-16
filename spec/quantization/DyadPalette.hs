@@ -966,6 +966,50 @@ axiom_DY15 = rigidity && all landOK allTables
 --        flat at rung 16 (16 pixels, one σ index); and the face
 --        side never sees the blur (t = 0 ⇒ the pure ŷ search,
 --        whatever ybar is passed).
+-- (DY17) ★ WHICH STAGED VALUE THE ARGMIN READS. NEW 2026-08-16, and
+--        the gap it closes is the reason it exists: SIXTEEN axioms
+--        above are green and NOT ONE of them says whether the
+--        assignment searches the continuous staged value or a value
+--        round-tripped back through sRGB8. So a port could pick
+--        either and pass every gate, and one did.
+--
+--        THE LAW HAS TWO STAGED VALUES BY DESIGN, and conflating them
+--        is the defect:
+--
+--          TABLE CONSTRUCTION  round-trips. DY12's own fixture is
+--            `oklabToSrgb8 . stageAerial cF0 s . srgb8ToOklab`,
+--            because `analyze` and `buildDyad` consume RGB8 and the
+--            trace has to reproduce the table from bytes.
+--          ASSIGNMENT          does NOT. `aerialPrimary` is
+--            `nearestPrimaryLab tbl (stageAerial ... (srgb8ToOklab c))`
+--            with no return trip: the search happens in Lab.
+--
+--        MEASURED, the two differ on real colour: over skin and random
+--        fixtures at every dial setting the round-tripped search picks
+--        a different primary on a few percent of samples, and those
+--        flips are not near-ties. This axiom asserts the difference is
+--        REAL (so nobody "simplifies" the two into one) and pins the
+--        assignment to the continuous form.
+axiom_DY17 :: Bool
+axiom_DY17 = pinned && differs
+  where
+    tbl   = buildDyad (skinColors 5 324)
+    field = randColors8 31 200 ++ skinColors 7 200
+    dials = [0, 0.25, 0.5, 0.75, 1]
+    -- the shipped law, restated as the identity the port must satisfy
+    pinned = and [ aerialPrimary tbl s c
+                     == nearestPrimaryLab tbl
+                          (stageAerial (srgb8ToOklab (head tbl)) s (srgb8ToOklab c))
+                 | c <- field, s <- dials ]
+    -- and the round-tripped search is a DIFFERENT function, so the
+    -- choice is load-bearing rather than cosmetic
+    roundTripped s c =
+      nearestPrimaryLab tbl
+        (srgb8ToOklab (oklabToSrgb8
+          (stageAerial (srgb8ToOklab (head tbl)) s (srgb8ToOklab c))))
+    differs = or [ aerialPrimary tbl s c /= roundTripped s c
+                 | c <- field, s <- dials ]
+
 axiom_DY16 :: Bool
 axiom_DY16 = rungLaw && constantFixed && blockFlat && flatIndices && faceUntouched
   where
@@ -1075,6 +1119,7 @@ main = do
   check "DY14 hue survives: ground colinear, same hue exact (v7)"   [axiom_DY14]
   check "DY15 ensemble shift: rigid L, T[255] lands at wadaGroundL" [axiom_DY15]
   check "DY16 chaos blur: rung 64/16, block-flat, face untouched"   [axiom_DY16]
+  check "DY17 * the argmin reads the CONTINUOUS staged value"       [axiom_DY17]
   putStrLn ""
 
   putStrLn "══════════════════════════════════════════════════════════"

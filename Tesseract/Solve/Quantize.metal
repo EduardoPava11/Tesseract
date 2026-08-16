@@ -7,30 +7,28 @@
 // AERIAL MIRROR LAW (spec §6c v5). Export quantization stays CPU/ANE;
 // this kernel serves the live preview only.
 //
-// ★ THE CLAIM THAT USED TO SIT HERE WAS FALSE, and it is corrected
-// rather than deleted because it is exactly the kind of comment this
-// codebase has been burned by twice. It read "near-tie fp32 flips vs
-// the CPU reference are the only permitted difference." Measured
-// 2026-08-15, TWO WAYS, and both refute it:
-//   3.8% to 11.7% of pixels attributable to the staging convention
-//     alone, isolated by reimplementing both conventions side by side;
-//   65.80% end to end (2695 of 4096) between a real dispatch of this
-//     kernel and DyadPipeline.Live.assign on a figure-over-ground
-//     fixture, printed by AerialParityTests on every run.
-// The gap between those two numbers is NOT yet accounted for and must
-// not be assumed to be more of the same cause. One known candidate is
-// already written down in CLAUDE.md: the live sigma-side chaos target
-// pools the CURRENT frame where the export pools the 4-frame S4 group.
-// Whatever the split, the divergence is SYSTEMATIC, not a near tie. The
-// authoritative DyadPalette.hs:521 aerialPrimary searches on the
-// CONTINUOUS staged value; DyadPipeline.stagedField returns UInt8
-// triples that both consumers convert back to OKLab before the
-// argmin; this kernel round-trips its INPUT and stages in float. So
-// THIS KERNEL MATCHES THE SPEC AND THE SWIFT DOES NOT. Which
-// convention is law is Daniel's ruling, tracked by
-// AerialParityTests.testAerialKernelMatchesTheCPUAssignmentOnEveryPixel
-// and owed an axiom (DY17) naming which staged value the argmin reads.
-// Nothing in the sixteen green DyadPalette axioms says.
+// ★ THE CLAIM THAT USED TO SIT HERE WAS FALSE, and its correction is
+// kept rather than deleted because it is the shape this codebase has
+// been burned by three times now. It read "near-tie fp32 flips vs the
+// CPU reference are the only permitted difference." The difference was
+// SYSTEMATIC, not a near tie: this kernel searched the CONTINUOUS
+// staged value, correctly, per DyadPalette.hs aerialPrimary, while
+// DyadPipeline round-tripped through sRGB8 first. THE KERNEL MATCHED
+// THE SPEC AND THE SWIFT DID NOT, and sixteen green DyadPalette axioms
+// never said which staged value the argmin reads, so a port could pick
+// either and pass every gate.
+//
+// RESOLVED 2026-08-16, and it needed no new ruling: "Haskell is
+// authoritative; Swift/Metal are ports" already decides it. DY17 pins
+// the law, DyadPipeline.stagedFieldLab is the port, and
+// AerialParityTests asserts 4096 of 4096 exactly, no tolerance.
+//
+// ★ AND A NUMBER THAT SAT HERE FOR ONE DAY WAS WRONG, WITHDRAWN.
+// It claimed "65.80% end to end (2695 of 4096)". That measurement fed
+// METRES to both sides. readbackDepth converts metres to the [0,1]
+// signal for every CPU consumer and only this kernel takes metres, so
+// it was comparing the kernel against a CPU run on out-of-range input.
+// The number was wrong; the defect it pointed at was real.
 //
 // The old quantizeWithDepth kernel was removed 2026-08-10: it read raw
 // TrueDepth METERS where the [0,1] signal contract applied. Here the

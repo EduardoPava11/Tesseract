@@ -206,6 +206,32 @@ enum DyadPipeline {
         }
     }
 
+    /// ★ THE SAME STAGING, WITHOUT THE RETURN TRIP, and the two are
+    /// NOT interchangeable. `stagedField` above exists for TABLE
+    /// CONSTRUCTION, where DY12's own fixture round-trips
+    /// (`oklabToSrgb8 . stageAerial . srgb8ToOklab`) because `analyze`
+    /// and `buildDyad` consume RGB8 and the trace must rebuild the
+    /// table from bytes. ASSIGNMENT is a different law:
+    /// `aerialPrimary` is
+    ///   nearestPrimaryLab tbl (stageAerial ... (srgb8ToOklab c))
+    /// with no return trip, so the search happens in Lab.
+    ///
+    /// Until 2026-08-16 both call sites fed the argmin the
+    /// round-tripped bytes, which is neither the spec nor the GPU
+    /// twin: Quantize.metal round-trips its INPUT and then stages in
+    /// float, so THE KERNEL MATCHED THE SPEC AND THIS FILE DID NOT.
+    /// Sixteen DyadPalette axioms were green because not one of them
+    /// said which staged value the argmin reads. DY17 now does, and
+    /// its second conjunct proves the two searches are genuinely
+    /// different functions rather than a cosmetic difference.
+    static func stagedFieldLab(samples: [(UInt8, UInt8, UInt8)], depths: [Float],
+                               about cF: OKLabColor) -> [OKLabColor] {
+        zip(samples, depths).map { rgb, d in
+            stageAerial(DyadPalette.oklab(fromSRGB8: rgb),
+                        s: Double(d), about: cF)
+        }
+    }
+
     /// The σ coverage of one pixel — the ONE reading of the role law.
     /// Single-phase ⇒ all-face (R3); `bleed: false` ⇒ MAP classes
     /// only, no dither band (role law v1, a lawful subset).
@@ -304,6 +330,7 @@ enum DyadPipeline {
         // solved on the STAGED samples with the R1 weights unchanged —
         // the shells whiten the distribution the assigner quantizes.
         var stagedAll: [[(UInt8, UInt8, UInt8)]] = []
+        var stagedLabsAll: [[OKLabColor]] = []
         var tsAll: [[Double]] = []
         var rawStats: [DyadPalette.Stats] = []
         var centroids: [OKLabColor] = []
@@ -312,6 +339,7 @@ enum DyadPipeline {
         // one, and the difference is not cosmetic — see below.
         var unstagedLabsAll: [[OKLabColor]] = []
         stagedAll.reserveCapacity(frameCount)
+        stagedLabsAll.reserveCapacity(frameCount)
         unstagedLabsAll.reserveCapacity(frameCount)
         for fi in 0..<frameCount {
             let samples = rgb[fi].map { srgb8(from: $0) }
@@ -322,6 +350,11 @@ enum DyadPipeline {
             let cF = DyadPalette.analyze(samples, weights: weights).centroid
             let staged = stagedField(samples: samples, depths: depths[fi], about: cF)
             stagedAll.append(staged)
+            // DY17: the ARGMIN reads the continuous staged value, so it
+            // is computed here rather than recovered from the bytes
+            // above. `staged` stays the table's input (DY12).
+            stagedLabsAll.append(stagedFieldLab(samples: samples,
+                                                depths: depths[fi], about: cF))
             tsAll.append(ts)
             centroids.append(cF)
             rawStats.append(DyadPalette.analyze(staged, weights: weights))
@@ -333,9 +366,10 @@ enum DyadPipeline {
         // ── Stage 1b: derived EMA gain (R2) over the stats sequence ──
         let alpha = DepthMixture.localLevelAlpha(rawStats.map(statVector))
 
-        // Staged labs, converted ONCE (stage 1c reuses them; the
-        // JEPA bg ring needs them before the table loop).
-        let stagedLabsAll = stagedAll.map { $0.map { DyadPalette.oklab(fromSRGB8: $0) } }
+        // Staged labs were built in the loop above, CONTINUOUS per
+        // DY17. They used to be recovered here as
+        //     stagedAll.map { $0.map { oklab(fromSRGB8: $0) } }
+        // which fed the argmin a value the spec never searches.
         // The background's four moments — three scalars plus ★ GH4's
         // hue resultant, weighted by the σ coverage t (the background
         // class's own mass).
@@ -1129,7 +1163,12 @@ enum DyadPipeline {
             let samples = rgb.map { DyadPipeline.srgb8(from: $0) }
             let staged = DyadPipeline.stagedField(samples: samples, depths: depths,
                                                   about: solve.centroid)
-            let labs = staged.map { DyadPalette.oklab(fromSRGB8: $0) }
+            // DY17: the argmin reads the CONTINUOUS staged value. This
+            // used to be `staged.map { oklab(fromSRGB8: $0) }`, which
+            // searched a round-tripped value the spec never searches
+            // and the GPU twin never produced.
+            let labs = DyadPipeline.stagedFieldLab(samples: samples, depths: depths,
+                                                   about: solve.centroid)
             let ts = depths.map {
                 DyadPipeline.coverage($0, fit: solve.mixture,
                                       twoPhase: solve.twoPhase, bleed: solve.bleed)
