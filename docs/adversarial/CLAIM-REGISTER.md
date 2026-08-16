@@ -88,3 +88,26 @@ Tally: PROVEN 28, UNGATED 9, DIVERGENT 7, VACUOUS 4, UNKNOWN 3.
 | "The vector (dE, dE_wall, dE_time) breaks the tie with no weights at all. The pair is what makes it work, not either scalar" | docs/workflow-2026-08-15-bin-standard.md:296 | nothing | NO, and it is false in the opposite direction: E_wall and E_time read bit 7 only (spin i = i >= 128), so on the bit 6 contested flips dE_wall and dE_time are identically zero and dE does all the work alone | DIVERGENT, doc versus measurement |
 | AdditiveCensus measures the output, not the process | docs, AD11 | AdditiveCensus.swift takes only indexFrames and side, no descent state | YES, the premise is true | PROVEN |
 | A single index flip moves E far above floating point noise | this run's hypothesis | 1.4088e-3 bits against a Double ulp of 4.66e-10 at E's index ceiling, about 3 million ulps of headroom | YES | PROVEN, the C5 precision hypothesis is refuted |
+
+## The engine (added 2026-08-16)
+
+Verified by call site enumeration over every `static func` in the three
+files that own a `.prediction(` call, discounting comments and
+flag-gated dead branches.
+
+| CLAIM | WHERE STATED | WHAT GATES IT | GATE IS SUFFICIENT? | STATUS |
+|:--|:--|:--|:--|:--|
+| "Assignment runs on the ANE (DyadAssign.mlpackage)" | CLAUDE.md, architecture | nothing; DyadANE has ZERO call sites for any static func, the only mention on a live path is `_ = DyadANE.isAvailable` at CameraManager.swift:245 | NO, and the claim is false today: 524 K ships and never predicts | UNGATED, and the prose is stale |
+| ANELoop is "flag-gated behind CameraConfig.phaseChaosLoop" | CLAUDE.md | the flag is `false` at CameraManager.swift:115 and `chaosRefine` guards on it, so `ANELoop.refineFarBlocks` is unreachable; `ANELoop.localXYT` IS called from PhaseTiling but is a pure index helper with no model in it | YES, the flag claim is accurate; the 3.6 MB it gates is dormant, not broken | PROVEN, and dormant |
+| TensorANE is "the engine TWIN" of CaptureTensor | CLAUDE.md; TensorANE.swift:26 | `TensorANE.transform` appears exactly once outside its own file, at CaptureTensor.swift:198, INSIDE A DOC COMMENT | NO, there is no call | UNGATED, and dormant behind the CR3 call-site swap |
+| Three SKGene mlpackages are loaded and used | SKGene.swift:140-144 | the models' ONLY use is `!= nil` in `isGroundAvailable` / `isPasserAvailable` / `isCodecAvailable`, printed in a debug line at GIFMachine.swift:187. `SKGene.trace` is pure CPU 4-cubed mean pooling. No `.prediction(` exists in the file | NO. Three Core ML models are instantiated on every export so that three Bools can report they instantiated | VACUOUS at runtime, and a LINT-NO-STUB violation by the decree's own words: "a telemetry-only rung is a stub too" |
+| "The ANE does almost nothing shipped" (G7) | session-2026-08-15-sunset.md | this enumeration | YES, and it is stronger than stated: 7 mlpackages, 4.4 MB bundled, and ZERO predictions execute on any live path | PROVEN |
+
+★ THE RULING OWED. Three options and none is obviously right, which is
+why none was taken here: WIRE the models (they were trained for a
+reason and CameraConfig.skGenes is `true`), DELETE them and reclaim
+4.4 MB of a camera app's bundle, or keep them and make the dormancy
+VISIBLE rather than implied by prose that says assignment runs on the
+ANE. What must not persist is the current state, where the bundle pays
+for seven models, the export pays to load three of them, and the
+architecture notes describe a machine that is not running.
