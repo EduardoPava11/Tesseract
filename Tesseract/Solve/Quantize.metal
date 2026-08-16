@@ -5,8 +5,32 @@
 // capture grid, 90° CCW baked into the read) + the aerialPreview
 // kernel: the 20 Hz GPU twin of DyadPipeline.Live.assign under THE
 // AERIAL MIRROR LAW (spec §6c v5). Export quantization stays CPU/ANE;
-// this kernel serves the live preview only — near-tie fp32 flips vs
-// the CPU reference are the only permitted difference.
+// this kernel serves the live preview only.
+//
+// ★ THE CLAIM THAT USED TO SIT HERE WAS FALSE, and it is corrected
+// rather than deleted because it is exactly the kind of comment this
+// codebase has been burned by twice. It read "near-tie fp32 flips vs
+// the CPU reference are the only permitted difference." Measured
+// 2026-08-15, TWO WAYS, and both refute it:
+//   3.8% to 11.7% of pixels attributable to the staging convention
+//     alone, isolated by reimplementing both conventions side by side;
+//   65.80% end to end (2695 of 4096) between a real dispatch of this
+//     kernel and DyadPipeline.Live.assign on a figure-over-ground
+//     fixture, printed by AerialParityTests on every run.
+// The gap between those two numbers is NOT yet accounted for and must
+// not be assumed to be more of the same cause. One known candidate is
+// already written down in CLAUDE.md: the live sigma-side chaos target
+// pools the CURRENT frame where the export pools the 4-frame S4 group.
+// Whatever the split, the divergence is SYSTEMATIC, not a near tie. The
+// authoritative DyadPalette.hs:521 aerialPrimary searches on the
+// CONTINUOUS staged value; DyadPipeline.stagedField returns UInt8
+// triples that both consumers convert back to OKLab before the
+// argmin; this kernel round-trips its INPUT and stages in float. So
+// THIS KERNEL MATCHES THE SPEC AND THE SWIFT DOES NOT. Which
+// convention is law is Daniel's ruling, tracked by
+// AerialParityTests.testAerialKernelMatchesTheCPUAssignmentOnEveryPixel
+// and owed an axiom (DY17) naming which staged value the argmin reads.
+// Nothing in the sixteen green DyadPalette axioms says.
 //
 // The old quantizeWithDepth kernel was removed 2026-08-10: it read raw
 // TrueDepth METERS where the [0,1] signal contract applied. Here the
@@ -96,8 +120,24 @@ kernel void aerialPreview(
     // so no Bayer threshold can route a tile to the σ side mid-band.
     // Without this the setting answered on the CPU and the export but
     // not on the LIVE surface, which is the default path.
+    //
+    // ★ THE DEGENERACY GUARD, added 2026-08-15 after an adversarial
+    // run measured 4096/4096 role flips on the DEFAULT LIVE PATH.
+    // The CPU twin's FIRST line is
+    //     guard twoPhase, !fit.isDegenerate else { return 0 }
+    // and this kernel had no degeneracy input at all. A degenerate
+    // per-frame fit packs s* = NaN and tau = +inf into the params;
+    // the exponential then yields NaN, and the BLEED-off collapse
+    // below asks `t < 0.5`, which is FALSE for NaN, so t became 1.0
+    // and EVERY pixel routed to the sigma side. A silent, total
+    // inversion of the surface.
+    //
+    // It is not a corner case: DepthMixture.localLevelAlpha returns 1
+    // whenever series.count < 3, so the two-coarse-frame ring about
+    // 0.2 s into every session can vote two-phase on a degenerate
+    // fit. Gated by AerialParityTests.
     float t = 0.0f;
-    if (P.flags.x != 0u) {
+    if (P.flags.x != 0u && isfinite(P.scalars.x) && isfinite(P.scalars.y)) {
         t = 1.0f / (1.0f + exp((s - P.scalars.x) / P.scalars.y));
         if (P.flags.w == 0u) { t = (t < 0.5f) ? 0.0f : 1.0f; }
     }
