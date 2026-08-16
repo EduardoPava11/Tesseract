@@ -117,17 +117,77 @@ withTemporal k j parent prev = case prev of
 -- § 3. ZEROTREES (EZW 1993 / SPIHT 1996)
 -- ════════════════════════════════════════════════════════════════
 --
--- MEASURED on a 64-cube: 95.3% of subtrees say nothing, and the flat
--- bit was paying for all of them.
+-- ★ THE THREE LOUD FRACTIONS, RECONCILED 2026-08-16. This file used
+-- to print 45064 and 30232 as LITERALS in a putStrLn, under the
+-- heading "95.3% of subtrees quiet", and nothing recomputed either.
+-- Three different loud fractions were loose in the documentation and
+-- no reader could tell them apart, because none of them said WHICH
+-- LEVEL it counted. Decomposing the literals settles it exactly:
 --
---   flat, one bit per child          262144 bits   rmse 0.01655
---   significance coded, one level     45064 bits   rmse 0.01793
---   full zerotree, 16 kills 32+64      30232 bits   rmse 0.02409
+--   45064 = cells32 * 1  +  loud32 * cells32 * atom
+--         = 32768       +  0.0469 * 32768 * 8
+--     so 4.7% is the loud fraction of RUNG-32 PARENTS, and 95.3%
+--     quiet is a statement about that level only.
+--
+--   30232 = cells16 * 1  +  loud16 * cells16 * (atom + atom*atom)
+--         = 4096        +  0.0886 * 4096 * 72
+--     so the full-zerotree row counts RUNG-16 ROOTS, at 8.9%. It was
+--     never the same population as the row above it.
+--
+--   15.576% is a THIRD thing: the CT7 statistic dev16_of(g32, g64)
+--     over all 72 descendants of a rung-16 root, measured on
+--     nn/tensor-codec's synthetic cube and reproduced to the root
+--     (1914 of 12288) by Store/CaptureTensor.swift.
+--
+-- They are not in conflict. They count different populations on
+-- different fixtures, and the documentation simply never said so.
+-- The rows below are now COMPUTED from named fractions, so the
+-- arithmetic cannot drift from the prose again.
 --
 -- The threshold is DERIVED, never chosen: the crossover of a
 -- two-phase mixture on the capture's own subtree deviations, the same
 -- mechanism ruled for the rung-64 override. A single-phase capture
 -- has no quiet phase and pays flat.
+
+-- ★ THE PRIMITIVE IS A COUNT, not a percentage. Both historical
+--   figures decompose to integers exactly, which is what makes this a
+--   recovery rather than a fit:
+--     45064 = cells32 + 1537 * atom
+--     30232 = cells16 +  363 * (atom + atom*atom)
+loudParents32, loudRoots16 :: Int
+loudParents32 = 1537      -- of cells32 = 32768, i.e. 4.691%
+loudRoots16   =  363      -- of cells16 =  4096, i.e. 8.862%
+
+loud32, loud16 :: Double
+loud32 = fromIntegral loudParents32 / fromIntegral cells32
+loud16 = fromIntegral loudRoots16   / fromIntegral cells16
+
+-- | One significance bit per rung-32 parent, plus the atom for the
+--   loud ones. The old literal was 45064.
+significanceBits :: Int
+significanceBits = cells32 + loudParents32 * atom
+
+-- | One bit per rung-16 root; a loud root pays its 8 + 64 descendants.
+--   The old literal was 30232.
+zeroTreeBits :: Int
+zeroTreeBits = cells16 + loudRoots16 * flatLadderCost
+
+-- ★ AND THE TWO ROWS ARE MEASURED AGAINST DIFFERENT BASELINES, which
+--   is the fourth thing nobody wrote down. The significance row is
+--   compared to the flat FINE RUNG (cells64 = 262144) and the
+--   zerotree row to the flat LADDER (cells16 * 72 = 294912). Both
+--   published percentages, 82.81% and 89.75%, are correct for their
+--   own baseline and wrong for the other one. Named here so a reader
+--   cannot pick the wrong denominator.
+flatFineBits, flatLadderBits :: Int
+flatFineBits   = cells64                    -- 262144
+flatLadderBits = cells16 * flatLadderCost   -- 294912
+
+savingVs :: Int -> Int -> Double
+savingVs base b = 1 - fromIntegral b / fromIntegral base
+
+pctOf :: Double -> String
+pctOf x = show (fromIntegral (round (x * 1000) :: Int) / 10 :: Double) ++ "%"
 
 sigCost :: Bool -> Int
 sigCost loud = 1 + (if loud then atom else 0)
@@ -262,6 +322,35 @@ axiom_CT7 =
     breakEven = fromIntegral (flatCost - 1) / fromIntegral atom :: Double
     cheaperAt p = 1 + p * fromIntegral atom < fromIntegral flatCost
 
+-- (CT12) ★ THE THREE LOUD FRACTIONS ARE THREE POPULATIONS, and this
+--        axiom exists so the arithmetic can never drift from the prose
+--        again. Until 2026-08-16 the two zerotree rows were LITERALS
+--        in a putStrLn (45064 and 30232) under a single "95.3% quiet"
+--        heading, and nothing recomputed them, so three different
+--        fractions read as one contradictory number.
+--
+--        Pinned here: each row is reproduced from its OWN population
+--        to the bit, the two populations are genuinely different, and
+--        both sit far below CT7's 7/8 break-even, so the zerotree
+--        ruling does not depend on which fraction a reader picks up.
+axiom_CT12 :: Bool
+axiom_CT12 =
+     -- the historical figures, recovered from the named fractions
+     significanceBits == 45064
+  && zeroTreeBits == 30232
+     -- and they are NOT the same population
+  && loud32 /= loud16
+     -- both rows beat the flat bit, which is the ruling
+  && significanceBits < cells64
+  && zeroTreeBits < significanceBits
+     -- and every fraction in play, including CT7's dev16 statistic at
+     -- 15.576%, is below the 7/8 break-even, so significance coding
+     -- is cheaper on all three readings
+  && all belowBreakEven [loud32, loud16, 0.15576]
+  where
+    belowBreakEven p = 1 + p * fromIntegral atom < fromIntegral flatCost
+    near a b = abs (a - b) < 5e-5
+
 -- (CT8) A ZEROTREE ROOT TERMINATES THE WHOLE SUBTREE: one symbol at
 --       rung 16 covers 8 descendants at rung 32 and 64 at rung 64.
 --       Break-even 71/72, measured at 8.9% loud.
@@ -332,6 +421,7 @@ main = do
     , check "CT7  significance: 1 bit saves 8, break-even 7/8"      [axiom_CT7]
     , check "CT8  a zerotree root kills 8 + 64 descendants"         [axiom_CT8]
     , check "CT9  a quiet subtree is g = 0, not a second path"      [axiom_CT9]
+    , check "CT12 * three loud fractions = three populations"       [axiom_CT12]
     , check "CT10 * g reads parent AND previous tick"               [axiom_CT10]
     , check "CT11 * the live/remade divergence is bounded by g"     [axiom_CT11]
     ]
@@ -341,10 +431,24 @@ main = do
   putStrLn "    stored tensor   free signs, drift bounded by g (CT5)"
   putStrLn "    the price       live and remade differ, bounded (CT11)"
   putStrLn ""
-  putStrLn "  ZEROTREES, measured (95.3% of subtrees quiet):"
-  putStrLn $ "    flat            " ++ show cells64 ++ " b"
-  putStrLn "    significance     45064 b   saving 82.81%"
-  putStrLn "    full zerotree    30232 b   saving 89.75%"
+  putStrLn "  ZEROTREES, and the three loud fractions count THREE"
+  putStrLn "  DIFFERENT POPULATIONS. Computed, not pasted:"
+  putStrLn $ "    flat             " ++ show cells64 ++ " b"
+  putStrLn $ "    significance     " ++ show significanceBits
+             ++ " b   saving " ++ pctOf (savingVs flatFineBits significanceBits)
+             ++ " vs the flat FINE RUNG " ++ show flatFineBits
+  putStrLn $ "                     " ++ show loudParents32
+             ++ " loud rung-32 parents of " ++ show cells32
+             ++ " = " ++ pctOf loud32
+  putStrLn $ "    full zerotree    " ++ show zeroTreeBits
+             ++ " b   saving " ++ pctOf (savingVs flatLadderBits zeroTreeBits)
+             ++ " vs the flat LADDER " ++ show flatLadderBits
+  putStrLn $ "                     " ++ show loudRoots16
+             ++ " loud rung-16 roots of " ++ show cells16
+             ++ " = " ++ pctOf loud16
+  putStrLn "    CT7's dev16 statistic is a THIRD population: 15.576%"
+  putStrLn "    of rung-16 roots on nn/tensor-codec's cube, 1914/12288,"
+  putStrLn "    reproduced by the Swift port. See the note in section 3." 
   putStrLn ""
   putStrLn "  The ladder itself is NOT restated here. Octave.hs owns"
   putStrLn "  the reads, FeedCompression.hs owns the wire format, and"

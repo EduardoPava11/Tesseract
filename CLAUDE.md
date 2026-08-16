@@ -178,11 +178,51 @@ SPIHT 1996 solved this and the app was not using it). A parent emits
 ONE significance bit; quiet parents stop there and their children
 decode as the parent exactly (g = 0, CT9, so no second reconstruction
 path). A zerotree ROOT at rung 16 terminates 8 + 64 descendants with
-that single symbol. MEASURED, 95.3% of subtrees are quiet:
+that single symbol.
+
+★ THE THREE LOUD FRACTIONS, RECONCILED 2026-08-16. This section used
+to head its table "95.3% of subtrees are quiet" while two other
+fractions (4.7% and 15.576%) lived elsewhere in this file, and no
+reader could tell whether they contradicted each other. THEY DO NOT.
+They count THREE DIFFERENT POPULATIONS, and the two table rows are
+measured against TWO DIFFERENT BASELINES. Both literals decompose to
+integers exactly, which is what makes this a recovery and not a fit:
 
   flat, one bit per child       262144 b   rmse 0.01655
   significance, one level        45064 b   rmse 0.01793   -82.81%
+    = cells32 + 1537 * atom, so 1537 loud RUNG-32 PARENTS of 32768
+    = 4.691%. The 82.81% is against the flat FINE RUNG, 262144 b.
   full zerotree, 16 kills 32+64   30232 b   rmse 0.02409   -89.75%
+    = cells16 + 363 * 72, so 363 loud RUNG-16 ROOTS of 4096 = 8.862%.
+    The 89.75% is against the flat LADDER, 4096 * 72 = 294912 b, NOT
+    against 262144. Each percentage is correct for its own baseline
+    and wrong for the other.
+  CT7's dev16 statistic is the THIRD population: 15.576% of rung-16
+    roots (1914 of 12288) on nn/tensor-codec's synthetic cube,
+    reproduced to the root by Store/CaptureTensor.swift.
+
+★ ALL THREE ARE FAR BELOW CT7's 7/8 BREAK-EVEN, so the zerotree ruling
+does not depend on which one a reader picks up. CT12 pins every figure
+above, computed from the integer counts rather than pasted, so the
+arithmetic can no longer drift from this prose.
+
+★ AND WHAT THE ANSWER IS WORTH, because that is the part nobody had
+counted. The loud fraction moves COLOUR, and colour is 4.6% of the
+retained tensor:
+
+  loud      signs B   colour B   tensor B   depth's share
+   0.0%           0      26112    1074704      97.6%
+   4.7%        7508      33620    1082212      96.9%
+  15.6%       24882      50994    1099586      95.4%
+   100%      159744     185856    1234448      84.9%
+
+The ENTIRE zerotree lever, quiet to loud, is 159744 B = 14.5% of the
+shipped tensor, and the 4.7%-versus-15.6% question everyone was worried
+about is 17374 B = 1.6%. Storing depth as fp16 instead of Float32 would
+save 524288 B = 47.7%, which is 3.3x the whole zerotree lever. CT6 rules
+depth unquantised and that ruling stands; the point is only that the
+memory bill is a DEPTH question with a colour rounding error attached,
+and the reconciliation above settles the rounding error.
 
 The significance THRESHOLD IS DERIVED, never chosen (CT7): the
 crossover of a two-phase mixture on the capture's own subtree
@@ -298,12 +338,9 @@ three implementations (spec/neural/TensorEncoder.hs, the Swift port,
 and noise_floor.py). TA10 pins the first two together so this class of
 drift fails a gate instead of surviving in a comment.
 
-★ AND THE 95.3%-QUIET FIGURE ABOVE IS NOW INCONSISTENT WITH THIS ONE.
-15.6% loud is 84.4% quiet. The zerotree table's 4.7% loud, TA9's old
-hardcoded 0.047 and this line's mixture verdict are three different
-loud fractions in one document, and only the 15.576% has been
-reproduced across implementations. NOT RECONCILED, and it is a
-measurement question rather than a ruling.
+★ RECONCILED 2026-08-16, see the zerotree section above. The three
+fractions count three different populations at three different levels,
+they never contradicted each other, and CT12 now pins the arithmetic.
 
 CT7 is not wrong: it asks "are there two populations of deviation
 magnitude", and under noise there genuinely are not. But the question

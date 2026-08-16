@@ -232,6 +232,41 @@ enum DyadPipeline {
         }
     }
 
+    /// ★ BOTH STAGED VALUES FROM ONE PASS, and it is strictly cheaper
+    /// than computing either pair the obvious way.
+    ///
+    /// The table path wants BYTES (DY12) and the argmin wants the
+    /// CONTINUOUS Lab (DY17), and the bytes are just the Lab rounded.
+    /// Computing them separately converts sRGB8 to OKLab TWICE per
+    /// pixel, and that conversion is six transcendentals: three
+    /// `pow(_, 2.4)` in srgbToLinear and three `cbrt`.
+    ///
+    /// Costs, per pixel, on the export path (262144 pixels per
+    /// capture) and the live path (4096 pixels at 20 Hz):
+    ///   before DY17   2 x oklab + 1 x srgb8   (staged, then re-read
+    ///                                          the bytes back to Lab)
+    ///   naive DY17    2 x oklab + 1 x srgb8   (staged twice, once for
+    ///                                          each convention)
+    ///   this          1 x oklab + 1 x srgb8
+    /// So the correctness fix pays for itself: about a third fewer
+    /// transcendental calls than the code it replaced, on a path that
+    /// runs 20 times a second.
+    static func stagedPair(samples: [(UInt8, UInt8, UInt8)], depths: [Float],
+                           about cF: OKLabColor)
+        -> (lab: [OKLabColor], bytes: [(UInt8, UInt8, UInt8)]) {
+        var lab = [OKLabColor]()
+        var bytes = [(UInt8, UInt8, UInt8)]()
+        lab.reserveCapacity(samples.count)
+        bytes.reserveCapacity(samples.count)
+        for (rgb, d) in zip(samples, depths) {
+            let y = stageAerial(DyadPalette.oklab(fromSRGB8: rgb),
+                                s: Double(d), about: cF)
+            lab.append(y)
+            bytes.append(DyadPalette.srgb8(from: y))
+        }
+        return (lab, bytes)
+    }
+
     /// The σ coverage of one pixel — the ONE reading of the role law.
     /// Single-phase ⇒ all-face (R3); `bleed: false` ⇒ MAP classes
     /// only, no dither band (role law v1, a lawful subset).
@@ -348,13 +383,12 @@ enum DyadPipeline {
             }
             let weights = ts.map { 1 - $0 }
             let cF = DyadPalette.analyze(samples, weights: weights).centroid
-            let staged = stagedField(samples: samples, depths: depths[fi], about: cF)
+            // ONE staging pass yields both conventions: bytes for the
+            // table (DY12), continuous Lab for the argmin (DY17).
+            let pair = stagedPair(samples: samples, depths: depths[fi], about: cF)
+            let staged = pair.bytes
             stagedAll.append(staged)
-            // DY17: the ARGMIN reads the continuous staged value, so it
-            // is computed here rather than recovered from the bytes
-            // above. `staged` stays the table's input (DY12).
-            stagedLabsAll.append(stagedFieldLab(samples: samples,
-                                                depths: depths[fi], about: cF))
+            stagedLabsAll.append(pair.lab)
             tsAll.append(ts)
             centroids.append(cF)
             rawStats.append(DyadPalette.analyze(staged, weights: weights))
@@ -1161,14 +1195,14 @@ enum DyadPipeline {
             guard let solve, !solve.primaries.isEmpty else { return nil }
             let side = Int(Double(rgb.count).squareRoot())
             let samples = rgb.map { DyadPipeline.srgb8(from: $0) }
-            let staged = DyadPipeline.stagedField(samples: samples, depths: depths,
-                                                  about: solve.centroid)
             // DY17: the argmin reads the CONTINUOUS staged value. This
             // used to be `staged.map { oklab(fromSRGB8: $0) }`, which
             // searched a round-tripped value the spec never searches
-            // and the GPU twin never produced.
-            let labs = DyadPipeline.stagedFieldLab(samples: samples, depths: depths,
-                                                   about: solve.centroid)
+            // and the GPU twin never produced. One pass gives both, so
+            // the 20 Hz path does one OKLab conversion per pixel, not
+            // two.
+            let labs = DyadPipeline.stagedPair(samples: samples, depths: depths,
+                                               about: solve.centroid).lab
             let ts = depths.map {
                 DyadPipeline.coverage($0, fit: solve.mixture,
                                       twoPhase: solve.twoPhase, bleed: solve.bleed)
