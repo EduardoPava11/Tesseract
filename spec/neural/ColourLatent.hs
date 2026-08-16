@@ -17,7 +17,7 @@
 -- (GIFMachine.rebuildTables). 54.86 : 1, exact.
 --
 -- So nothing needs to LEARN a colour space. What is missing is a
--- METRIC on one that is already there — which regions of those 896
+-- METRIC on one that is already there, which regions of those 896
 -- numbers a person can tell apart. That is a far smaller and far
 -- better-posed problem than "train a model on GIFs", and it is the
 -- difference between something that could invent an unlawful
@@ -60,7 +60,7 @@
 --   spec/neural/WeaveState.hs         WS*   the causal 33-number
 --     state, and that 256! relabelings are free in energy AND in LZW.
 --   spec/output/AdditiveLadder.hs     AD*   the index's strata, which
---     are the latent's levels — not a modelling choice.
+--     are the latent's levels, not a modelling choice.
 --   spec/statistics/TilingEntropy.hs  TE*   E in bits.
 --   spec/neural/JepaH.hs              JH*   the model's own laws.
 --
@@ -328,7 +328,7 @@ axiom_CL1 =
   && length (decode base) == paletteEntries
 
 -- (CL2) THE DECODER IS TOTAL. Every point decodes to a full table,
---       including degenerate ones — a zero covariance, a flat cap, a
+--       including degenerate ones: a zero covariance, a flat cap, a
 --       negative lightness shift. The model therefore cannot reach an
 --       illegal artifact, because there is no illegal point to reach.
 axiom_CL2 :: Bool
@@ -370,7 +370,7 @@ axiom_CL4 =
 
 -- (CL5) A RELABELING MOVES NO COLOUR. The multiset of table entries
 --       is invariant, so E, the occupancy census and the LZW bill are
---       too — which is what "free" meant in WS, checked here on the
+--       too, which is what "free" meant in WS, checked here on the
 --       table itself rather than on the energy alone.
 axiom_CL5 :: Bool
 axiom_CL5 =
@@ -421,12 +421,59 @@ axiom_CL6 =
 --       latent has its depth FORCED at three and its widths forced at
 --       the strata's own level counts. Nothing here is a
 --       hyperparameter.
+--
+--       ★ REWRITTEN 2026-08-15 after the adversarial run. The old body
+--       was `levels == [4,32,256] && ... where levels = [4,32,256]`:
+--       a literal compared to itself, with no free variable and zero
+--       verification content. Substituting [9,77,1000] on BOTH sides
+--       printed CL7 green. It would have certified any triple.
+--
+--       The fix is WeaveState WS4's pattern, which is the only one
+--       available while no spec file imports another: RE-DERIVE the
+--       quantity locally from the ladder's bit widths, then assert.
+--       Mutating the widths now moves the left-hand side.
+--
+--       ★ AND IT SURFACES A REAL MISMATCH, which the tautology hid.
+--       CLAUDE.md ruling R-D calls the model's internal ladder
+--       64 -> 16 -> 4 "CL7's strata [256, 32, 4]". It is not: the
+--       strata step by 8 (4, 32, 256) because a stratum owns a
+--       BIT TRIPLE, while 64 -> 16 -> 4 steps by 4. Only the trailing
+--       term coincides. `rungRatio` below pins the 8 so the two
+--       ladders can never again be equated by prose.
+
+-- | AdditiveLadder AD1: the byte is four strata of widths 1+1+3+3,
+--   most significant first (role, r16, r32, r64). Stated here as
+--   WIDTHS, which is the ladder's own primitive, so the level counts
+--   are computed rather than copied.
+strataWidths :: [Int]
+strataWidths = [1, 1, 3, 3]
+
+-- | Classes distinguishable once each stratum in turn has written its
+--   bits: 2, 4, 32, 256. The rung ladder is the tail after role.
+cumulativeLevels :: [Int]
+cumulativeLevels = map (2 ^) (tail (scanl (+) 0 strataWidths))
+
+rungLevels :: [Int]
+rungLevels = tail cumulativeLevels
+
+rungRatio :: Int
+rungRatio = 8                    -- one stratum owns one bit TRIPLE
+
 axiom_CL7 :: Bool
 axiom_CL7 =
-     levels == [4, 32, 256]
-  && product [4, 8, 8] == 256
-  && length levels == 3
-  where levels = [4, 32, 256]     -- AD: r16 4-level, r32 32-level, r64 leaf
+     -- the widths exhaust the index byte, so no stratum is unaccounted
+     sum strataWidths == 8
+     -- the depth is FORCED at three by the count of rung strata
+  && length rungLevels == 3
+     -- the levels are DERIVED, not restated
+  && rungLevels == [4, 32, 256]
+     -- and they step by exactly the bit-triple ratio, which is the
+     -- fact R-D's prose contradicts
+  && and [ b == rungRatio * a | (a, b) <- zip rungLevels (tail rungLevels) ]
+     -- the finest rung distinguishes every index the byte can hold
+  && last rungLevels == 2 ^ sum strataWidths
+     -- the role bit doubles the coarsest rung's class count (AD3)
+  && head rungLevels == 2 * head cumulativeLevels
 
 -- (CL8) ★ EVERY CORPUS POINT IS A LAWFUL GIF BY CONSTRUCTION. A
 --       sampler that draws in this space and decodes through the

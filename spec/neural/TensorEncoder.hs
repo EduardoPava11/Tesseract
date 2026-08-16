@@ -173,11 +173,57 @@ coarseBytes = cells16 * coarseFp16Bits `div` 8       --  24576
 sigBytes    = cells16 * channels `div` 8             --   1536
 depthBytes  = cells64 * 4                            -- 1048576
 
--- | Sign bytes at a loud fraction: a loud rung-16 root carries its
---   8 rung-32 children and its 64 rung-64 descendants (CT8's 72).
+-- | Sign bits at a loud rung-16 root: its 8 rung-32 children and its
+--   64 rung-64 descendants (CT8's 72).
+signBitsPerLoudRoot :: Int
+signBitsPerLoudRoot = 72
+
+-- | ★ AND THE FOUR BYTES OF g, WHICH THE PORT WRITES AND THIS FILE
+--   USED TO OMIT (adversarial run, 2026-08-15). The ledger charged 72
+--   bits per loud root and nothing else, which prices a PREDICTED-g
+--   format. The shipped port stores g instead:
+--   Store/CaptureTensor.swift charges `perLoud = 4 + 72/8` = 13 B, and
+--   writeSubtree emits two fp16 values that decode reads back off the
+--   wire. So the spec's TOTAL could never be produced by the encoder
+--   it describes, and no test compared them.
+--
+--   Storing g is the RULING (CaptureTensor.swift's header states it):
+--   a tensor retained today stays decodable after any retrain, and no
+--   naked k and j enter the app while the predictor does not exist.
+--   This file now prices what ships.
+--
+--   ★ THE SAME 9-BYTE MODEL IS REPEATED in nn/tensor-codec at
+--   build_model.py:222 and noise_floor.py:75, so any compression
+--   figure quoted from those scripts is light by the same factor.
+gBytesPerLoudRoot :: Int
+gBytesPerLoudRoot = 4
+
+bitsPerLoudRoot :: Int
+bitsPerLoudRoot = signBitsPerLoudRoot + 8 * gBytesPerLoudRoot   -- 104
+
 signBytesAt :: Double -> Int
 signBytesAt loud =
-  ceiling (loud * fromIntegral (cells16 * channels) * 72 / 8)
+  ceiling (loud * fromIntegral (cells16 * channels)
+                * fromIntegral bitsPerLoudRoot / 8)
+
+-- | ★ THE LOUD FRACTION IS A MEASUREMENT, AND TWO IMPLEMENTATIONS
+--   DISAGREE ABOUT IT. Named here with provenance rather than left as
+--   a bare literal in an axiom body.
+--
+--   `loudShipped` is what DepthMixture's crossover measures through
+--   the Swift port on the documented synthetic cube. `loudPythonRef`
+--   is what nn/tensor-codec/build_model.py:212 reports, and it is
+--   WRONG: it writes log((1-w)/w) where DepthMixture.hs:182 and the
+--   Swift both write log(piB/(1-piB)), so its point is the reflection
+--   of the crossover about the midpoint. At the shipped point the two
+--   weighted component densities are equal to 1.0000; at the Python
+--   point the quiet component is 29.4x the loud one, and the reported
+--   loud fraction exceeds the loud component's own fitted weight.
+--   Kept here, named, because CLAUDE.md still quotes figures derived
+--   from it.
+loudShipped, loudPythonRef :: Double
+loudShipped   = 0.15576         -- 1914 / 12288, DepthMixture crossover
+loudPythonRef = 0.24862         -- build_model.py, inverted sign
 
 tensorBytes :: Double -> Int
 tensorBytes loud = 16 + depthBytes + coarseBytes + sigBytes + signBytesAt loud
@@ -277,15 +323,43 @@ axiom_TA5 =
   && coarseBytes * 8 == cells16 * coarseFp16Bits
 
 -- (TA6) g NEVER CROSSES THE ENGINE BOUNDARY. The encoder emits signs
---       and deviations; the DECODER recomputes g from stored parents.
---       So CT4's "parametric in g" survives the port intact, and a
---       later trained g cannot invalidate this placement — exactly
---       the property CT4 was written to protect.
+--       and deviations; whatever g the decoder later uses, STORED
+--       today or trained tomorrow, the bit the engine already emitted
+--       is still the error-minimising one. So CT4's "parametric in g"
+--       survives the port intact, and a later trained g cannot
+--       invalidate this placement, which is the property CT4 was
+--       written to protect.
+--
+--       ★ REWRITTEN 2026-08-15 after the adversarial run. The old
+--       first conjunct was
+--           and [ signBit r == signBit r' | (r, r') <- zip rs rs ]
+--       and `zip rs rs` pairs a list with ITSELF, so every comparison
+--       was signBit r == signBit r. It could not fail. The axiom
+--       guarding the placement had no content in the half that
+--       mattered.
+--
+--       ★ AND THE PROSE WAS WRONG TOO, which the tautology also hid.
+--       The old text said "the DECODER recomputes g from stored
+--       parents". The shipped port does not: Store/CaptureTensor.swift
+--       STORES g, four bytes per loud root, and the decode reads it
+--       back off the wire. See the ledger note at signBytesAt.
+--
+--       What has content is the ARGMIN claim, which fails the moment
+--       errFor stops being symmetric about zero:
 axiom_TA6 :: Bool
 axiom_TA6 =
-  and [ signBit r == signBit r' | (r, r') <- zip rs rs ]
+     -- the emitted sign IS the error-minimising choice, for every g
+     and [ (errFor True r g <= errFor False r g) == signBit r
+         | r <- rs, g <- gs ]
+     -- and strictly so away from r = 0, so no g manufactures a tie a
+     -- later retrain could break the other way
+  && and [ abs (errFor (signBit r) r g - errFor (not (signBit r)) r g) > eps
+         | r <- rs, g <- gs, r /= 0 ]
+     -- the sign is scale-free in the residual
   && and [ signBit r == signBit (r * s) | r <- rs, s <- [0.1, 1, 10] ]
-  where rs = [-0.7, -0.02, 0.02, 0.7]
+  where
+    rs = [-0.7, -0.02, 0.02, 0.7]
+    gs = [1e-4, 0.005, 0.05, 0.4]
 
 -- (TA7) THE DEVIATION STATISTIC IS ALSO POOL-SHAPED, and it is
 --       monotone in the subtree's energy, so a threshold fitted to it
@@ -313,22 +387,102 @@ axiom_TA8 =
     ops c = (length c, length (head c), length (head (head c)))
 
 -- (TA9) THE LEDGER. The retained tensor is smaller than what
---       CubeStore holds today, colour compresses by better than
---       20 : 1 at the measured 4.7% loud fraction, and the residue is
---       DEPTH: it is over 95% of what is left, which is the ruling
---       this file's arithmetic surfaces (CT6 fixed depth at 32 bits,
---       and that choice now dominates the whole memory bill).
+--       CubeStore holds today, and the residue is DEPTH: it is over
+--       95% of what is left, which is the ruling this file's
+--       arithmetic surfaces (CT6 fixed depth at 32 bits, and that
+--       choice now dominates the whole memory bill).
+--
+--       ★ REWRITTEN 2026-08-15 after the adversarial run, and this
+--       axiom was FALSE, not merely weak. It asserted
+--       `colourRatio > 20` off a hardcoded 0.047 loud fraction. At
+--       the fraction the shipped Swift law actually measures the ratio
+--       is 18.15 with the old 9-byte model and 15.42 once g is priced,
+--       so the axiom read green while asserting something untrue of
+--       the encoder it describes. Two separate defects made it pass:
+--       a naked threshold, which the no-naked-constants decree already
+--       forbids, and a naked loud fraction taken from the reference
+--       script with the inverted crossover sign.
+--
+--       The magic 20 is GONE rather than re-tuned. A retuned bound
+--       would be the same defect at a different number. What is
+--       asserted now is structural: the tensor beats CubeStore, depth
+--       dominates the residue, an all-quiet capture pays nothing for
+--       signs, and the ratio FALLS as the loud fraction rises. The
+--       ratio itself is printed rather than pinned, because it is a
+--       measurement of the capture and not a property of the format.
 axiom_TA9 :: Bool
 axiom_TA9 =
-     tensorBytes 0.047 < cubeStoreBytes
-  && colourRatio > 20
+     tensorBytes loudShipped < cubeStoreBytes
   && depthShare > 0.95
+     -- an all-quiet capture spends nothing on signs (CT9: g = 0 is
+     -- silence, not a second path)
   && signBytesAt 0 == 0
+     -- colour still beats the flat voxel-byte format it replaces, at
+     -- BOTH disputed fractions, so the ruling does not hinge on which
+     -- crossover is right
+  && colourRatioAt loudShipped > 1
+  && colourRatioAt loudPythonRef > 1
+     -- and the ratio is MONOTONE in the loud fraction, which is what
+     -- makes it a measurement: a louder capture pays more
+  && colourRatioAt 0.0 > colourRatioAt loudShipped
+  && colourRatioAt loudShipped > colourRatioAt loudPythonRef
   where
-    colourBytes = coarseBytes + sigBytes + signBytesAt 0.047
-    colourRatio = fromIntegral (cells64 * 3) / fromIntegral colourBytes :: Double
-    depthShare  = fromIntegral depthBytes
-                / fromIntegral (tensorBytes 0.047) :: Double
+    depthShare = fromIntegral depthBytes
+               / fromIntegral (tensorBytes loudShipped) :: Double
+
+-- (TA10) ★ THE LEDGER IS PINNED TO THE PORT. NEW 2026-08-15, and it
+--        is the gate whose absence let the 9-byte defect live: nothing
+--        anywhere compared this file's `tensorBytes` to the Swift
+--        `bytesPerCapture`, so the spec priced a format the encoder
+--        does not write and both sides stayed green for a month.
+--
+--        Two pins, both hand-carried across the language boundary
+--        because no spec file may import and Haskell cannot call
+--        Swift:
+--
+--          1. the per-root cost, stated the way Store/CaptureTensor
+--             .swift states it (`perLoud = 4 + 72/8`), so changing
+--             either the sign count or the g bytes breaks this axiom
+--          2. the TOTAL at the shipped crossover, against the figure
+--             CaptureTensorTests measures on the documented synthetic
+--             fixture: 1099586 B
+--
+--        ★ BE HONEST ABOUT WHAT THIS IS. A hand-carried constant is
+--        exactly the shape of the MerkleSearch defect, and it is only
+--        safe here because of the direction: this axiom quantifies
+--        over the spec's OWN computed arithmetic and compares it to
+--        the other implementation, so drift on EITHER side fails it.
+--        The MerkleSearch defect was restating a number and then
+--        quantifying over the restatement, which can only agree with
+--        itself. The residual gap is real and stays owed: the mirror
+--        assertion belongs in CaptureTensorTests, comparing Swift's
+--        measured bytes back to this file's printed TOTAL.
+axiom_TA10 :: Bool
+axiom_TA10 =
+     bitsPerLoudRoot == 8 * (gBytesPerLoudRoot + signBitsPerLoudRoot `div` 8)
+  && bitsPerLoudRoot == 104
+  && tensorBytes loudShipped == portMeasuredBytes
+     -- and the pin is not an accident of one fraction: the port's
+     -- per-root cost is what makes it land
+  && tensorBytes loudShipped > tensorBytesAtSignsOnly loudShipped
+  where
+    tensorBytesAtSignsOnly loud =
+      16 + depthBytes + coarseBytes + sigBytes
+      + ceiling (loud * fromIntegral (cells16 * channels)
+                      * fromIntegral signBitsPerLoudRoot / 8 :: Double)
+
+-- | Measured by TesseractTests/CaptureTensorTests on the synthetic
+--   figure-over-ground fixture, quoted in CLAUDE.md. Hand carried; see
+--   TA10's note on why that is safe here and what stays owed.
+portMeasuredBytes :: Int
+portMeasuredBytes = 1099586
+
+colourBytesAt :: Double -> Int
+colourBytesAt loud = coarseBytes + sigBytes + signBytesAt loud
+
+colourRatioAt :: Double -> Double
+colourRatioAt loud =
+  fromIntegral (cells64 * channels) / fromIntegral (colourBytesAt loud)
 
 -- ════════════════════════════════════════════════════════════════
 -- § 7. THE HARNESS
@@ -339,6 +493,13 @@ check name bs = do
   let ok = and bs
   putStrLn $ "  " ++ (if ok then "\10003" else "\10007") ++ " " ++ name
   return ok
+
+ratioLine :: Double -> String
+ratioLine loud =
+  pad (pct loud) ++ "  colour " ++ show (colourBytesAt loud) ++ " B  "
+  ++ show (fromIntegral (round (colourRatioAt loud * 100) :: Int) / 100 :: Double)
+  ++ " : 1"
+  where pad s = s ++ replicate (max 0 (7 - length s)) ' '
 
 pct :: Double -> String
 pct x = show (fromIntegral (round (x * 1000) :: Int) / 10 :: Double) ++ "%"
@@ -366,23 +527,33 @@ main = do
     , check "TA6  g never crosses the engine boundary"              [axiom_TA6]
     , check "TA7  the deviation statistic is pool-shaped, monotone"  [axiom_TA7]
     , check "TA8  the encode is data-independent: ONE dispatch"     [axiom_TA8]
-    , check "TA9  the ledger: colour 20:1, and depth is the residue" [axiom_TA9]
+    , check "TA9  the ledger: monotone in loud, depth is the residue" [axiom_TA9]
+    , check "TA10 * the ledger is PINNED to the port's own bytes"     [axiom_TA10]
     ]
   putStrLn ""
-  putStrLn "  THE LEDGER, one retained capture at 4.7% loud:"
+  putStrLn $ "  THE LEDGER, one retained capture at "
+             ++ pct loudShipped ++ " loud (the SHIPPED crossover):"
   putStrLn $ "    depth  f32 fine rung   " ++ show depthBytes ++ " B"
   putStrLn $ "    colour rung 16 fp16    " ++ show coarseBytes ++ " B"
   putStrLn $ "    colour significance    " ++ show sigBytes ++ " B"
-  putStrLn $ "    colour signs, loud     " ++ show (signBytesAt 0.047) ++ " B"
-  putStrLn $ "    TOTAL                  " ++ show (tensorBytes 0.047) ++ " B"
+  putStrLn $ "    colour signs, loud     " ++ show (signBytesAt loudShipped)
+             ++ " B   (" ++ show bitsPerLoudRoot ++ " b per loud root, g INCLUDED)"
+  putStrLn $ "    TOTAL                  " ++ show (tensorBytes loudShipped) ++ " B"
   putStrLn $ "    CubeStore today        " ++ show cubeStoreBytes ++ " B"
   putStrLn $ "    depth's share          "
              ++ pct (fromIntegral depthBytes
-                     / fromIntegral (tensorBytes 0.047) :: Double)
+                     / fromIntegral (tensorBytes loudShipped) :: Double)
+  putStrLn ""
+  putStrLn "  ★ THE COLOUR RATIO IS A MEASUREMENT, NOT A CONSTANT, and"
+  putStrLn "  two implementations disagree about the loud fraction:"
+  putStrLn $ "    all quiet            " ++ ratioLine 0.0
+  putStrLn $ "    shipped crossover    " ++ ratioLine loudShipped
+  putStrLn $ "    build_model.py       " ++ ratioLine loudPythonRef
+             ++ "   <- inverted sign, see loudPythonRef"
   putStrLn ""
   putStrLn "  ★ WHAT THE ARITHMETIC SURFACES. Colour is solved: the"
   putStrLn "  octave plus the zerotree take 786432 B of voxel colour"
-  putStrLn "  down to about 31000. Every remaining byte is DEPTH at"
+  putStrLn "  down to about 51000. Every remaining byte is DEPTH at"
   putStrLn "  the precision CT6 fixed. That is a ruling, not a defect."
   putStrLn ""
   if and rs
