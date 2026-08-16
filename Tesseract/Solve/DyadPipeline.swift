@@ -372,10 +372,8 @@ enum DyadPipeline {
         // ★ GH4's hue resultant is read on the UNSTAGED field. Kept
         // separately because every other moment here reads the staged
         // one, and the difference is not cosmetic — see below.
-        var unstagedLabsAll: [[OKLabColor]] = []
         stagedAll.reserveCapacity(frameCount)
         stagedLabsAll.reserveCapacity(frameCount)
-        unstagedLabsAll.reserveCapacity(frameCount)
         for fi in 0..<frameCount {
             let samples = rgb[fi].map { srgb8(from: $0) }
             let ts = depths[fi].map {
@@ -392,9 +390,6 @@ enum DyadPipeline {
             tsAll.append(ts)
             centroids.append(cF)
             rawStats.append(DyadPalette.analyze(staged, weights: weights))
-            // Same sRGB8 bytes the staging starts from (DY12), just not
-            // contracted about c_F.
-            unstagedLabsAll.append(samples.map { DyadPalette.oklab(fromSRGB8: $0) })
         }
 
         // ── Stage 1b: derived EMA gain (R2) over the stats sequence ──
@@ -431,9 +426,26 @@ enum DyadPipeline {
         // bounding it; it needs reopening now that Δh depends on it.
         let bgPerFrame: [DyadPalette.BackgroundMoments?] =
             (0..<frameCount).map { f in
-                twoPhase ? DyadPalette.backgroundMoments(labs: unstagedLabsAll[f],
-                                                         weights: tsAll[f])
-                         : nil
+                // ★ PEAK MEMORY, 2026-08-16. This used to read
+                // `unstagedLabsAll[f]`, a retained [[OKLabColor]] of
+                // 64 x 4096 x 24 B = 6291456 B kept alive for the whole
+                // export closure, for ONE reader that is SKIPPED
+                // ENTIRELY on single-phase captures. The labs are the
+                // same sRGB8 bytes the staging starts from (DY12), just
+                // not contracted about c_F, so they derive from `rgb`
+                // which is in scope anyway.
+                //
+                // Cost: one OKLab pass over the cube, and only when the
+                // mixture voted two-phase. Benefit: 6.29 MB off peak,
+                // against a RETAINED cube of 1.8 MB, and zero work on
+                // the single-phase path where it was pure waste.
+                twoPhase
+                    ? DyadPalette.backgroundMoments(
+                        labs: rgb[f].map {
+                            DyadPalette.oklab(fromSRGB8: srgb8(from: $0))
+                        },
+                        weights: tsAll[f])
+                    : nil
             }
 
         // ── Stage 1b′: ★JEPA-H (JH4, flag-gated — the ONE model

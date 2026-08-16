@@ -73,6 +73,82 @@ DETECTS. Those are different, and this repo had already documented the
 gap twice (FrameGeometry's relabelling-invariant G5-G10, MerkleSearch's
 restated table) without either diagnosis becoming a lint.
 
+## 0b. ★ THE PREMISE, REBUILT (2026-08-16)
+
+Daniel, after the adversarial run: "Back to BIN, premise rebuilt", and
+"I need you to design the models in conjunction with the capture
+because we are making a holistic app. Form follows function!!!"
+
+C3 removed the foundation this file was built on. The shipped
+`assignRoles` IS the exhaustive argmin, agreement 1.0, excess 0, behind
+a do-not-replace guard, so THE CONTESTED SET IS EMPTY. There is no
+assignment ambiguity to search, no branching factor, and nothing for a
+policy to be a policy over.
+
+★ SO WHERE IS THE FREEDOM? It was already named, in two specs, and
+neither this file nor the adversaries had connected them:
+
+  Octave.hs OV11    "8 states per dial, matching RoleAllocation's
+                    widgetCells SO THE EDIT SPACE STAYS 8^5" = 32768.
+                    And widgetCells = treeDepth + 1, derived.
+  DetentDial.hs     Allocation 8, RungPick 3, RoleSplit 12,
+                    ColourDisc 16 x 8 = 36864, every count a
+                    measurement of its own source law (DD1).
+
+Two independent derivations landing on the same order of magnitude,
+about 3 x 10^4. THE FREEDOM IS PARAMETRIC OVER DIALS, not
+combinatorial over 262144 voxels. That is a different object from the
+one sections 1 to 6 below assume, and it is smaller, finite, and
+already implemented.
+
+★ FOUR CONSEQUENCES, and the third is the one that hurts.
+
+1. The Merkle tree is over DIAL SETTINGS, not voxel assignments. It
+   has a product structure (five roughly independent dials), not the
+   deep search tree MerkleSearch models with fanOuts [2,8,8].
+2. The value head is UNCHANGED and still arithmetic: E, E_wall,
+   E_time. MT9 survives this rebuild intact.
+3. ★ MT9's "only the POLICY is learned" now collapses to NOTHING IS
+   LEARNED, for the reason MT9 itself gives. With 3 x 10^4 points and
+   a closed-form value, you do not search a space, you ENUMERATE it.
+   The exact Pareto front is computable. PolicyField is retired
+   BEFORE being built, and section 6's step 3b (the static-order gate)
+   is moot: there is no order to learn when there is no search.
+4. What survives is the COST. Each point on the front needs a solve,
+   and 32768 solves is not an interactive gesture on a phone.
+
+★ THEREFORE THE MODEL'S FUNCTION IS THE SURROGATE, and this is the
+whole of "form follows function" here. The model does not choose, rank
+or generate. It ANSWERS CHEAPLY what the arithmetic already answers
+exactly:
+
+    (capture summary, dial setting)  ->  (E, E_wall, E_time)
+
+so the front can be surveyed while a finger is on the dial. Every
+property the app cares about stays exact, because the front is
+recomputed exactly for the point the user actually stops on. The
+surrogate only decides WHAT TO SHOW WHILE MOVING.
+
+★ AND THAT IS WHY IT CANNOT BE DESIGNED APART FROM CAPTURE. The
+surrogate's input IS the capture's retained summary: the per-frame
+generator (14 numbers + 2 bits, CL1) plus five small integers. The
+tensor's contents ARE the model's features, so what capture retains
+bounds what the model can read, and what the model needs decides what
+capture must keep. Holistic is not a preference here, it is the type
+signature.
+
+    input    64 x (14 numbers + 2 bits) + 5 dial integers
+    output   3 energies, in bits
+    size     a regression this small sits under the ANE dispatch
+             floor, which is the JepaHHead precedent: pure Swift on
+             CPU, mlpackage as the Mac-side reference.
+
+★ WHAT THIS RETIRES, stated plainly so it is not rebuilt by accident:
+PolicyField (section 5), the metric-field-as-policy unification
+(section 3), and the contested-set framing throughout. What SURVIVES:
+CS1 to CS4, the VALUE / REPRESENTATION / POLICY role split with POLICY
+now empty, and BN5's finding that provenance is derived from the index.
+
 ## 1. THE ONE IDEA
 
 Daniel, correcting the first draft of this file:
